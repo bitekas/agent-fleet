@@ -25,8 +25,9 @@ WHAT EACH CHECK IS FOR
      test derives from watchdog.py's own source (every subprocess or exec call whose
      program is a bare name). A watchdog that starts running a second bare command
      reds here instead of going unchecked. The derivation is proved on a synthetic
-     source first (a bare call found, an absolute one and sys.executable not), and it
-     must find tmux in watchdog.py, or there is no verdict.
+     source first (a bare call found, through subprocess and through a runner
+     imported by name; an absolute one and sys.executable not), and it must find
+     tmux in watchdog.py, or there is no verdict.
   S  systemd, end to end through the script:
      S1 (control) no PATH in the unit, so the system manager's environment block's,
         whose first directory is the stand-in: PROTECTED, the ok line naming the tmux
@@ -109,14 +110,19 @@ def bare_commands(source):
     that starts a program: the program's name when it is a bare word, nothing when it is
     an absolute path or sys.executable, and an unreadable entry when this cannot tell."""
     names, seen, unreadable = set(), 0, []
-    for node in ast.walk(ast.parse(source)):
+    tree = ast.parse(source)
+    # A runner imported by name (`from subprocess import run as go`) is called bare.
+    aliases = {a.asname or a.name: a.name for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)
+               and n.module in ("subprocess", "os") for a in n.names if a.name in RUNNERS}
+    for node in ast.walk(tree):
         if not isinstance(node, ast.Call) or not node.args:
             continue
         f = node.func
         if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) and f.value.id in ("subprocess", "os"):
             name = f.attr
-        elif isinstance(f, ast.Name) and f.id.startswith(("exec", "spawn")):
-            name = f.id   # an exec function passed in as a parameter (maybe_reexec's execv)
+        elif isinstance(f, ast.Name):
+            # an exec function passed in as a parameter (maybe_reexec's execv), or one imported by name
+            name = aliases.get(f.id, f.id)
         else:
             continue
         if name not in RUNNERS:
@@ -137,10 +143,11 @@ def bare_commands(source):
 
 
 def derivation():
-    synth = ("import os, subprocess, sys\nsubprocess.run(('tmuxish',) + a)\nsubprocess.run(['/usr/bin/true'])\n"
-             "os.execv(sys.executable, [sys.executable])\ndef f(execv=os.execv):\n    execv(sys.executable, [])\n")
+    synth = ("import os, subprocess, sys\nfrom subprocess import run as go\nsubprocess.run(('tmuxish',) + a)\n"
+             "subprocess.run(['/usr/bin/true'])\nos.execv(sys.executable, [sys.executable])\n"
+             "def f(execv=os.execv):\n    execv(sys.executable, [])\ngo(['bareword', '-x'])\nprint('not a runner')\n")
     names, seen, unreadable = bare_commands(synth)
-    if (names, seen, unreadable) != ({"tmuxish"}, 4, []):
+    if (names, seen, unreadable) != ({"tmuxish", "bareword"}, 5, []):
         noverdict.append(f"D: the derivation misreads its synthetic source ({names}, {seen} calls, {unreadable})")
         return
     names, seen, unreadable = bare_commands(WATCHDOG.read_text(encoding="utf-8"))
