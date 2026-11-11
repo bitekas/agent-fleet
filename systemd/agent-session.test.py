@@ -79,6 +79,7 @@ VALUES = {
     "state dir": "/tmp/fleet-fixture/agents/ada/state/stall-watchdog",
     "tmux-dir": "/tmp/fleet-fixture/agents/run/claude-tmux-ada",
     "install-checkout": "/tmp/fleet-fixture/agents/ada/work", "n": "1", "port": "8091",
+    "python": "/tmp/fleet-fixture/bin/python3", "path": "/tmp/fleet-fixture/bin:/usr/bin:/bin:/usr/sbin:/sbin",
 }
 BOOT = "You are Ada, just restarted & briefed: arm <both> followers."
 SERVICE = REPO / "templates" / "claude-agent.service.example"
@@ -372,6 +373,9 @@ def watchdog_plist(d):
           and env.get("TMUX_TMPDIR") == VALUES["tmux-dir"] and "CLAUDE_CONFIG_DIR" not in env, repr(d))
     check("stall-watchdog plist: KeepAlive restarts every exit (the 75 of a failed re-exec included)",
           d["KeepAlive"] is True and d["RunAtLoad"] is True)
+    check("stall-watchdog plist: its interpreter is <python> and its PATH is <path>, both rendered "
+          "(installation/render-plist.py), never a hardcoded Homebrew directory",
+          d["ProgramArguments"][0] == VALUES["python"] and env.get("PATH") == VALUES["path"], repr(d))
 
 
 def web_hierarchy_plist(d):

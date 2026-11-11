@@ -39,6 +39,7 @@ service runs whether or not any agent has read a word of it.
 | `installation/check` | is it installed here, and is it current | universal |
 | `installation/agent-stall-watchdog.service.example` | the unit template (Linux, systemd) | universal |
 | `installation/agent-stall-watchdog.plist.example` | the LaunchDaemon template (macOS, launchd) | universal |
+| `installation/render-plist.py` | renders that template for one session, its PATH from where tmux is | universal |
 | the config `STALL_WATCHDOG_CONFIG` names | the real values, one file per watched session | **this install** |
 | `installation/.install-state.json`, in the install context | what was installed, per host and per config | **this install** |
 
@@ -52,9 +53,12 @@ session started directly in a terminal, or under a launcher that owns the TTY, c
 be watched at all. Nothing else here matters if this is not true.
 
 **Python 3 and tmux on the system path.** No third-party packages: `watchdog.py` is
-stdlib only, and `/usr/bin/python3` is what the unit runs. On macOS the job runs
-Homebrew's `/opt/homebrew/bin/python3` (the system `/usr/bin/python3` is older than the
-fleet's floor) and finds Homebrew's tmux through the PATH the plist sets.
+stdlib only, and `/usr/bin/python3` is what the unit runs. On macOS the job runs the
+fleet's interpreter (`FLEET_PYTHON`, else host.json's `python`, else Homebrew's
+`/opt/homebrew/bin/python3`; the system `/usr/bin/python3` is older than the fleet's
+floor) and finds tmux through the PATH `installation/render-plist.py` writes into the
+plist: the directory of the tmux it finds, then the interpreter's, then the system
+directories (step 4).
 
 **One config and one unit per watched session.** They are not shared. Two sessions
 watched by one daemon is not a configuration this supports, and two daemons sharing a
@@ -173,19 +177,31 @@ with `ProtectHome=read-only`, which still lets it read the fleet tree.
 **Do not set `CLAUDE_CONFIG_DIR` in this unit.** It is a supervisor, not an agent.
 With `owner.claude_config_dir` null the flock is the single-instance guard.
 
-**On macOS the unit is a LaunchDaemon.** Copy
-`installation/agent-stall-watchdog.plist.example` writable, name it
-`<launchd-prefix>.stall-watchdog.<agent>.plist` (`<launchd-prefix>` is host.json's
-`launchd_prefix`, default `com.agent-fleet`), and fill every placeholder its header
-lists. `UserName` is the user that owns the session; `TMUX_TMPDIR` is identical to
+**On macOS the unit is a LaunchDaemon, rendered by `installation/render-plist.py`**
+from `installation/agent-stall-watchdog.plist.example`, as the user that owns the
+session, with the directory of the session's tmux on PATH:
+
+```bash
+python3 "${CLAUDE_SKILL_DIR}/installation/render-plist.py" --agent <agent> --agents-root <agents-root> \
+  --checkout <checkout> --state-dir <state dir> --tmux-dir <tmux-dir> --config <config> \
+  --form system --out <launchd-prefix>.stall-watchdog.<agent>.plist
+plutil -lint <launchd-prefix>.stall-watchdog.<agent>.plist
+```
+
+`<launchd-prefix>` is host.json's `launchd_prefix`, default `com.agent-fleet`.
+`UserName` is the user running the renderer; `TMUX_TMPDIR` is identical to
 `tmux.tmpdir`, which on macOS is `<agents-root>/run/claude-tmux-<agent>` (launchd has
 no runtime directory; the session supervisor creates that one); the log goes to
 `<state dir>/watchdog.log`; where an administrator installs it for a separate
-agents user, `STALL_WATCHDOG_CONFIG` names a root-owned config, as the systemd
-form's does. A placeholder left in is an XML tag, so `plutil -lint
-<file>` refuses it: run it before installing. launchd has no equivalent of
-`ProtectSystem`, `ReadWritePaths` or `NoNewPrivileges`, so the plist carries none;
-the process runs as the agent's user, the same boundary the session has.
+agents user, `--config` names a root-owned config, as the systemd form's does;
+`--form user` renders the LaunchAgent form, without `UserName`. **The job's PATH is
+rendered from where tmux is**, never written by hand: watchdog.py runs a bare
+`tmux`, launchd's own PATH reaches none, and a job whose PATH misses it runs,
+captures nothing and looks healthy. So the renderer prints `NOT RENDERED` and writes
+nothing when no tmux is on its PATH, or when tmux or the interpreter does not run
+under the PATH it would write. launchd has no equivalent of `ProtectSystem`,
+`ReadWritePaths` or `NoNewPrivileges`, so the plist carries none; the process runs
+as the agent's user, the same boundary the session has.
 
 ## 5. Verify before installing anything
 
@@ -274,10 +290,14 @@ systemctl show <unit name> -p ActiveEnterTimestamp
 ls -l <state.dir>/stall-watchdog.json
 ```
 
-**A state file whose mtime is newer than the service start is the proof of
-capture**, and the only cheap one. A capture failure raises before the state is
-written, so a healthy `systemctl status` over a stale state file is exactly what a
-blind watchdog looks like.
+**A state file whose mtime is newer than the service start, and that holds no
+`capture_error`, is the proof of capture**, and the only cheap one. Every poll writes
+the state; a poll whose capture failed writes it with `capture_error`, which names
+the cause in the daemon's own words (`tmux could not be started ... on PATH=...`
+for a job whose PATH reaches no tmux, tmux's own message for one that ran and
+failed). So a healthy `systemctl status` over a stale state file, or over one
+carrying `capture_error`, is exactly what a blind watchdog looks like, and
+`installation/check` prints the recorded cause.
 
 `journalctl -u <unit name> -n 20` (on macOS, the log above) should show one
 `WATCHDOG-INFO watchdog up` line

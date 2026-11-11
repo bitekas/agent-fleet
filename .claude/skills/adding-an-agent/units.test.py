@@ -133,9 +133,11 @@ UID = os.getuid()
 AGENT, DISPLAY, PROJECT = "ada", "Ada Lovelace", "project"
 JOB, VAR = "slack-watch", "SLACK_WATCH_CONFIG"
 FORBIDDEN = "'$%\\`"     # the boot-message characters the agent template forbids
-# A tmux stand-in: one JSON line per call, the argv it was handed.
+# A tmux stand-in: one JSON line per call, the argv it was handed. A call without
+# FAKE_TMUX_LOG is the stall watchdog's renderer proving `tmux -V` runs under an
+# environment of ONLY the job's PATH (plists.test.py): it logs nowhere and exits 0.
 ME = pwd.getpwuid(os.getuid()).pw_name
-FAKE_TMUX = "#!/usr/bin/env python3\nimport json, os, sys\nwith open(os.environ['FAKE_TMUX_LOG'], 'a') as f:\n    f.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+FAKE_TMUX = "#!/usr/bin/env python3\nimport json, os, sys\nwith open(os.environ.get('FAKE_TMUX_LOG', os.devnull), 'a') as f:\n    f.write(json.dumps(sys.argv[1:]) + '\\n')\n"
 
 FAILS = []
 

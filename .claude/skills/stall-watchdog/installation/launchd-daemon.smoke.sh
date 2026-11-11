@@ -21,6 +21,19 @@
 # passwordless sudo, label in use); 3 NO VERDICT (a setup step failed before the job
 # under test was running, so nothing here says anything about it).
 #
+# THE JOB IS RENDERED BY installation/render-plist.py, THE RENDERER AN INSTALL USES
+# (/adding-an-agent section 5 step 7), NEVER BY A sed OF ITS OWN. A smoke that
+# renders differently from an install tests a job no install produces, red or green
+# for a reason no install has (measured: a sed that filled only the interpreter left
+# a Homebrew PATH on a Mac without Homebrew, and the job was blind for that reason
+# alone). The interpreter is given as FLEET_PYTHON and the label prefix through a
+# host settings file, as `fleet install` gives them.
+#
+# A FAILED RUN PRINTS THE JOB'S watchdog.log BEFORE THE CLEANUP REMOVES IT: the log
+# is in the temp directory the cleanup deletes, and without it a red run leaves
+# nothing that says why. "It captures" needs the state file AND no capture_error in
+# it: a watchdog whose captures fail writes its state too, with the cause recorded.
+#
 # Portable bash: macOS's /bin/bash 3.2 and BSD userland.
 set -u
 LABEL=com.agent-fleet-test.stall-watchdog.smoke
@@ -42,6 +55,12 @@ fi
 T="$(mktemp -d /tmp/wds.XXXXXX)" || noverdict "no temp directory"
 T="$(cd "$T" && pwd -P)"
 cleanup() {
+  rc=$?
+  if [ "$rc" -ne 0 ] && [ -f "$T/state/watchdog.log" ]; then
+    echo ""
+    echo "-- the job's watchdog.log, last 20 lines (the cleanup removes it next):"
+    tail -n 20 "$T/state/watchdog.log"
+  fi
   sudo -n launchctl bootout "system/$LABEL" >/dev/null 2>&1
   sudo -n rm -f /Library/LaunchDaemons/com.agent-fleet-test.stall-watchdog.smoke.plist
   env -u TMUX TMUX_TMPDIR="$T/run" tmux kill-server >/dev/null 2>&1
@@ -69,17 +88,19 @@ c["stall"]["poll_secs"] = 1
 c["state"]["dir"] = os.path.join(t, "state")
 c["owner"]["claude_config_dir"] = None
 json.dump(c, open(cfg, "w"))
+json.dump({"schema": 1, "agents_root": t, "fleet_checkout": repo, "claims_dir": os.path.join(t, "claims"),
+           "launchd_prefix": "com.agent-fleet-test"}, open(os.path.join(t, "host.json"), "w"))
 version = int(re.search(r"^version:\s*(\d+)", open(os.path.join(skill, "SKILL.md")).read(), re.M).group(1))
 rec = os.path.join(t, "install", ".claude", "skills", "stall-watchdog", "installation", ".install-state.json")
 json.dump({"hosts": {socket.gethostname(): {cfg: {"version": version}}}}, open(rec, "w"))
 EOF
 env -u TMUX TMUX_TMPDIR="$T/run" tmux new-session -d -s smoke "sleep 600" || noverdict "no tmux session to watch"
 
-sed -e "s|<launchd-prefix>|com.agent-fleet-test|g" -e "s|<agent>|smoke|g" -e "s|<user>|$me|g" \
-    -e "s|<checkout>|$T|g" -e "s|<fleet>|$REPO|g" -e "s|<agents-root>|$T|g" \
-    -e "s|<state dir>|$T/state|g" -e "s|<tmux-dir>|$T/run|g" -e "s|/opt/homebrew/bin/python3|$PY|g" \
-    "$HERE/agent-stall-watchdog.plist.example" > "$T/rendered.plist"
+FLEET_PYTHON="$PY" FLEET_HOST_CONFIG="$T/host.json" "$PY" "$HERE/render-plist.py" --agent smoke \
+    --agents-root "$T" --checkout "$T" --state-dir "$T/state" --tmux-dir "$T/run" --config "$cfg" \
+    --form system --out "$T/rendered.plist" || noverdict "render-plist.py refused (its line above)"
 plutil -lint "$T/rendered.plist" >/dev/null || noverdict "the rendered plist does not lint"
+"$PY" -c 'import plistlib, sys; d = plistlib.load(open(sys.argv[1], "rb")); print("     job PATH", d["EnvironmentVariables"]["PATH"], "- interpreter", d["ProgramArguments"][0])' "$T/rendered.plist"
 sudo -n install -m 644 -o root -g wheel "$T/rendered.plist" "$PLIST" && sudo -n launchctl bootstrap system "$PLIST" \
   || noverdict "the LaunchDaemon did not install (the printed sudo line of SKILL.md step 6)"
 
@@ -100,7 +121,13 @@ user="$(ps -o user= -p "$pid1" | tr -d ' ')"
 [ "$user" = "$me" ] && ok "it runs as the invoking user ($me), not root" || bad "it runs as '$user', not $me"
 
 n=0; while [ ! -f "$T/state/stall-watchdog.json" ] && [ "$n" -lt 20 ]; do sleep 1; n=$((n + 1)); done
-[ -f "$T/state/stall-watchdog.json" ] && ok "it captures: the state file was written" || bad "no state file after 20 s: up and blind"
+if [ ! -f "$T/state/stall-watchdog.json" ]; then
+  bad "no state file after 20 s: it has not completed one poll"
+elif cap="$("$PY" -c 'import json, sys; e = json.load(open(sys.argv[1])).get("capture_error"); print(e["error"] if e else ""); sys.exit(1 if e else 0)' "$T/state/stall-watchdog.json")"; then
+  ok "it captures: the state file was written, with no capture_error"
+else
+  bad "up and blind: its captures fail ($cap)"
+fi
 
 [ -w "$PLIST" ] && bad "$PLIST is writable by $me" || ok "the job definition is not writable by the user it runs as"
 if launchctl bootout "system/$LABEL" >/dev/null 2>&1; then

@@ -940,10 +940,9 @@ too, and only the watchdog needs root.
    install -d -m 700 "$state" && { [ "$form" = system ] || install -d "${dest%/*}"; }
    install -m 600 "$skill/config.example.json" "$staged"
    python3 -c 'import json, sys; p, d, t, s = sys.argv[1:]; c = json.load(open(p, encoding="utf-8")); c["tmux"].update(tmpdir=d, target=t); c["state"]["dir"] = s; open(p, "w").write(json.dumps(c, indent=2) + "\n")' "$staged" "$dir" "claude-$a:0" "$state"
-   sed -e "s|<launchd-prefix>|$prefix|g" -e "s|<agent>|$a|g" -e "s|<user>|$me|g" -e "s|<checkout>|$root/$a/$proj|g" -e "s|<fleet>|$fleet|g" \
-       -e "s|<agents-root>|$root|g" -e "s|<state dir>|$state|g" -e "s|<tmux-dir>|$dir|g" "$skill/installation/agent-stall-watchdog.plist.example" > "$out"
-   python3 -c 'import plistlib, sys; p, cfg, form = sys.argv[1:]; d = plistlib.load(open(p, "rb")); d["EnvironmentVariables"]["STALL_WATCHDOG_CONFIG"] = cfg; form == "user" and d.pop("UserName", None); plistlib.dump(d, open(p, "wb"))' "$out" "$cfg" "$form" \
-     && plutil -lint "$out" >/dev/null || { echo "NOT RENDERED: $out does not parse: a placeholder left; no root command"; exit 1; }
+   python3 "$skill/installation/render-plist.py" --agent "$a" --agents-root "$root" --checkout "$root/$a/$proj" \
+       --state-dir "$state" --tmux-dir "$dir" --config "$cfg" --form "$form" --out "$out" || exit 1
+   plutil -lint "$out" >/dev/null || { echo "NOT RENDERED: $out does not lint; no root command"; exit 1; }
    got=$(python3 -c 'import plistlib, sys; d = plistlib.load(open(sys.argv[1], "rb")); e = d["EnvironmentVariables"]; print(d["Label"], d.get("UserName", "-"), e["TMUX_TMPDIR"], e["STALL_WATCHDOG_CONFIG"])' "$out")
    case "$out$staged$dest" in *[!A-Za-z0-9._/@+-]*) safe= ;; *) safe=1 ;; esac
    if [ "$form" = system ] && [ -n "$safe" ] && [ "$got" = "$label $me $dir $cfg" ]; then
@@ -961,7 +960,14 @@ too, and only the watchdog needs root.
    `UserName` the agents user, installed with its config by ONE root command; the
    user form prints the agents user's own commands, no sudo, and is UNPROTECTED.
    The last line is refused unless the label, the user, the tmux directory and
-   the config are exactly the form's.
+   the config are exactly the form's. The job itself is rendered by the
+   stall-watchdog skill's `installation/render-plist.py`, as the agents user the
+   job runs as: it writes the job's PATH from the tmux on this block's PATH and
+   the fleet's interpreter, and prints `NOT RENDERED` instead of a plist when no
+   tmux is on that PATH, or when tmux or the interpreter does not run under the
+   PATH it would write, because a job whose PATH reaches no tmux runs, captures
+   nothing and looks healthy. A target whose tmux is not in Homebrew's directory
+   runs this block with that directory in front of PATH as well.
 
    Before the root command runs, run `/stall-watchdog` step 5 against the live
    session on the target, with `STALL_WATCHDOG_CONFIG=<the staged config>`: the
@@ -971,9 +977,9 @@ too, and only the watchdog needs root.
    run it themselves, send them the paths of the rendered unit and the staged
    config, to read first, and the printed line, to run on the target. Once it
    ran: `/stall-watchdog` step 6's proof of capture (the state file newer than
-   the service start), its step 7 record, and its `installation/check` until it
-   exits 0, each with the config the unit names (`/etc/agent-fleet/...` in the
-   system form). When answer 7 was no, skip this step; step 9 says what that
+   the service start, with no `capture_error` in it), its step 7 record, and
+   its `installation/check` until it exits 0, each with the config the unit
+   names (`/etc/agent-fleet/...` in the system form). When answer 7 was no, skip this step; step 9 says what that
    leaves.
 8. **The other skills' per-agent steps**, for each skill in the manifest's
    `skills` whose `installation/INSTRUCTION.md` names steps per agent and that

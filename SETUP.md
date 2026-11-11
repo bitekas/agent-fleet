@@ -476,8 +476,8 @@ origin, on `main`, CI green and clean in the leak backstop. Its one root step is
 the administrator's, and only when the release changed a file the system units
 were rendered from - `templates/claude-agent.service.example`, or the stall
 watchdog's unit example or `config.example.json`; on macOS
-`templates/claude-agent.plist.example` or the watchdog's plist example in their
-place: re-render each agent's unit
+`templates/claude-agent.plist.example` or the watchdog's plist example or its
+`installation/render-plist.py` in their place: re-render each agent's unit
 or watchdog by `/adding-an-agent` section 5 step 6 or 7 and install it with the
 root command that prints. A unit installed again restarts nothing; its new
 shape applies at the next restart.
@@ -607,10 +607,11 @@ by `/adding-an-agent` section 5 step 6:
       `<state dir>`, `<tmux-dir>`
 
 **On macOS, each agent's stall-watchdog job**, from `.claude/skills/stall-watchdog/installation/agent-stall-watchdog.plist.example`,
-by `/adding-an-agent` section 5 step 7:
+by `/adding-an-agent` section 5 step 7, through the skill's `installation/render-plist.py`:
 
 - [ ] `<launchd-prefix>`, `<agent>`, `<user>`, `<checkout>`, `<fleet>`,
-      `<agents-root>`, `<state dir>`, `<tmux-dir>`
+      `<agents-root>`, `<state dir>`, `<tmux-dir>`, `<python>`, and `<path>`,
+      which the renderer derives from where tmux and `<python>` are
 - [ ] `<rendered>`, `<uid>` stay: they are only in the opening comment's
       commands, which the rendered file does not keep
 

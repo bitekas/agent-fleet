@@ -35,7 +35,14 @@ I. The watchdog job (`watchdog-plist`). System form: ONE root command that
    config. User form: the agents user's own two commands, no sudo, a LaunchAgent
    with the staged config. The staged config names the tmux directory, the
    session target and the state directory; it is mode 600 and the state
-   directory 700.
+   directory 700. The job runs the fleet's interpreter (FLEET_PYTHON, which the
+   run sets), and its PATH is the block's tmux's directory, the interpreter's,
+   then the system directories: under that PATH a bare `tmux` is the block's own
+   stand-in, so the job reaches the tmux the block was run with. A hardcoded
+   Homebrew PATH reaches the machine's tmux or none, which is the job that ran up
+   and blind on a Mac without Homebrew. Without a tmux on the block's PATH the
+   block prints ONE `NOT RENDERED: no tmux on PATH` line, no command, and writes
+   no plist: a job whose PATH reaches no tmux supervises nothing and looks healthy.
 
 THE CONTROLS - each runs a block with ONE fault planted and must be seen red,
 or the run is NO VERDICT (exit 3):
@@ -65,6 +72,7 @@ spec.loader.exec_module(U)
 FLEET, AGENT, ME = U.FLEET, U.AGENT, U.ME
 SESSION_TEMPLATE = "templates/claude-agent.plist.example"
 WD_PLIST = U.WD_DIR + "/installation/agent-stall-watchdog.plist.example"
+WD_RENDER = U.WD_DIR + "/installation/render-plist.py"
 PREFIX = "com.agent-fleet"
 FAKE_PLUTIL = ("#!PYTHON\nimport plistlib, sys\ntry:\n    plistlib.load(open(sys.argv[-1], 'rb'))\n"
                "    print(sys.argv[-1] + ': OK')\nexcept Exception as e:\n    print(sys.argv[-1] + ': ' + str(e))\n"
@@ -72,10 +80,11 @@ FAKE_PLUTIL = ("#!PYTHON\nimport plistlib, sys\ntry:\n    plistlib.load(open(sys
 
 
 def fleet_copy(tmp, name, mutate=None):
-    """The files the blocks read - the two plist examples, the watchdog config and
+    """The files the blocks read - the two plist examples, the watchdog config, the
+    watchdog's renderer and the job table it reads its interpreter from, and
     lib/fleetlib - with one of them mutated."""
     root = os.path.join(tmp, name)
-    for rel in (SESSION_TEMPLATE, WD_PLIST, U.WD_CONFIG):
+    for rel in (SESSION_TEMPLATE, WD_PLIST, U.WD_CONFIG, WD_RENDER, "systemd/agent-daemons.py"):
         os.makedirs(os.path.dirname(os.path.join(root, rel)), exist_ok=True)
         shutil.copyfile(os.path.join(FLEET, rel), os.path.join(root, rel))
     shutil.copytree(os.path.join(FLEET, "lib"), os.path.join(root, "lib"),
@@ -90,17 +99,39 @@ def fleet_copy(tmp, name, mutate=None):
     return root
 
 
-def run(info, fleet, tmp, name, form, auth="token", root_name="agents", edit=None):
+SYSTEM_PATH = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+
+
+def no_tmux_bin(base):
+    """A bin directory holding the commands the watchdog-plist block runs and NO tmux:
+    each a wrapper exec'ing the real one, plutil the stand-in where there is none."""
+    d = os.path.join(base, "bin-no-tmux")
+    os.makedirs(d, exist_ok=True)
+    for tool, target in (("bash", shutil.which("bash")), ("python3", sys.executable), ("id", shutil.which("id")),
+                         ("install", shutil.which("install")), ("sed", shutil.which("sed")),
+                         ("plutil", shutil.which("plutil"))):
+        with open(os.path.join(d, tool), "w") as f:
+            if target:
+                f.write(f'#!/bin/sh\nexec "{target}" "$@"\n')
+            else:
+                f.write(FAKE_PLUTIL.replace("PYTHON", sys.executable))
+        os.chmod(os.path.join(d, tool), 0o755)
+    return d
+
+
+def run(info, fleet, tmp, name, form, auth="token", root_name="agents", edit=None, tmux=True):
     sysdir = os.path.join(tmp, "w-" + name, "LaunchDaemons")
     env = {"FLEET_SERVICE_BACKEND": "launchd", "FLEET_LAUNCHD_SYSTEM_DIR": sysdir,
            "FLEET_HOST_CONFIG": os.path.join(FLEET, "tests", "fixtures", "host.json"),
-           "PYTHONDONTWRITEBYTECODE": "1"}
+           "FLEET_PYTHON": sys.executable, "PYTHONDONTWRITEBYTECODE": "1"}
     base = os.path.join(tmp, "w-" + name)
     os.makedirs(os.path.join(base, "bin"), exist_ok=True)
     if not shutil.which("plutil"):
         with open(os.path.join(base, "bin", "plutil"), "w") as f:
             f.write(FAKE_PLUTIL.replace("PYTHON", sys.executable))
         os.chmod(os.path.join(base, "bin", "plutil"), 0o755)
+    if not tmux:
+        env["PATH"] = no_tmux_bin(base)
     p, base, home, agents = U.run_block(info, fleet, tmp, name, auth=auth, form=form, root_name=root_name,
                                         edit=edit, env_extra=env)
     return p, base, home, agents, sysdir
@@ -189,11 +220,37 @@ def watchdog_findings(p, home, agents, sysdir, form):
         out.append(f"the job names {d.get('Label')}, {env.get('TMUX_TMPDIR')}, {env.get('STALL_WATCHDOG_CONFIG')}")
     if (d.get("UserName") == ME) != (form == "system"):
         out.append(f"UserName is {d.get('UserName')!r} in the {form} form")
+    argv = d.get("ProgramArguments", [])
+    if argv[:1] != [sys.executable]:
+        out.append(f"the job runs {argv[:1]}, not the fleet's interpreter {sys.executable} (FLEET_PYTHON)")
+    block_bin = os.path.join(os.path.dirname(agents), "bin")
+    want_path = ":".join(dict.fromkeys([block_bin, os.path.dirname(sys.executable), *SYSTEM_PATH]))
+    if env.get("PATH") != want_path:
+        out.append(f"the job's PATH is {env.get('PATH')!r}, not {want_path!r}")
+    reached = shutil.which("tmux", path=env.get("PATH", ""))
+    if reached != os.path.join(block_bin, "tmux"):
+        out.append(f"under the job's PATH a bare tmux is {reached!r}, not the block's own "
+                   f"{os.path.join(block_bin, 'tmux')}")
     c = json.load(open(staged, encoding="utf-8"))
     if (c["tmux"]["tmpdir"], c["tmux"]["target"], c["state"]["dir"]) != (tmux_dir, f"claude-{AGENT}:0", state):
         out.append(f"the staged config names {c['tmux']}, {c['state']['dir']}")
     if stat.S_IMODE(os.stat(staged).st_mode) != 0o600 or stat.S_IMODE(os.stat(state).st_mode) != 0o700:
         out.append("the staged config is not 600 or the state directory not 700")
+    return out
+
+
+def no_tmux_findings(p, agents):
+    label = f"{PREFIX}.stall-watchdog.{AGENT}"
+    rendered = os.path.join(agents, AGENT, "config", f"{label}.plist")
+    lines = [ln for ln in p.stdout.splitlines() if ln.strip()]
+    out = []
+    if p.returncode != 1 or len(lines) != 1 or not lines[0].startswith("NOT RENDERED: no tmux on PATH"):
+        out.append(f"with no tmux on its PATH the block exited {p.returncode} and printed {lines[:3]}, "
+                   f"not ONE 'NOT RENDERED: no tmux on PATH' line")
+    if any("launchctl" in ln for ln in lines):
+        out.append(f"with no tmux on its PATH the block printed a command: {lines[:3]}")
+    if os.path.exists(rendered):
+        out.append(f"with no tmux on its PATH the block wrote {rendered}")
     return out
 
 
@@ -222,7 +279,14 @@ def main():
             for f in found:
                 U.check(False, f"I {form}: {f}")
             U.check(not found, f"I {form} form: " + ("ONE root command, root's config, a LaunchDaemon as the agents user"
-                                                     if form == "system" else "the agents user's own commands, a LaunchAgent"))
+                                                     if form == "system" else "the agents user's own commands, a LaunchAgent")
+                    + ", the fleet's interpreter, a PATH that reaches the block's tmux")
+        p, base, home, agents, sysdir = run("watchdog-plist", FLEET, tmp, "w-no-tmux", "system", tmux=False)
+        found = no_tmux_findings(p, agents)
+        for f in found:
+            U.check(False, f"I no tmux: {f}")
+        U.check(not found, "I system form, no tmux on the block's PATH: NOT RENDERED naming tmux, no command, "
+                           "no plist")
         print("K. controls - each must be seen red, or there is no verdict")
         controls = [
             ("K1", "agent-plist", "system", "token", dict(mutate=(SESSION_TEMPLATE, "<!--system: ", "<!--sytem: ")),

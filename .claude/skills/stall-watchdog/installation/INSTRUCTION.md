@@ -17,8 +17,10 @@ What lives in this directory rather than in `SKILL.md`:
 | `check` | is it installed for one session, and is it current: exits 0, 1 or 2 |
 | `agent-stall-watchdog.service.example` | the unit template, placeholdered (Linux, systemd) |
 | `agent-stall-watchdog.plist.example` | the LaunchDaemon template, placeholdered (macOS, launchd) |
-| `check.test.py` | `check`'s launchd legs against a fake launchctl: OK for the LaunchDaemon, UNPROTECTED for a LaunchAgent |
-| `launchd-daemon.smoke.sh` | the LaunchDaemon on a real macOS launchd, with sudo: runs as the user, captures, survives kill -9, refuses an unprivileged bootout, reads OK. Not discovered by `tests/run-all.sh`: run only on a disposable or consenting Mac (it refuses without passwordless sudo) |
+| `render-plist.py` | renders the LaunchDaemon (or LaunchAgent) for one session: the job's PATH from the tmux on the renderer's PATH and the fleet's interpreter, refused when tmux or the interpreter does not run under it |
+| `render-plist.test.py` | the renderer offline, its refusals, and that the smoke below renders through it |
+| `check.test.py` | `check`'s launchd legs against a fake launchctl: OK for the LaunchDaemon, UNPROTECTED for a LaunchAgent, and the cause a blind watchdog recorded |
+| `launchd-daemon.smoke.sh` | the LaunchDaemon on a real macOS launchd, with sudo, rendered by `render-plist.py`: runs as the user, captures, survives kill -9, refuses an unprivileged bootout, reads OK; a failed run prints the job's log. Not discovered by `tests/run-all.sh`: run only on a disposable or consenting Mac (it refuses without passwordless sudo) |
 | `.install-state.json`, in the install context, not here (`fleet where stall-watchdog installation/.install-state.json`) | what was actually installed, per host and per config |
 
 `check` is per SESSION, not per machine: it takes the config path as an argument or

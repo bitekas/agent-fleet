@@ -16,10 +16,21 @@
     <tmux-dir>        the session's socket directory, tmux.tmpdir in the config:
                       <agents-root>/run/claude-tmux-<agent> on macOS
     <launchd-prefix>  host.json launchd_prefix (default com.agent-fleet)
+    <python>          the interpreter every fleet job runs, agent-daemons.py's job
+                      table's python: FLEET_PYTHON, else host.json's python, else
+                      Homebrew's /opt/homebrew/bin/python3
+    <path>            the job's PATH: the directory of the tmux the session runs,
+                      then the directory of <python>, then /usr/bin:/bin:/usr/sbin:/sbin
+
+  installation/render-plist.py fills every placeholder, as the user the job runs
+  as, and refuses to render when no tmux is on that user's PATH or when tmux or
+  the interpreter does not run under the PATH it would write. Render with it
+  rather than by hand: <path> is a fact about the Mac it runs on, and a PATH that
+  reaches no tmux is a job that runs, captures nothing and looks healthy.
 
   A placeholder is an XML tag to the parser, so a file with one left in does not
-  load: fill every one, then `plutil -lint` the result. No double hyphen may
-  appear in this comment: XML ends a comment there.
+  load: `plutil -lint` the result. No double hyphen may appear in this comment:
+  XML ends a comment there.
 
   THE PROTECTED FORM, AND THE ONLY ONE check REPORTS AS INSTALLED. A root-owned
   LaunchDaemon with UserName runs as the agent's user, so the agent can kill the
@@ -37,8 +48,9 @@
   watchdog its subject can reconfigure is one it can switch off.
 
   THE INTERPRETER IS PART OF THE PROTECTION TOO. ProgramArguments' first entry,
-  Homebrew's python3, is what runs watchdog.py, and an agents user that can
-  change it runs its own code as the watchdog. Homebrew's files belong to the
+  <python> (Homebrew's python3 on the supported layout), is what runs
+  watchdog.py, and an agents user that can change it runs its own code as the
+  watchdog. Homebrew's files belong to the
   account that installed it, so on a Mac with a separate administrator Homebrew
   is the administrator's (install-agent-fleet's bootstrap-target.sh installs it
   that way), and install-agent-fleet's verify-privileges.py fails an
@@ -54,8 +66,8 @@
   process runs as the agent's user, which is the same boundary the session has.
 
   Deliberately no CLAUDE_CONFIG_DIR: this is a supervisor, not an agent (the
-  systemd example says why). PATH reaches tmux and Homebrew's python3; launchd's
-  own PATH has neither. KeepAlive restarts every exit, including the 75 a
+  systemd example says why). PATH reaches tmux and <python>; launchd's own PATH
+  reaches neither on a Mac. KeepAlive restarts every exit, including the 75 a
   failed self re-exec ends with (a Homebrew upgrade can remove the Cellar path
   the interpreter ran from): the restart runs ProgramArguments' interpreter.
 
@@ -70,7 +82,7 @@
   <string><user></string>
   <key>ProgramArguments</key>
   <array>
-    <string>/opt/homebrew/bin/python3</string>
+    <string><python></string>
     <string><fleet>/.claude/skills/stall-watchdog/watchdog.py</string>
   </array>
   <key>WorkingDirectory</key>
@@ -82,7 +94,7 @@
     <key>STALL_WATCHDOG_CONFIG</key>
     <string><agents-root>/<agent>/config/stall-watchdog.json</string>
     <key>PATH</key>
-    <string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <string><path></string>
   </dict>
   <key>StandardOutPath</key>
   <string><state dir>/watchdog.log</string>

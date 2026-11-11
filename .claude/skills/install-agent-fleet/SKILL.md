@@ -560,8 +560,9 @@ named; the questions are here.
    .claude/skills/stall-watchdog/installation/agent-stall-watchdog.service.example
    .claude/skills/stall-watchdog/config.example.json` (on macOS
    `templates/claude-agent.plist.example` and the watchdog's
-   `installation/agent-stall-watchdog.plist.example` in place of the two unit
-   examples) lists any of them,
+   `installation/agent-stall-watchdog.plist.example` and
+   `installation/render-plist.py` in place of the two unit examples) lists any
+   of them,
    re-render each agent's affected unit or watchdog with `/adding-an-agent`
    section 5 step 6 or 7 [target] and run the root command it prints [admin],
    by that skill's *Root on the target*: installing a unit restarts nothing, and
