@@ -996,7 +996,9 @@ too, and only the watchdog needs root.
    config, to read first, and the printed line, to run on the target. Once it
    ran: `/stall-watchdog` step 6's proof of capture (the state file newer than
    the service start, with no `capture_error` in it), its step 7 record, and
-   its `installation/check` until it exits 0, each with the config the unit
+   its check, `<fleet>/.claude/skills/stall-watchdog/installation/check` on the
+   target (a file the fleet ships, never in the install context `fleet where`
+   names), until it exits 0, each with the config the unit
    names (`/etc/agent-fleet/...` in the system form). When answer 7 was no, skip this step; step 9 says what that
    leaves.
 8. **The other skills' per-agent steps**, for each skill in the manifest's

@@ -5,8 +5,10 @@ runs agents), `jq`, and a filled-in `config.json`. The **automated sign-in route
 (SKILL.md step 6) additionally needs `node`, a way to run a browser headful
 (`xvfb-run` on a Linux host with no X session; on macOS, the agents' user logged in
 at the console), and the driver's own dependencies installed
-into `signin_driver/`. Run `installation/check` at any point; it prints exactly what
-is still missing, and `installation/check --online` installs the driver half.
+into `signin_driver/`. Run `"${CLAUDE_SKILL_DIR}/installation/check"` at any point
+(a file the fleet ships, beside this one, never in the install context `fleet where`
+names); it prints exactly what is still missing, and the same with `--online`
+installs the driver half.
 
 **The driver's dependencies are per-TREE, not per-host.** `signin_driver/node_modules`
 and `signin_driver/browsers` are gitignored, so a fresh clone *and every fresh
@@ -146,7 +148,7 @@ print("recorded version", v, "on", socket.gethostname())
 PY
 ```
 
-Then run `installation/check` and confirm it exits 0. Its verdict covers the
+Then run `"${CLAUDE_SKILL_DIR}/installation/check"` and confirm it exits 0. Its verdict covers the
 config's credential paths too: an `accounts.pool_file` that does not exist yet
 keeps it from 0 whatever the record says.
 
