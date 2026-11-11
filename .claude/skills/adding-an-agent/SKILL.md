@@ -47,11 +47,19 @@ remote come from `/install-agent-fleet` when it hands over to this skill, and
 are asked otherwise.
 
 **A step marked [systemd] is the Linux form; its [launchd] form, for a macOS
-target, follows it.** On a macOS target an SSH command's PATH lacks Homebrew,
-where tmux and the fleet's python3 are (Apple's /usr/bin/python3 is older than
-the fleet's floor), so every [target] command there runs with it in front:
-`ssh <target> 'PATH=/opt/homebrew/bin:$PATH <command>'`, and a block as `ssh
-<target> 'PATH=/opt/homebrew/bin:$PATH bash -s' < <file>`.
+target, follows it.** On a macOS target an SSH command's PATH is
+`/usr/bin:/bin:/usr/sbin:/sbin`, which reaches neither `claude`, tmux nor the
+fleet's python3 (Apple's /usr/bin/python3 is older than the fleet's floor), so
+every [target] command there runs with their directories in front,
+`<tools-path>`: `ssh <target> 'PATH=<tools-path>:$PATH <command>'`, and a block
+as `ssh <target> 'PATH=<tools-path>:$PATH bash -s' < <file>`. `<tools-path>` is
+the PATH `/install-agent-fleet`'s bootstrap writes into the agents user's
+`~/.bash_profile`, `$HOME/.local/bin:/opt/homebrew/bin` (Claude Code's installer
+puts `claude` in `~/.local/bin`, Homebrew the rest), or `$HOME/.local/bin` alone
+where that user installed tmux and Python there too; `ssh <target> 'bash -lc
+"command -v claude tmux python3"'` prints where they are. The jobs section 5
+renders take their PATH from it, so it decides which tmux and which `claude` the
+agent's session and its stall watchdog run.
 
 **The two users** (`SETUP.md`, "The two users"). The agents run as a dedicated
 **agents user** without sudo, and `<target>` is that user's SSH destination;
@@ -101,8 +109,9 @@ the target), `<admin-target>` (the administrator's, *The two users* above),
 form), `<home>` (`<agents-root>/<agent-name>`), `<project-dir>` (the install
 checkout's directory name inside every agent home), `<watch-job>` (the working
 chat transport's `watch.job`, `slack-watch` for Slack), `<uid>` (`id -u` on the
-target) and `<scratch>` (a directory here, mode 700, for files on their way to
-the target).
+target), `<tools-path>` (the directories of `claude`, tmux and the fleet's
+python3 on a macOS target, above) and `<scratch>` (a directory here, mode 700,
+for files on their way to the target).
 
 **`systemctl --user` needs `XDG_RUNTIME_DIR`**, and a shell without a login
 session has none (`<fleet>/systemd/README.md`). When it is unset, put
@@ -423,7 +432,7 @@ choice: A, unless the person needs Remote Control or bills by API key.
    On a macOS target `bash -l` reads `~/.bash_profile`, never zsh's files:
    `/install-agent-fleet`'s bootstrap puts `~/.local/bin` (where Claude Code's
    installer puts `claude`) and Homebrew there; with no bootstrap, add the line
-   `export PATH="$HOME/.local/bin:/opt/homebrew/bin:$PATH"` to it first.
+   `export PATH="<tools-path>:$PATH"` to it first.
    `<auth-mode>` is `token`, `login` or `api-key` for A, B or C. `env -i` and
    `bash -l` give the session what the unit gives it: none of the variables a
    Claude Code session exports to its tools (`CLAUDECODE`,
@@ -617,7 +626,7 @@ too, and only the watchdog needs root.
    logs in at boot:
 
    ```bash
-   ssh <target> 'PATH=/opt/homebrew/bin:$PATH python3 -c "import sys; sys.path.insert(0, sys.argv[1]); from fleetlib import services; print(services.domain_exists())" <fleet>/lib'   # True
+   ssh <target> 'PATH=<tools-path>:$PATH python3 -c "import sys; sys.path.insert(0, sys.argv[1]); from fleetlib import services; print(services.domain_exists())" <fleet>/lib'   # True
    ```
 
    `False` means no session of the agents user's: `bootstrap-target.sh --install
@@ -778,14 +787,14 @@ too, and only the watchdog needs root.
 
    ```bash agent-plist
    a=<agent-name> n='<Agent-Name>' root='<agents-root>' fleet='<fleet>' proj=<project-dir> job=<watch-job> var=<watch-config-env> auth=<auth-mode> form=<unit-form>
-   src="$fleet/templates/claude-agent.plist.example"; me=$(id -un)
+   me=$(id -un)
    svc() { python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); from fleetlib import services as s; print(s.prefix() if sys.argv[2] == "prefix" else s.unit_dir(sys.argv[2]))' "$fleet/lib" "$1"; }
    prefix=$(svc prefix) || { echo "NOT RENDERED: fleetlib names no launchd prefix"; exit 1; }
    label="$prefix.session.$a"
    case "$form" in
      system) [ "$auth" != login ] || { echo "REFUSED: a macOS agent in the system form runs as a LaunchDaemon, which has no window server and no login Keychain, so it signs in only with a token or an API key (question 6, A or C); nothing rendered"; exit 1; }
-             dest="$(svc system)/$label.plist" keep='s|<!--system: \(.*\) -->|\1|' ;;
-     user) dest="$(svc user)/$label.plist" keep='/<!--system: /d' ;;
+             dest="$(svc system)/$label.plist" ;;
+     user) dest="$(svc user)/$label.plist" ;;
      *) echo "NOT RENDERED: form=$form is neither system nor user"; exit 1 ;;
    esac
    out="$root/$a/config/$label.plist"
@@ -793,9 +802,9 @@ too, and only the watchdog needs root.
    [ ${#sock} -lt 104 ] || { echo "NOT RENDERED: the session's socket $sock is ${#sock} bytes and macOS holds at most 103; use a shorter agents root"; exit 1; }
    install -d -m 755 "$root/run" && install -d "$root/$a/state" "${out%/*}" && touch "$root/$a/state/session.log"
    [ "$form" = system ] || install -d "${dest%/*}"
-   sed -e "$keep" -e "s|<launchd-prefix>|$prefix|g" -e "s|<agent-name>|$a|g" -e "s|<Agent-Name>|$n|g" -e "s|<agents-root>|$root|g" \
-       -e "s|<fleet>|$fleet|g" -e "s|<project-dir>|$proj|g" -e "s|<watch-job>|$job|g" -e "s|<watch-config-env>|$var|g" \
-       -e "s|<auth-mode>|$auth|g" -e "s|<agents-user>|$me|g" "$src" > "$out"
+   python3 "$fleet/.claude/skills/stall-watchdog/installation/render-plist.py" --job session --agent "$a" --name "$n" \
+       --agents-root "$root" --project-dir "$proj" --watch-job "$job" --watch-config-env "$var" --auth-mode "$auth" \
+       --form "$form" --out "$out" || exit 1
    plutil -lint "$out" >/dev/null || { echo "NOT RENDERED: $out does not lint: a placeholder or a form marker left"; exit 1; }
    got=$(python3 -c 'import plistlib, sys; d = plistlib.load(open(sys.argv[1], "rb")); print(d["Label"], d.get("UserName", "-"))' "$out")
    case "$out$dest" in *[!A-Za-z0-9._/@+-]*) safe= ;; *) safe=1 ;; esac
@@ -811,12 +820,19 @@ too, and only the watchdog needs root.
    `<agents-root>`, `<fleet>`, `<watch-job>`, `<watch-config-env>` and
    `<auth-mode>` are step 6's; `<unit-form>` is `system` or `user`. The label and
    the two directories come from fleetlib (host.json's `launchd_prefix`, and
-   /Library/LaunchDaemons or ~/Library/LaunchAgents). `plutil -lint` is the
-   placeholder check here: a placeholder is an XML tag to it, so a file with one
-   left does not lint. The block refuses B in the system form, a socket path
-   macOS cannot bind, and - for the printed command - anything but exactly this
-   label with, in the system form, `UserName` the agents user: a marker the
-   `sed` no longer matches would otherwise install a session that runs as root.
+   /Library/LaunchDaemons or ~/Library/LaunchAgents). The job is rendered by the
+   stall-watchdog skill's `installation/render-plist.py --job session`, as the
+   agents user the job runs as: it fills every placeholder, writes the job's PATH
+   from the tmux and the `claude` on this block's PATH and the fleet's interpreter
+   (which the job and the boot message's follower commands run), and prints ONE
+   `NOT RENDERED` line and writes nothing when tmux or `claude` is not on that PATH,
+   or when either or the interpreter does not run under the PATH it would write: a
+   session whose PATH reaches no `claude` never starts. `plutil -lint` checks the
+   result again: a placeholder is an XML tag to it. The block refuses B in the
+   system form, a socket path macOS cannot bind, and - for the printed command -
+   anything but exactly this label with, in the system form, `UserName` the agents
+   user: a form marker the renderer no longer finds would otherwise install a
+   session that runs as root, and the renderer refuses that too.
    It renders into the agent's config directory in both forms and only the
    printed command puts the file where launchd loads it, because launchd reads
    every plist in ~/Library/LaunchAgents at the next login, a refused one
@@ -966,8 +982,10 @@ too, and only the watchdog needs root.
    the fleet's interpreter, and prints `NOT RENDERED` instead of a plist when no
    tmux is on that PATH, or when tmux or the interpreter does not run under the
    PATH it would write, because a job whose PATH reaches no tmux runs, captures
-   nothing and looks healthy. A target whose tmux is not in Homebrew's directory
-   runs this block with that directory in front of PATH as well.
+   nothing and looks healthy. `<tools-path>` in front of the block's PATH (the
+   macOS rule above) is what puts the target's tmux on it, and where that tmux is
+   decides step 10's verdict: one in the agents user's own `~/.local/bin` FAILs
+   there, because the watched agent could replace it.
 
    Before the root command runs, run `/stall-watchdog` step 5 against the live
    session on the target, with `STALL_WATCHDOG_CONFIG=<the staged config>`: the

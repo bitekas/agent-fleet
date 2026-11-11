@@ -34,8 +34,10 @@ WHAT EACH CASE HOLDS (the supervisor's LOAD-BEARING PROPERTIES, plus the plists)
              `plutil -lint` too on macOS), and an unfilled one does NOT (a missed
              placeholder cannot load); a placeholder with no test value fails. The
              session plist's label is fleetlib.services' label for the session, its
-             arguments parse with agent-session.py's own parser, and its socket path
-             fits in 104 bytes; the stall watchdog's is services' watchdog label, a
+             arguments parse with agent-session.py's own parser, its socket path
+             fits in 104 bytes, and its interpreter (the job's and the boot
+             message's) and PATH are the rendered <python> and <path>, never
+             Homebrew's; the stall watchdog's is services' watchdog label, a
              LaunchDaemon running as the session's user; the web hierarchy
              server's is a LaunchAgent running serve.mjs through a login shell
   boot       the boot message of templates/claude-agent.service.example and of
@@ -357,7 +359,11 @@ def session_plist(d, mod):
           not any("TOKEN" in k or "KEY" in k for k in env))
     check("session plist: KeepAlive relaunches every exit but 0",
           d["KeepAlive"] == {"SuccessfulExit": False} and d["RunAtLoad"] is True)
-    check("session plist: PATH reaches Homebrew", "/opt/homebrew/bin" in env["PATH"].split(":"))
+    check("session plist: its interpreter and the boot message's three follower commands are <python> and its "
+          "PATH is <path>, all rendered (installation/render-plist.py --job session), never a hardcoded "
+          "Homebrew directory",
+          argv[0] == VALUES["python"] and boot.count(VALUES["python"] + " ") == 3 and env["PATH"] == VALUES["path"]
+          and "/opt/homebrew" not in PLISTS["claude-agent"].read_text(encoding="utf-8"), repr(argv[:1]) + env["PATH"])
     check("session plist: no Python the session runs writes bytecode", env.get("PYTHONDONTWRITEBYTECODE") == "1")
 
 

@@ -18,6 +18,23 @@ WHAT EACH CHECK IS FOR
   N  it refuses, printing ONE `NOT RENDERED` line and writing nothing: no tmux on
      its PATH (naming tmux and the PATH searched); a tmux that is found but does
      not run; an interpreter that does not exist.
+  RS the session job (`--job session`, templates/claude-agent.plist.example) on a
+     Mac WITHOUT Homebrew: tmux, claude and python3 in one temp `.local/bin`, as the
+     macOS CI runner keeps them. The rendered job runs that python3, its boot
+     message's three follower commands name it too, nothing in it names
+     /opt/homebrew, its PATH starts with that `.local/bin` and then the system
+     directories, and under an environment of ONLY that PATH a bare tmux and a
+     bare claude are the stand-ins. The system form carries UserName (the
+     template's system: marker uncommented), the user form none; every
+     placeholder is filled, the display name XML-escaped (it carries an ampersand).
+     On the Homebrew layout (tmux and python3 in one directory, claude in
+     ~/.local/bin) the PATH holds both directories, the tmux's first.
+  NS the session job refuses, ONE `NOT RENDERED` line and nothing written: no
+     claude on its PATH (naming claude and the PATH), no tmux, a claude that is
+     found but does not run, and - in a copy of the fleet tree - a session
+     template whose system: marker is misspelled, which would run the session as
+     root. RS is their control: when the session job does not render at all, NS
+     is not run and the run FAILs on RS.
   S  launchd-daemon.smoke.sh renders through this renderer and has no render of its
      own, prints the job's watchdog.log on a failed run before its cleanup removes
      it, and does not read a state file alone as capture. The smoke needs sudo and
@@ -43,6 +60,7 @@ import tempfile
 
 HERE = os.path.dirname(os.path.realpath(__file__))
 RENDER = os.path.join(HERE, "render-plist.py")
+FLEET = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(HERE))))
 SMOKE = os.path.join(HERE, "launchd-daemon.smoke.sh")
 SYSTEM = "/usr/bin:/bin:/usr/sbin:/sbin"
 ME = pwd.getpwuid(os.getuid()).pw_name
@@ -93,6 +111,125 @@ def render(tmp, name, path_var, form="system", python=None, out=None):
             "--config", "/etc/agent-fleet/stall-watchdog/ada.json", "--form", form, "--out", out]
     p = subprocess.run(argv, env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=120)
     return p, out
+
+
+def render_session(tmp, name, path_var, form="system", python=None):
+    """The session job, rendered as adding-an-agent's agent-plist block renders it."""
+    out = os.path.join(tmp, name + ".plist")
+    env = {"PATH": path_var, "HOME": os.path.join(tmp, "home"), "FLEET_PYTHON": python,
+           "FLEET_HOST_CONFIG": os.path.join(tmp, "host.json"), "PYTHONDONTWRITEBYTECODE": "1", "LANG": "C.UTF-8"}
+    argv = [PY, RENDER, "--job", "session", "--agent", "ada", "--name", "Ada & Co",
+            "--agents-root", os.path.join(tmp, "agents"), "--project-dir", "work", "--watch-job", "slack-watch",
+            "--watch-config-env", "SLACK_WATCH_CONFIG", "--auth-mode", "token", "--form", form, "--out", out]
+    p = subprocess.run(argv, env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=120)
+    return p, out
+
+
+def local_bin(tmp, name, tmux=True, claude=True, claude_body='echo "9.9.9 (Claude Code stand-in)"\n'):
+    """A `.local/bin` of a Mac without Homebrew: python3 (a wrapper of this test's
+    Python), and tmux and claude stand-ins, each optional."""
+    d = os.path.join(tmp, name, ".local", "bin")
+    interp = wrapper(d, PY)
+    if tmux:
+        stand_in(d, 'echo "tmux 9.9-stand-in"\n')
+    if claude:
+        with open(os.path.join(d, "claude"), "w") as f:
+            f.write("#!/bin/sh\n" + claude_body)
+        os.chmod(os.path.join(d, "claude"), 0o755)
+    return d, interp
+
+
+def session_checks(tmp):
+    lb, interp = local_bin(tmp, "mac")
+    p, out = render_session(tmp, "session", lb, python=interp)
+    rendered = p.returncode == 0 and os.path.isfile(out)
+    check("RS: the session job renders on a Mac without Homebrew", rendered,
+          f"exit {p.returncode}: {(p.stdout + p.stderr).strip()[-400:]}")
+    if not rendered:
+        print("       (NS not run: with no session render to compare, a refusal proves nothing)")
+        return
+    text = open(out, encoding="utf-8").read()
+    d = plistlib.loads(text.encode())
+    argv, env = d.get("ProgramArguments", []), d.get("EnvironmentVariables", {})
+    boot = argv[argv.index("--boot") + 1] if "--boot" in argv else ""
+    check("RS: the job runs the .local/bin python3 (FLEET_PYTHON), and its boot message's three "
+          "agent-daemons.py commands name the same interpreter",
+          argv[:1] == [interp] and boot.count(f"{interp} ") == 3 and boot.count("agent-daemons.py") == 3,
+          repr(argv[:2]) + " " + boot[-300:])
+    check("RS: nothing in the rendered job names /opt/homebrew", "/opt/homebrew" not in text)
+    want = ":".join([lb, *SYSTEM.split(":")])
+    check("RS: PATH starts with that .local/bin, then the system directories", env.get("PATH") == want,
+          f"{env.get('PATH')!r} vs {want!r}")
+    reached = {c: shutil.which(c, path=env.get("PATH", "")) for c in ("tmux", "claude")}
+    check("RS: under an environment of ONLY the job's PATH, a bare tmux and a bare claude are the stand-ins",
+          reached == {c: os.path.join(lb, c) for c in ("tmux", "claude")}, repr(reached))
+    check("RS: the system form runs as the renderer's user, the label is the host's session label",
+          d.get("UserName") == ME and d.get("Label") == "com.agent-fleet-test.session.ada", repr(d.get("Label")))
+    check("RS: every value is filled: the display name escaped, the watch job's config variable, the auth mode",
+          "You are Ada & Co," in boot and env.get("SLACK_WATCH_CONFIG", "").endswith("/ada/config/slack-watch.json")
+          and env.get("FLEET_AGENT_AUTH") == "token" and not PLACEHOLDER.findall(boot)
+          and not [k for k in env if PLACEHOLDER.fullmatch(k)], repr(env))
+    p, out_u = render_session(tmp, "session-user", lb, form="user", python=interp)
+    du = plistlib.load(open(out_u, "rb")) if p.returncode == 0 else {}
+    check("RS: the user form renders the same job without UserName",
+          p.returncode == 0 and "UserName" not in du and du.get("Label") == d.get("Label")
+          and du.get("ProgramArguments") == argv, (p.stdout + p.stderr).strip())
+
+    # The Homebrew layout: tmux and python3 in one directory, claude in ~/.local/bin,
+    # where Claude Code's installer puts it. Each directory is on the PATH, in order.
+    brew, binterp = local_bin(tmp, "brew", claude=False)
+    home_bin = os.path.join(tmp, "brew-home", ".local", "bin")
+    os.makedirs(home_bin)
+    with open(os.path.join(home_bin, "claude"), "w") as f:
+        f.write('#!/bin/sh\necho "9.9.9 (Claude Code stand-in)"\n')
+    os.chmod(os.path.join(home_bin, "claude"), 0o755)
+    p, out_b = render_session(tmp, "session-brew", f"{brew}:{home_bin}", python=binterp)
+    db = plistlib.load(open(out_b, "rb")) if p.returncode == 0 else {}
+    want = ":".join([brew, home_bin, *SYSTEM.split(":")])
+    check("RS: tmux and claude in different directories: the PATH holds the tmux's, then the claude's, "
+          "then the system directories, and a bare claude is the one found",
+          db.get("EnvironmentVariables", {}).get("PATH") == want
+          and shutil.which("claude", path=want) == os.path.join(home_bin, "claude"),
+          f"rc={p.returncode} {db.get('EnvironmentVariables', {}).get('PATH')!r} vs {want!r}")
+
+    # A fleet tree whose session template's system: marker is misspelled: the system
+    # form would carry no UserName, a session running as root, so it is refused.
+    copy = os.path.join(tmp, "fleet-copy")
+    for rel in ("templates/claude-agent.plist.example", "systemd/agent-daemons.py",
+                ".claude/skills/stall-watchdog/installation/render-plist.py",
+                ".claude/skills/stall-watchdog/installation/agent-stall-watchdog.plist.example"):
+        os.makedirs(os.path.dirname(os.path.join(copy, rel)), exist_ok=True)
+        shutil.copyfile(os.path.join(FLEET, rel), os.path.join(copy, rel))
+    shutil.copytree(os.path.join(FLEET, "lib"), os.path.join(copy, "lib"),
+                    ignore=shutil.ignore_patterns("__pycache__", "*.test.py"))
+    tpl = os.path.join(copy, "templates", "claude-agent.plist.example")
+    text = open(tpl, encoding="utf-8").read()
+    open(tpl, "w", encoding="utf-8").write(text.replace("<!--system: ", "<!--sytem: ", 1))
+    out_m = os.path.join(tmp, "session-marker.plist")
+    env = {"PATH": lb, "HOME": os.path.join(tmp, "home"), "FLEET_PYTHON": interp,
+           "FLEET_HOST_CONFIG": os.path.join(tmp, "host.json"), "PYTHONDONTWRITEBYTECODE": "1"}
+    p = subprocess.run([PY, os.path.join(copy, ".claude/skills/stall-watchdog/installation/render-plist.py"),
+                        "--job", "session", "--agent", "ada", "--name", "Ada", "--agents-root", os.path.join(tmp, "agents"),
+                        "--project-dir", "work", "--watch-job", "slack-watch", "--watch-config-env", "SLACK_WATCH_CONFIG",
+                        "--auth-mode", "token", "--form", "system", "--out", out_m],
+                       env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=120)
+    lines = p.stdout.splitlines()
+    check("NS: a session template whose system: marker is misspelled: refused, the job would run as root",
+          "<!--sytem: " in open(tpl, encoding="utf-8").read() and p.returncode == 1 and len(lines) == 1
+          and "runs as root" in lines[0] and "UserName" in lines[0] and not os.path.exists(out_m),
+          f"rc={p.returncode} {lines!r} {p.stderr[-200:]!r}")
+
+    for name, kw, start in (
+            ("no claude on its PATH", dict(claude=False), "NOT RENDERED: no claude on PATH"),
+            ("no tmux on its PATH", dict(tmux=False), "NOT RENDERED: no tmux on PATH"),
+            ("a claude that is found but does not run", dict(claude_body="exit 127\n"),
+             "NOT RENDERED: claude --version")):
+        nb, ni = local_bin(tmp, "ns-" + name.replace(" ", "-"), **kw)
+        p, out_n = render_session(tmp, "ns-" + name.replace(" ", "-"), nb, python=ni)
+        lines = p.stdout.splitlines()
+        check(f"NS: {name}: ONE NOT RENDERED line naming it and the PATH, nothing written",
+              p.returncode == 1 and len(lines) == 1 and lines[0].startswith(start) and nb in lines[0]
+              and not os.path.exists(out_n), f"rc={p.returncode} {lines!r} {p.stderr[-200:]!r}")
 
 
 def smoke_checks():
@@ -194,6 +331,8 @@ def main():
         check("N: an --out in a directory that does not exist: ONE NOT RENDERED line, no traceback",
               p.returncode == 1 and len(lines) == 1 and lines[0].startswith("NOT RENDERED: cannot write")
               and "Traceback" not in p.stderr, f"rc={p.returncode} {lines!r} {p.stderr[-200:]!r}")
+
+        session_checks(tmp)
 
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

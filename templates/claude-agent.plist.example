@@ -26,23 +26,32 @@
   exists only while the agents user is logged in at the console, so a Mac host
   runs with automatic login for that user: that is what brings the agents back
   after a reboot, as lingering does on Linux. adding-an-agent section 5 step 6
-  renders both forms.
+  renders both forms, through the renderer below.
 
-  Placeholders: the same as the systemd template's, filled the same way, plus
-  <launchd-prefix> (host.json launchd_prefix, default com.agent-fleet). A
-  placeholder is an XML tag to the parser, so a file with one left in does not
-  load (launchctl bootstrap and plutil -lint both refuse it): fill every one,
-  then `plutil -lint` the result. Values are XML text: write an ampersand as
-  &amp; and a less-than sign as &lt;. No double hyphen may appear in this
-  comment: XML ends a comment there.
+  Placeholders: the systemd template's, plus <launchd-prefix> (host.json
+  launchd_prefix, default com.agent-fleet), <python> (the interpreter every
+  fleet job runs, agent-daemons.py's job table's python: FLEET_PYTHON, else
+  host.json's python, else launchd's default) and <path> (the job's PATH: the
+  directory of the tmux and of the claude the session runs, then the
+  directory of <python>, then /usr/bin:/bin:/usr/sbin:/sbin). The stall-watchdog
+  skill's installation/render-plist.py, run for the session job as the agents
+  user on the Mac the job runs on, fills every one, and refuses to render when
+  tmux, claude or the interpreter is not on that user's PATH or does not run
+  under the PATH it would write: <path> is a fact about that Mac, and a PATH
+  without claude is a session that never starts. Render with it rather than by
+  hand. A placeholder is an XML tag to the parser, so a file with one left in
+  does not load (launchctl bootstrap and plutil -lint both refuse it):
+  `plutil -lint` the result. The renderer writes values as XML text. No double
+  hyphen may appear in this comment: XML ends a comment there.
 
   launchd has no forking service type, no ExecStartPre/ExecStartPost, no
   RuntimeDirectory and no EnvironmentFile, so the job runs the fleet's session
   supervisor, systemd/agent-session.py, in the foreground. It does each of those
   lines' work (its header maps them one to one): creates the socket directory
   TMUX_TMPDIR names, waits the pre-sleep before a NEW session, starts the same
-  tmux command the systemd unit starts (bash -lc, so claude is found on the
-  login PATH), waits for the ready status bar and types the boot message once,
+  tmux command the systemd unit starts (bash -lc, with this job's PATH put in
+  front of the login PATH, where claude is found), waits for the ready status
+  bar and types the boot message once,
   adopts a session that is already running without retyping it, exits 1 when
   the session ends and kills the session on SIGTERM. Its log is
   <agents-root>/<agent-name>/state/session.log (BOOT MESSAGE NOT SENT lands
@@ -69,8 +78,8 @@
   KeepAlive SuccessfulExit=false relaunches every exit but 0, after
   ThrottleInterval: the supervisor exits 1 when the session ends (somebody
   typing /exit into an attached pane included) and 0 only when stopped. PATH
-  reaches tmux (Homebrew) and Homebrew's python3, which the fleet's floor needs
-  (/usr/bin/python3 is older); launchd's own PATH has neither.
+  reaches tmux, claude and <python>, which the fleet's floor needs
+  (/usr/bin/python3 is older); launchd's own PATH reaches none of them on a Mac.
   PYTHONDONTWRITEBYTECODE=1 holds for the whole session: the fleet checkout is
   the administrator's and read-only to the agents, so no Python the session runs
   may write a __pycache__ into it.
@@ -88,14 +97,14 @@
   <!--system: <key>UserName</key><string><agents-user></string> -->
   <key>ProgramArguments</key>
   <array>
-    <string>/opt/homebrew/bin/python3</string>
+    <string><python></string>
     <string><fleet>/systemd/agent-session.py</string>
     <string>--agent</string>
     <string><agent-name></string>
     <string>--env-file</string>
     <string><agents-root>/<agent-name>/secrets/personal/claude-auth.env</string>
     <string>--boot</string>
-    <string>You are <Agent-Name>, started by your service; if you had an earlier conversation, it was resumed. On this first turn, before anything else, load the agent skill and read your charter, then arm your two log followers. Your scheduler and chat watcher run as the always-on launchd jobs <launchd-prefix>.sched.<agent-name> and <launchd-prefix>.<watch-job>.<agent-name> - do not start them yourself. Arm each under a persistent Monitor and re-arm it whenever its Monitor ends: /opt/homebrew/bin/python3 <fleet>/systemd/agent-daemons.py follow <agent-name> sched 2&gt;&amp;1 ; and /opt/homebrew/bin/python3 <fleet>/systemd/agent-daemons.py follow <agent-name> <watch-job> 2&gt;&amp;1 . Verify both with /opt/homebrew/bin/python3 <fleet>/systemd/agent-daemons.py status <agent-name> - an unread scheduler looks exactly like a day with nothing due. Then carry on with the duties your charter names.</string>
+    <string>You are <Agent-Name>, started by your service; if you had an earlier conversation, it was resumed. On this first turn, before anything else, load the agent skill and read your charter, then arm your two log followers. Your scheduler and chat watcher run as the always-on launchd jobs <launchd-prefix>.sched.<agent-name> and <launchd-prefix>.<watch-job>.<agent-name> - do not start them yourself. Arm each under a persistent Monitor and re-arm it whenever its Monitor ends: <python> <fleet>/systemd/agent-daemons.py follow <agent-name> sched 2&gt;&amp;1 ; and <python> <fleet>/systemd/agent-daemons.py follow <agent-name> <watch-job> 2&gt;&amp;1 . Verify both with <python> <fleet>/systemd/agent-daemons.py status <agent-name> - an unread scheduler looks exactly like a day with nothing due. Then carry on with the duties your charter names.</string>
   </array>
   <key>WorkingDirectory</key>
   <string><agents-root>/<agent-name>/<project-dir></string>
@@ -112,7 +121,7 @@
     <key>TMUX_TMPDIR</key>
     <string><agents-root>/run/claude-tmux-<agent-name></string>
     <key>PATH</key>
-    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <string><path></string>
     <key>PYTHONDONTWRITEBYTECODE</key>
     <string>1</string>
   </dict>

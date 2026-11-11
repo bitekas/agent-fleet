@@ -35,8 +35,10 @@ administrator's and read-only to the agents. TMUX_TMPDIR (required, absolute) is
 session's socket directory,
 <agents_root>/run/claude-tmux-<agent> by the fleet's convention; it comes from the
 plist's EnvironmentVariables, where bin/claude-attach, the stall watchdog and
-agent-revive read the same value. PATH must reach tmux (/opt/homebrew/bin on Apple
-Silicon); `claude` is found by the session's LOGIN shell, not by this PATH.
+agent-revive read the same value. PATH must reach tmux; the session's login shell
+puts it in front of its own PATH, where `claude` is found. The plist's PATH is
+rendered from where tmux, claude and the interpreter are
+(stall-watchdog's installation/render-plist.py --job session).
 
 Output: one timestamped line per event on stdout, which the plist points at
 <home>/state/session.log.

@@ -27,7 +27,14 @@ H. The session job (`agent-plist`, from templates/claude-agent.plist.example).
    login allowed (the no-admin form signs in like a Linux agent). In both forms
    the block renders into the agent's config directory and nothing is in
    ~/Library/LaunchAgents until that command runs: launchd loads every plist
-   there at the next login, a refused one included.
+   there at the next login, a refused one included. The job runs the fleet's
+   interpreter (FLEET_PYTHON), which its boot message's three follower commands
+   name too, nothing in it names /opt/homebrew, and its PATH is the block's tmux
+   and claude directory, the interpreter's, then the system directories: under
+   that PATH a bare tmux and a bare claude are the block's own stand-ins. Without
+   claude, or without tmux, on the block's PATH the block prints ONE `NOT
+   RENDERED` line naming it, no command, and writes no plist: a session whose
+   PATH reaches no claude never starts.
 I. The watchdog job (`watchdog-plist`). System form: ONE root command that
    installs the staged config to /etc/agent-fleet/stall-watchdog/<agent>.json
    (root's) and the rendered LaunchDaemon, and bootstraps it; the rendered job
@@ -47,7 +54,7 @@ I. The watchdog job (`watchdog-plist`). System form: ONE root command that
 THE CONTROLS - each runs a block with ONE fault planted and must be seen red,
 or the run is NO VERDICT (exit 3):
   K1 the template's system: marker misspelled        -> NOT RENDERED, no root command
-  K2 a placeholder planted in the session template    -> NOT RENDERED (does not lint)
+  K2 a placeholder planted in the session template    -> NOT RENDERED (does not parse)
   K3 an agents root whose socket path macOS cannot bind -> NOT RENDERED
   K4 the system form's login refusal disarmed in the block -> the refusal check
   K5 a placeholder planted in the watchdog example     -> NOT RENDERED, no root command
@@ -118,24 +125,33 @@ def fleet_python(tmp):
     return path
 
 
-def no_tmux_bin(base):
-    """A bin directory holding the commands the watchdog-plist block runs and NO tmux:
-    each a wrapper exec'ing the real one, plutil the stand-in where there is none."""
-    d = os.path.join(base, "bin-no-tmux")
+FAKE_CLAUDE = '#!/bin/sh\necho "9.9.9 (Claude Code stand-in)"\n'
+
+
+def bin_without(base, missing):
+    """A bin directory holding the commands the plist blocks run but NOT `missing`
+    (tmux or claude): each a wrapper exec'ing the real one, plutil the stand-in where
+    there is none, tmux and claude the stand-ins. Nothing else is on the block's PATH."""
+    d = os.path.join(base, "bin-no-" + missing)
     os.makedirs(d, exist_ok=True)
     for tool, target in (("bash", shutil.which("bash")), ("python3", sys.executable), ("id", shutil.which("id")),
                          ("install", shutil.which("install")), ("sed", shutil.which("sed")),
-                         ("plutil", shutil.which("plutil"))):
+                         ("touch", shutil.which("touch")), ("plutil", shutil.which("plutil"))):
         with open(os.path.join(d, tool), "w") as f:
             if target:
                 f.write(f'#!/bin/sh\nexec "{target}" "$@"\n')
             else:
                 f.write(FAKE_PLUTIL.replace("PYTHON", sys.executable))
         os.chmod(os.path.join(d, tool), 0o755)
+    for tool, body in (("tmux", 'echo "tmux 9.9-stand-in"\n'), ("claude", FAKE_CLAUDE.split("\n", 1)[1])):
+        if tool != missing:
+            with open(os.path.join(d, tool), "w") as f:
+                f.write("#!/bin/sh\n" + body)
+            os.chmod(os.path.join(d, tool), 0o755)
     return d
 
 
-def run(info, fleet, tmp, name, form, auth="token", root_name="agents", edit=None, tmux=True):
+def run(info, fleet, tmp, name, form, auth="token", root_name="agents", edit=None, missing=None):
     sysdir = os.path.join(tmp, "w-" + name, "LaunchDaemons")
     env = {"FLEET_SERVICE_BACKEND": "launchd", "FLEET_LAUNCHD_SYSTEM_DIR": sysdir,
            "FLEET_HOST_CONFIG": os.path.join(FLEET, "tests", "fixtures", "host.json"),
@@ -146,8 +162,12 @@ def run(info, fleet, tmp, name, form, auth="token", root_name="agents", edit=Non
         with open(os.path.join(base, "bin", "plutil"), "w") as f:
             f.write(FAKE_PLUTIL.replace("PYTHON", sys.executable))
         os.chmod(os.path.join(base, "bin", "plutil"), 0o755)
-    if not tmux:
-        env["PATH"] = no_tmux_bin(base)
+    # The world's bin holds units.test.py's tmux stand-in; the session job needs a claude too.
+    with open(os.path.join(base, "bin", "claude"), "w") as f:
+        f.write(FAKE_CLAUDE)
+    os.chmod(os.path.join(base, "bin", "claude"), 0o755)
+    if missing:
+        env["PATH"] = bin_without(base, missing)
     p, base, home, agents = U.run_block(info, fleet, tmp, name, auth=auth, form=form, root_name=root_name,
                                         edit=edit, env_extra=env)
     return p, base, home, agents, sysdir
@@ -201,6 +221,22 @@ def session_findings(p, home, agents, sysdir, form, auth="token"):
     if env.get("FLEET_AGENT_AUTH") != auth or env.get("PYTHONDONTWRITEBYTECODE") != "1":
         out.append(f"FLEET_AGENT_AUTH={env.get('FLEET_AGENT_AUTH')!r}, PYTHONDONTWRITEBYTECODE="
                    f"{env.get('PYTHONDONTWRITEBYTECODE')!r}")
+    boot = argv[argv.index("--boot") + 1] if "--boot" in argv else ""
+    if argv[:1] != [INTERP] or boot.count(f"{INTERP} ") != 3:
+        out.append(f"the job runs {argv[:1]} and its boot message names the interpreter "
+                   f"{boot.count(f'{INTERP} ')} time(s), not the fleet's {INTERP} (FLEET_PYTHON) for the job and "
+                   f"its three follower commands")
+    if "/opt/homebrew" in open(rendered, encoding="utf-8").read():
+        out.append("the rendered session job names /opt/homebrew")
+    block_bin = os.path.join(os.path.dirname(agents), "bin")
+    want_path = ":".join(dict.fromkeys([block_bin, os.path.dirname(INTERP), *SYSTEM_PATH]))
+    if env.get("PATH") != want_path:
+        out.append(f"the job's PATH is {env.get('PATH')!r}, not {want_path!r}")
+    for cmd in ("tmux", "claude"):
+        reached = shutil.which(cmd, path=env.get("PATH", ""))
+        if reached != os.path.join(block_bin, cmd):
+            out.append(f"under the job's PATH a bare {cmd} is {reached!r}, not the block's own "
+                       f"{os.path.join(block_bin, cmd)}")
     run_dir = os.path.join(agents, "run")
     if not os.path.isdir(run_dir) or stat.S_IMODE(os.stat(run_dir).st_mode) != 0o755:
         out.append(f"{run_dir} is not a directory of mode 755 before the start")
@@ -255,18 +291,18 @@ def watchdog_findings(p, home, agents, sysdir, form):
     return out
 
 
-def no_tmux_findings(p, agents):
-    label = f"{PREFIX}.stall-watchdog.{AGENT}"
+def no_command_findings(p, agents, job="stall-watchdog", cmd="tmux"):
+    label = f"{PREFIX}.{job}.{AGENT}"
     rendered = os.path.join(agents, AGENT, "config", f"{label}.plist")
     lines = [ln for ln in p.stdout.splitlines() if ln.strip()]
     out = []
-    if p.returncode != 1 or len(lines) != 1 or not lines[0].startswith("NOT RENDERED: no tmux on PATH"):
-        out.append(f"with no tmux on its PATH the block exited {p.returncode} and printed {lines[:3]}, "
-                   f"not ONE 'NOT RENDERED: no tmux on PATH' line")
+    if p.returncode != 1 or len(lines) != 1 or not lines[0].startswith(f"NOT RENDERED: no {cmd} on PATH"):
+        out.append(f"with no {cmd} on its PATH the block exited {p.returncode} and printed {lines[:3]}, "
+                   f"not ONE 'NOT RENDERED: no {cmd} on PATH' line")
     if any("launchctl" in ln for ln in lines):
-        out.append(f"with no tmux on its PATH the block printed a command: {lines[:3]}")
+        out.append(f"with no {cmd} on its PATH the block printed a command: {lines[:3]}")
     if os.path.exists(rendered):
-        out.append(f"with no tmux on its PATH the block wrote {rendered}")
+        out.append(f"with no {cmd} on its PATH the block wrote {rendered}")
     return out
 
 
@@ -289,7 +325,16 @@ def main():
             U.check(not found, f"H {form} form, {auth}: " + (
                 "REFUSED, nothing rendered" if (form, auth) == ("system", "login") else
                 "a LaunchDaemon running as the agents user, ONE root command" if form == "system" else
-                "a LaunchAgent, no UserName, the agents user's own command"))
+                "a LaunchAgent, no UserName, the agents user's own command")
+                + ("" if (form, auth) == ("system", "login") else
+                   ", the fleet's interpreter, a PATH that reaches the block's tmux and claude"))
+        for cmd in ("claude", "tmux"):
+            p, base, home, agents, sysdir = run("agent-plist", FLEET, tmp, f"s-no-{cmd}", "system", missing=cmd)
+            found = no_command_findings(p, agents, "session", cmd)
+            for f in found:
+                U.check(False, f"H no {cmd}: {f}")
+            U.check(not found, f"H system form, no {cmd} on the block's PATH: NOT RENDERED naming {cmd}, "
+                               f"no command, no plist")
         print("I. the watchdog job, from the watchdog-plist block")
         for form in ("system", "user"):
             p, base, home, agents, sysdir = run("watchdog-plist", FLEET, tmp, f"w-{form}", form)
@@ -299,8 +344,8 @@ def main():
             U.check(not found, f"I {form} form: " + ("ONE root command, root's config, a LaunchDaemon as the agents user"
                                                      if form == "system" else "the agents user's own commands, a LaunchAgent")
                     + ", the fleet's interpreter, a PATH that reaches the block's tmux")
-        p, base, home, agents, sysdir = run("watchdog-plist", FLEET, tmp, "w-no-tmux", "system", tmux=False)
-        found = no_tmux_findings(p, agents)
+        p, base, home, agents, sysdir = run("watchdog-plist", FLEET, tmp, "w-no-tmux", "system", missing="tmux")
+        found = no_command_findings(p, agents)
         for f in found:
             U.check(False, f"I no tmux: {f}")
         U.check(not found, "I system form, no tmux on the block's PATH: NOT RENDERED naming tmux, no command, "
@@ -308,10 +353,10 @@ def main():
         print("K. controls - each must be seen red, or there is no verdict")
         controls = [
             ("K1", "agent-plist", "system", "token", dict(mutate=(SESSION_TEMPLATE, "<!--system: ", "<!--sytem: ")),
-             "names '"),
+             "lost its UserName"),
             ("K2", "agent-plist", "user", "token", dict(mutate=(SESSION_TEMPLATE, "<key>RunAtLoad</key>",
                                                                 "<zz-planted/><zz-left><key>RunAtLoad</key>")),
-             "does not lint"),
+             "does not parse"),
             ("K3", "agent-plist", "user", "token", dict(root_name="a" * 60), "socket"),
             ("K4", "agent-plist", "system", "login",
              dict(edit=('[ "$auth" != login ] || {', '[ "$auth" = "$auth" ] || {')), "not REFUSED"),

@@ -593,11 +593,13 @@ carries outside its `_comment` keys, one line per skill.
       `<agents-user>`, `<auth-mode>`
 
 **On macOS, each agent's session job**, from `templates/claude-agent.plist.example`,
-by `/adding-an-agent` section 5 step 6:
+by `/adding-an-agent` section 5 step 6, through the stall-watchdog skill's
+`installation/render-plist.py --job session`:
 
 - [ ] `<launchd-prefix>`, `<agent-name>`, `<Agent-Name>`, `<agents-root>`,
       `<fleet>`, `<project-dir>`, `<watch-job>`, `<watch-config-env>`,
-      `<auth-mode>`, and in the system form `<agents-user>`
+      `<auth-mode>`, `<python>`, `<path>`, which the renderer derives from where
+      tmux, `claude` and `<python>` are, and in the system form `<agents-user>`
 - [ ] `<uid>` stays: it is only in the opening comment, which the step does
       not fill
 
