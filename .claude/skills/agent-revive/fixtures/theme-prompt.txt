@@ -1,0 +1,10 @@
+ Let's get started.
+
+ Choose the text style that looks best with your terminal:
+
+   Light mode
+   Light mode (colorblind-friendly)
+   Dark mode
+ ❯ Dark mode (colorblind-friendly)
+
+ To change this later, run /theme

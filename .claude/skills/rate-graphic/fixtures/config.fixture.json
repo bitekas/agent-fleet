@@ -1,0 +1,17 @@
+{
+  "_comment": [
+    "Base config for rate.test.mjs. Every case copies this, mutates one thing,",
+    "and writes it into a temp directory; the suite rewrites ratings_log.path",
+    "and credentials.service_account_key_path to temp paths before use.",
+    "",
+    "It must never resolve to the real ratings log or a real credential. The",
+    "secret name and project are obviously-fake on purpose: no case in the",
+    "suite reaches a network call, and if one ever did, these values would fail",
+    "against any real secret store rather than succeeding quietly against a",
+    "real one."
+  ],
+  "ratings_log": { "path": "REWRITTEN-BY-THE-SUITE/ratings.jsonl" },
+  "credentials": { "service_account_key_path": "REWRITTEN-BY-THE-SUITE/*.json" },
+  "secret": { "name": "EXAMPLE_API_KEY", "project": "acme-example-project" },
+  "api": { "base": "https://generativelanguage.googleapis.com/v1beta" }
+}

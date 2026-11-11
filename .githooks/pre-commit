@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# pre-commit - the content half of the commit gate: the leak check over the
+# staged change (paths, blobs, binary strings, symlink targets; gitleaks over
+# the staged blobs). Refuses the commit on a finding (exit 1) or an instrument
+# fault (exit 3, which includes a fleet host whose deny list cannot be read).
+#
+# Enable once per clone: git config core.hooksPath .githooks
+# Paths resolve from the work tree's top level, so the hook runs the scripts of
+# the worktree being committed to, from any worktree of the repository.
+set -euo pipefail
+top="$(git rev-parse --show-toplevel)"
+exec python3 "$top/tools/leak-gate/leak_gate.py" --staged

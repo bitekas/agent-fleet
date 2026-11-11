@@ -1,0 +1,54 @@
+● Update(web/planner.css)
+  ⎿   Updated web/planner.css with 2 additions and 1 removal
+       38    .board {
+       39 -    overflow: hidden;
+       39 +    overflow-y: auto;
+       40 +    max-height: 100vh;
+       41    }
+
+● The planner board scrolls again - reload the page and the mouse wheel moves it as expected.
+
+  Cause: the board container clipped its overflow instead of scrolling it, harmless until the list grew past the
+  fold. The browser tests missed it because they scroll every target into view by script; a new test now drives
+  real wheel-scrolling. A smaller sibling exists on the settings page (its last row sits under the footer on short
+  windows); it goes to Grace as a note, not bundled here.
+
+  Still waiting on your answer to question 2 (the column order).
+
+✻ Waiting for 2 background agents to finish
+
+› Message from @reviewer (ctrl+o to expand)
+  ⎿   Message queued for delivery to a0example0000001 at its next tool round.
+
+● The review round is still running; nothing needs me. Waiting on your answer to question 2.
+
+✻ Waiting for 2 background agents to finish
+
+● Monitor event: "ada scheduled-tasks daemon (SCHED due / SCHED alert lines)"
+
+● Monitor(ada scheduled-tasks daemon (SCHED due / SCHED alert lines))
+  ⎿   Monitor started · task bg0example01 · timeout 1800s
+
+  Ran 1 shell command
+
+● Monitor re-armed. Nothing new on main. Waiting on your answer to question 2.
+
+✻ Waiting for 2 background agents to finish
+
+› Message from @reviewer (ctrl+o to expand)
+  ⎿   Message queued for delivery to a0example0000001 at its next tool round.
+
+  Read 1 file
+
+● The review is done and its notes are in the planner's docs folder. Waiting on your answer to question 2.
+
+✻ Waiting for 1 background agent to finish
+                                                                                ✔ Update installed · Restart to update
+────────────────────────────────────────────────────────────────────────────────────────────────── acme-corp-agent-ada ─
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on · 1 monitor · ← for agents · ↓ to manage
+
+  ● main
+  ◯ reviewer      Reading the settings page styles                                        2h 05m 13s · ↓ 120.4k tokens
+  ⧉  docs-sweep · notes-tidy

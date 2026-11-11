@@ -1,0 +1,323 @@
+#!/usr/bin/env bash
+# Is agent-revive installed on THIS host, and is it current?
+#
+#   check [config path]        # else $AGENT_REVIVE_CONFIG, else the install context's
+#                              # (`fleet where agent-revive config.json`)
+#   check --online [config]    # same, plus INSTALL the sign-in driver's deps
+#
+# Prints ONE line per leg and a final verdict, then exits:
+#   0  installed, current        -> proceed
+#   1  installed but stale, OR a leg this script could not measure -> do not proceed
+#   2  not installed             -> follow INSTRUCTION.md
+#
+# It verifies REAL ARTIFACTS, not a marker file: tmux and jq run, and config.json
+# parses and carries the required fleet keys. It reports the HOST it is on:
+# .install-state.json is committed and travels to machines that never ran the
+# install, so without the host key each of them would read "installed and current".
+# config.json and .install-state.json are the INSTALL's files and are read from the
+# install context `fleet where` resolves (this fleet tree's bin/fleet, or $FLEET_BIN);
+# the sibling skills this one runs - agent-health's pool picker, google-spreadsheet's
+# minter - are reached through the fleet root this file resolves to, links followed.
+#
+# ⚠️ TWO LEGS ARE DELIBERATELY UNMEASURABLE HERE, AND EACH REPORTS 1 IN WORDS, NOT 0:
+#   - The account pool's CONTENTS are not read: the file holds every account's
+#     password and this script prints what it finds. Its presence and mode are
+#     stat-ed (a mode wider than 600 fails); whether an entry actually signs in
+#     is measured at the sign-in.
+#   - Whether a given agent can actually be signed back in. The automated route
+#     drives a live Google sign-in and the fallback drives a human; neither can be
+#     rehearsed from here.
+# A green result therefore means the scripted TOOLING is present, NOT that a
+# revival will succeed. If the only thing missing were one of these, the honest
+# verdict is 1 (do not assume success), never 0.
+#
+# ⚠️ THE SIGN-IN DRIVER'S DEPENDENCIES ARE MEASURED IN THE TREE THIS SCRIPT LIVES IN,
+# AND THEY ARE NOT PORTABLE. node_modules/ and browsers/ are gitignored build
+# artefacts, so a fresh clone, and EVERY FRESH WORKTREE, has the source and not the
+# install - and the primary sign-in route (SKILL.md step 6) cannot run without them.
+# That state is reported as 1, never 0: the skill still works through its step-7e
+# human fallback, but "installed and current" would say the primary route is there
+# when it is not, and nothing else on the machine would contradict it. `--online` is
+# the one command that fixes it.
+#
+# PORTABLE BASH: this runs under macOS's /bin/bash 3.2 and BSD userland as well as
+# bash 5 and GNU. So no mapfile, no `stat -c` alone (file_mode tries GNU, then BSD),
+# and the platform decides two legs: on macOS a headful browser draws through the
+# console user's Aqua session (no X display, no xvfb-run), and the tap-to-solve share
+# does not exist (x11vnc shares only an X11 display; SKILL.md step 7e is the human
+# route there), so its legs and its config keys are not asked for.
+set -uo pipefail
+os="$(uname -s)"
+HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+SKILL="$(dirname "$HERE")"
+FLEET_ROOT="$(cd "$SKILL/../../.." && pwd)"
+fleet_bin="${FLEET_BIN:-$FLEET_ROOT/bin/fleet}"
+host="$(hostname)"
+worst=0
+# ⚠️ THE VERDICT LINE NAMES THE LEGS THAT FAILED. `fleet check-all` shows a check's
+# LAST line and nothing else, so a cause that lives only on the leg lines above is a
+# cause the operator never reads. Every `bump` records the leg of the `note` just
+# before it (the text up to its first colon), and the verdict lists them, worst level
+# first. A fixed verdict sentence names one cause for every failure, so it is wrong
+# whenever a different leg failed. So every `bump` follows its own `note "<leg>: ..."`
+# on the same line: a `bump` that does not names whichever leg was noted last, a
+# passing one included. check.test.py pins the pairing; the "an unnamed leg"
+# fallback only covers a second `bump` straight after another.
+failed=()
+last_note=""
+note() { echo "  $1"; last_note="$1"; }
+bump() {
+  local leg="${last_note%%:*}"
+  [ "$1" -gt "$worst" ] && worst="$1"
+  failed+=("$1:${leg:-an unnamed leg}")
+  last_note=""
+}
+# A file's permission bits in octal: GNU stat, else BSD stat (macOS), else '?'.
+file_mode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1" 2>/dev/null || echo '?'; }
+legs_at() {  # the legs recorded at level $1, comma-separated, each once
+  local e out=""
+  for e in ${failed[@]+"${failed[@]}"}; do
+    [ "${e%%:*}" = "$1" ] || continue
+    case ", $out, " in *", ${e#*:}, "*) ;; *) out="${out:+$out, }${e#*:}" ;; esac
+  done
+  printf '%s' "$out"
+}
+
+online=0
+args=()
+for a in "$@"; do
+  case "$a" in
+    --online) online=1 ;;
+    *) args+=("$a") ;;
+  esac
+done
+config="${args[0]:-${AGENT_REVIVE_CONFIG:-}}"
+if [ -z "$config" ] && ! config="$("$fleet_bin" where agent-revive config.json)"; then
+  echo "NOT INSTALLED: the install context does not resolve ('$fleet_bin where agent-revive config.json' failed); pass the config path or set AGENT_REVIVE_CONFIG"
+  exit 2
+fi
+if [ ! -f "$config" ]; then
+  echo "NOT INSTALLED: no config at $config. Run: \`install -m 644 $SKILL/config.example.json $config\`, then fill it in (INSTRUCTION.md step 1)"
+  exit 2
+fi
+STATE="$("$fleet_bin" where agent-revive installation/.install-state.json 2>/dev/null)" || STATE=""
+
+# --- tmux + jq (real artifacts) ---
+if command -v tmux >/dev/null 2>&1; then note "tmux: $(tmux -V)"; else note "tmux: MISSING (the reviver drives agent sessions over tmux)"; bump 2; fi
+if command -v jq   >/dev/null 2>&1; then note "jq:   $(jq --version)"; else note "jq: MISSING (tmux_triage.sh needs it)"; bump 2; fi
+
+# --- config parses and carries the required fleet keys (real artifact) ---
+if ! jq -e . "$config" >/dev/null 2>&1; then
+  note "config: $config does not parse as JSON"; bump 2
+else
+  missing="$(jq -r --arg os "$os" '[
+      (if .fleet.agents_home then empty else "fleet.agents_home" end),
+      (if .fleet.tmux.target then empty else "fleet.tmux.target" end),
+      (if .fleet.tmux.tmpdir then empty else "fleet.tmux.tmpdir" end),
+      (if .fleet.systemd_unit then empty else "fleet.systemd_unit" end),
+      (if .accounts.pool_file then empty else "accounts.pool_file" end),
+      (if .accounts.lease_file then empty else "accounts.lease_file" end),
+      (if .accounts.ledger_file then empty else "accounts.ledger_file" end),
+      (if .accounts.profiles_dir then empty else "accounts.profiles_dir" end),
+      (if $os == "Darwin" then empty else
+        (["vnc_port","web_port","funnel_port","novnc_dir","page","minutes","tailscale"][] as $k
+         | if .share[$k] then empty else "share.\($k)" end) end)
+    ] | join(", ")' "$config")"
+  if [ -n "$missing" ]; then note "config: missing required keys: $missing"; bump 2; else note "config: $config parses and has every required fleet key"; fi
+fi
+
+# --- version compare, host-keyed ---
+want="$(grep -m1 -E '^version:' "$SKILL/SKILL.md" | sed -E 's/version:[[:space:]]*([0-9]+).*/\1/')"
+if [ -z "$STATE" ]; then
+  note "install-state: the install context does not resolve, so no .install-state.json can be read (SKILL.md declares ${want:-?})"; bump 1
+elif [ ! -f "$STATE" ]; then
+  note "install-state: absent - nothing records which version is installed (SKILL.md declares ${want:-?})"; bump 1
+else
+  have="$(jq -r --arg h "$host" '.hosts[$h].version // empty' "$STATE" 2>/dev/null)"
+  if [ -z "$have" ]; then
+    note "install-state: nothing recorded for host '$host' (the file is committed and travels to machines that never ran the install); re-run INSTRUCTION.md step 3"; bump 1
+  elif [ "$have" -lt "${want:-0}" ]; then
+    note "install-state: version $have installed, SKILL.md declares $want - STALE; re-run INSTRUCTION.md"; bump 1
+  elif [ "$have" -gt "${want:-0}" ]; then
+    note "install-state: version $have is NEWER than SKILL.md's $want - the fleet tree is older than the install it recorded; upgrade the fleet"; bump 1
+  else
+    note "install-state: version $have on '$host' - current"
+  fi
+fi
+
+# --- the sign-in driver (SKILL.md step 6, the PRIMARY route) ---
+# ⚠️ EVERY LEG HERE IS MEASURED BY RUNNING OR STAT-ING A REAL ARTEFACT IN THIS TREE.
+# `node --version` is not a proxy for "the driver can run": the modules resolve from
+# the driver's OWN directory and the browser from its OWN browsers/ dir, so a host
+# with node on PATH and neither of those installed is a host where step 6 fails at
+# its first command - after the operator has already typed /login into a live agent's
+# pane and blocked it on a sign-in only a code can finish.
+DRV="$SKILL/signin_driver"
+if [ ! -d "$DRV" ]; then
+  note "sign-in driver: MISSING at $DRV - the skill tree is incomplete"; bump 2
+else
+  if command -v node >/dev/null 2>&1; then note "node: $(node --version)"; else note "node: MISSING (the sign-in driver is a node process)"; bump 1; fi
+  # Headful is a REQUIREMENT, not a preference: Google rejects a headless browser at
+  # the identifier step. On a Linux host with no X session a virtual display is what
+  # satisfies it, so xvfb-run is load-bearing there and irrelevant where DISPLAY is set.
+  # On macOS the browser draws through WindowServer, which exists for a user only
+  # while that user has a console (Aqua) session: launchd's gui/<uid> domain. A Mac
+  # whose agents' user is not logged in (automatic login off) has none.
+  if [ "$os" = Darwin ]; then
+    if "${FLEET_LAUNCHCTL:-/bin/launchctl}" print "gui/$(id -u)" >/dev/null 2>&1; then
+      note "display: the Aqua session gui/$(id -u) exists - the browser runs headful through WindowServer"
+    else note "display: no Aqua session gui/$(id -u) - a headful browser cannot start until this user is logged in at the console (turn on automatic login)"; bump 1; fi
+  elif [ -n "${DISPLAY:-}" ]; then note "display: DISPLAY=$DISPLAY is set - the browser runs headful directly"
+  elif command -v xvfb-run >/dev/null 2>&1; then note "xvfb-run: $(command -v xvfb-run) (no DISPLAY, so the headful browser runs under a virtual one)"
+  else note "display: no DISPLAY and no xvfb-run - a headful browser cannot start, and headless is rejected by Google at the identifier step"; bump 1; fi
+
+  if [ "$online" = 1 ]; then
+    note "--online: installing the driver's dependencies (npm ci, then the browser)"
+    ( cd "$DRV" && npm ci --no-audit --no-fund >/dev/null 2>&1 ) || note "  npm ci FAILED - run it by hand in $DRV to see why"
+    ( cd "$DRV" && PLAYWRIGHT_BROWSERS_PATH="$DRV/browsers" npx --yes playwright install chromium >/dev/null 2>&1 ) || note "  playwright install chromium FAILED - run it by hand in $DRV to see why"
+  fi
+
+  if [ -d "$DRV/node_modules/playwright-extra" ] && [ -d "$DRV/node_modules/puppeteer-extra-plugin-stealth" ]; then
+    note "driver deps: playwright-extra and the stealth plugin are installed in $DRV"
+  else
+    note "driver deps: NOT INSTALLED in $DRV - run 'installation/check --online' (or 'npm ci' there). Until then SKILL.md step 6 cannot run and a revival falls back to the step-7e human route."; bump 1
+  fi
+  if ls "$DRV/browsers"/chromium-*/chrome-linux*/chrome >/dev/null 2>&1 || ls "$DRV/browsers"/chromium-*/chrome-mac*/*.app >/dev/null 2>&1; then
+    note "driver browser: a chromium build is present under $DRV/browsers"
+  else
+    note "driver browser: NO chromium under $DRV/browsers - run 'installation/check --online'. Until then SKILL.md step 6 cannot run."; bump 1
+  fi
+  # ⚠️ THE REDACTION TEST IS RUN, NOT ASSUMED. It is the only thing standing between
+  # an agent's Google password and a transcript, it needs no install of its own, and
+  # it exits 3 NO VERDICT when its own controls misbehave - which must never be read
+  # as a pass, here or anywhere else.
+  if command -v node >/dev/null 2>&1; then
+    rt_out="$(cd "$DRV" && node redaction.test.mjs 2>&1)"; rt=$?
+    case "$rt" in
+      0) note "redaction test: PASS ($(grep -c '^ok ' <<<"$rt_out") assertions)" ;;
+      3) note "redaction test: NO VERDICT - a control misbehaved, so the secret-handling guard is not established. This is NOT a pass."; bump 1 ;;
+      *) note "redaction test: FAILED - a password or an OAuth code can reach an output path. Do not run step 6."; bump 2 ;;
+    esac
+  fi
+fi
+
+# --- the tap-to-solve share (SKILL.md step 7): x11vnc, websockify, noVNC, the Funnel ---
+# ⚠️ EACH LEG RUNS THE ARTEFACT. x11vnc and websockify are executed, noVNC's page is
+# read, and tailscale is asked through the SAME command the share uses
+# (share.tailscale), so a missing `sudo -n` grant shows up here and not in front of a
+# person waiting on a link. Whether the tailnet lets THIS node funnel THIS port is
+# read from the node's own capability map (Self.CapMap: `funnel`, and the
+# funnel-ports list). A missing leg is 1, never 2: the human step still has its
+# fallback, the incognito link with a login and a password (step 7e).
+share_fallback="the share cannot run; the human step falls back to SKILL.md step 7e, the incognito route"
+if [ "$os" = Darwin ]; then
+  # Not a failed leg: the share does not exist on macOS, by design, so nothing is
+  # missing and nothing is bumped. A bump here would hold every Mac at STALE forever.
+  note "share: not on macOS (x11vnc shares only an X11 display) - the human step is SKILL.md step 7e, the incognito route"
+else
+if x11vnc -version >/dev/null 2>&1; then note "x11vnc: $(x11vnc -version 2>&1 | head -1)"; else note "x11vnc: MISSING or does not run - $share_fallback"; bump 1; fi
+if websockify --help >/dev/null 2>&1; then note "websockify: runs ($(command -v websockify))"; else note "websockify: MISSING or does not run - $share_fallback"; bump 1; fi
+novnc="$(jq -r '.share.novnc_dir // empty' "$config")"
+if [ -n "$novnc" ] && head -c1 "$novnc/vnc.html" >/dev/null 2>&1; then note "noVNC: $novnc/vnc.html reads"
+else note "noVNC: ${novnc:-share.novnc_dir unset}/vnc.html does not read - $share_fallback"; bump 1; fi
+ts_cmd=()
+while IFS= read -r a; do ts_cmd+=("$a"); done < <(jq -r '.share.tailscale // [] | .[]' "$config")
+fport="$(jq -r '.share.funnel_port // empty' "$config")"
+if [ "${#ts_cmd[@]}" -eq 0 ]; then
+  : # reported above as a missing required key
+elif ! ts_json="$("${ts_cmd[@]}" status --json 2>/dev/null)"; then
+  note "tailscale: '${ts_cmd[*]} status --json' failed - $share_fallback"; bump 1
+else
+  ts_name="$(jq -r '.Self.DNSName // empty' <<<"$ts_json" | sed 's/\.$//')"
+  ts_caps="$(jq -r '.Self.CapMap // {} | keys[]' <<<"$ts_json")"
+  # No `| grep -q` here: under pipefail its early exit can SIGPIPE the writer and
+  # read as a miss. The port list is captured first, then matched whole.
+  ts_ports="$(sed -n 's|.*/funnel-ports?ports=||p' <<<"$ts_caps")"
+  if ! grep -qx 'funnel' <<<"$ts_caps"; then note "tailscale: this node ($ts_name) has no funnel capability - the tailnet policy must grant it; $share_fallback"; bump 1
+  else
+    case ",$ts_ports," in
+      *",$fport,"*) note "tailscale: $ts_name may funnel port $fport, reached through '${ts_cmd[*]}'" ;;
+      *) note "tailscale: the funnel may not serve port $fport (share.funnel_port) on $ts_name - it allows ports ${ts_ports:-none}; $share_fallback"; bump 1 ;;
+    esac
+  fi
+fi
+fi  # not Darwin
+
+# --- the recovery-email challenge route (SKILL.md step 6b): python3 + the minter ---
+# read_recovery_code.py imports the google-spreadsheet skill's gsheets.py to mint the
+# delegated token, and that helper signs with PyJWT's cryptography extra. Without
+# either, a "Verify it's you" challenge mid-sign-in is unanswerable and the revival
+# falls back to a human who cannot see the code either.
+helper="$FLEET_ROOT/.claude/skills/google-spreadsheet/gsheets.py"
+if [ -z "$(jq -r '.recovery.mailbox // empty' "$config")" ]; then
+  note "recovery: config.json has no recovery.mailbox - the 'Verify it's you' challenge route (step 6b) is unconfigured"; bump 1
+else
+  if [ ! -f "$helper" ]; then note "recovery: the minter is not in the fleet tree at $helper (the google-spreadsheet skill must sit beside this one)"; bump 1
+  elif ! command -v python3 >/dev/null 2>&1; then note "recovery: python3 MISSING (read_recovery_code.py is python3)"; bump 1
+  elif ! python3 -c 'import jwt, cryptography' >/dev/null 2>&1; then note "recovery: PyJWT[crypto] not importable - the minter cannot sign (install the google-spreadsheet skill: its installation/requirements.txt)"; bump 1
+  else note "recovery: python3 $(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:3])))') with PyJWT[crypto]; minter at $helper"; fi
+fi
+
+# --- the account pool (SKILL.md step 5): the picker in the tree, the files outside it ---
+# The files are STAT-ed, never opened: the pool holds every account's password, and
+# this script prints what it finds. The picker is run by `--accounts` with python3.
+cfg_dir="$(cd "$(dirname "$config")" && pwd)"
+pool_path() {
+  local v; v="$(jq -r --arg k "$1" '.accounts[$k] // empty' "$config")"
+  case "$v" in /*) printf '%s' "$v" ;; "~"/*) printf '%s' "$HOME/${v#\~/}" ;; "") ;; *) printf '%s' "$cfg_dir/$v" ;; esac
+}
+picker="$FLEET_ROOT/.claude/skills/agent-health/pool_pick.py"
+if [ ! -f "$picker" ]; then
+  note "pool picker: not in the fleet tree at $picker - --accounts cannot name a next account; the skill tree is incomplete without agent-health beside it"; bump 2
+elif ! command -v python3 >/dev/null 2>&1; then
+  note "pool picker: python3 MISSING (pool_pick.py is python3)"; bump 2
+else
+  note "pool picker: $picker"
+fi
+# The pool file holds every pool account's password, so a group or other permission
+# bit on it FAILS the leg - pool_pick.py refuses a token file the same way - and a
+# mode it cannot read ('?') is not a pass either. 600 or narrower passes.
+for k in pool_file lease_file ledger_file; do
+  f="$(pool_path "$k")"
+  if [ -n "$f" ] && [ -f "$f" ]; then
+    m="$(file_mode "$f")"
+    case "$k:$m" in
+      pool_file:*00) note "accounts.$k: present at $f (mode $m)" ;;
+      pool_file:*) note "accounts.$k: present at $f with mode $m, NOT 600 - it holds every pool account's password, and anyone but its owner may reach it: chmod 600 $f"; bump 1 ;;
+      *) note "accounts.$k: present at $f (mode $m)" ;;
+    esac
+  else
+    note "accounts.$k: ABSENT at ${f:-unset} - the picker refuses to pick without it (exit 2), so no switch target can be named"; bump 1
+  fi
+done
+
+# --- the stored sign-in profiles (SKILL.md, "Stored profiles") ---
+# ⚠️ STAT-ED, NEVER LISTED OR READ. Every profile in there is a live Google and
+# claude.ai session for one pool account, and this script prints what it finds. An
+# ABSENT directory is the normal state of an install that has enrolled nothing yet:
+# the driver creates it, mode 0700, at the first enrollment, so absence costs nothing.
+# A mode other than 700 is said out loud - the cookies inside are protected by the
+# mode and nothing else - and the driver re-sets it at its next start.
+pdir="$(pool_path profiles_dir)"
+if [ -z "$pdir" ]; then
+  : # reported above as a missing required key
+elif [ -d "$pdir" ]; then
+  pmode="$(file_mode "$pdir")"
+  if [ "$pmode" = 700 ]; then note "accounts.profiles_dir: present at $pdir (mode 700)"
+  else note "accounts.profiles_dir: present at $pdir with mode $pmode, NOT 700 - every stored profile in it is a credential; the driver re-sets 0700 at its next start, or chmod 700 it now"; fi
+else
+  note "accounts.profiles_dir: not yet created at $pdir - no account has a stored profile; the driver creates it at the first enrollment"
+fi
+
+# --- the deliberately-unmeasurable legs, reported in words ---
+note "pool contents: NOT READ here - the pool holds every account's password; whether an entry signs in is measured at the sign-in."
+note "recovery mailbox: NOT READ here - whether the delegation grant reaches it is measured at the first challenge (read_recovery_code.py exits 3 when the mint is refused)."
+note "sign-in: neither route can be rehearsed here - step 6 drives a live Google sign-in, step 7 and its fallback 7e drive a human - so a green result means the TOOLING is present, not that a given agent can be revived. Prove that per agent at revival time."
+
+echo ""
+stale="$(legs_at 1)"
+case "$worst" in
+  0) echo "OK: agent-revive tooling installed and current (version $want) on $host"; exit 0 ;;
+  1) echo "STALE / UNVERIFIED: $stale - do not proceed; run this check alone for each leg's reason and fix"; exit 1 ;;
+  2) echo "NOT INSTALLED: $(legs_at 2)${stale:+; also stale: $stale} - run this check alone for each leg's reason; INSTRUCTION.md installs"; exit 2 ;;
+esac

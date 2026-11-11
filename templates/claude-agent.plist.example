@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  TEMPLATE - the launchd job that runs ONE long-running agent on macOS: a Claude
+  Code session inside tmux, resumed across restarts, briefed by a boot message
+  once it is ready. The macOS form of templates/claude-agent.service.example.
+  One plist per agent, in one of two forms, as the systemd template has two:
+
+  - THE SYSTEM FORM, for an install with an administrator: a LaunchDaemon. The
+    line marked system: below is uncommented, so UserName runs the session as
+    the agents user, and the administrator installs the file root:wheel 644 as
+    /Library/LaunchDaemons/<launchd-prefix>.session.<agent-name>.plist and runs
+    `launchctl bootstrap system` on it. The agents user cannot boot it out,
+    disable or edit it. A LaunchDaemon has no window server and no login
+    Keychain, so such an agent signs in ONLY with a token or an API key:
+    adding-an-agent refuses a full login for it, and agent-revive switches it
+    with token_switch.py, never through a browser.
+  - THE USER FORM, for an install with no administrator: a LaunchAgent. The
+    system: line is deleted, the file goes to
+    ~/Library/LaunchAgents/<launchd-prefix>.session.<agent-name>.plist and
+    `launchctl bootstrap gui/$(id -u)` loads it into the agents user's own GUI
+    session, where the user controls it: verify-privileges reports it
+    UNPROTECTED.
+
+  The agents' daemons are LaunchAgents in the gui domain either way, which
+  exists only while the agents user is logged in at the console, so a Mac host
+  runs with automatic login for that user: that is what brings the agents back
+  after a reboot, as lingering does on Linux. adding-an-agent section 5 step 6
+  renders both forms.
+
+  Placeholders: the same as the systemd template's, filled the same way, plus
+  <launchd-prefix> (host.json launchd_prefix, default com.agent-fleet). A
+  placeholder is an XML tag to the parser, so a file with one left in does not
+  load (launchctl bootstrap and plutil -lint both refuse it): fill every one,
+  then `plutil -lint` the result. Values are XML text: write an ampersand as
+  &amp; and a less-than sign as &lt;. No double hyphen may appear in this
+  comment: XML ends a comment there.
+
+  launchd has no forking service type, no ExecStartPre/ExecStartPost, no
+  RuntimeDirectory and no EnvironmentFile, so the job runs the fleet's session
+  supervisor, systemd/agent-session.py, in the foreground. It does each of those
+  lines' work (its header maps them one to one): creates the socket directory
+  TMUX_TMPDIR names, waits the pre-sleep before a NEW session, starts the same
+  tmux command the systemd unit starts (bash -lc, so claude is found on the
+  login PATH), waits for the ready status bar and types the boot message once,
+  adopts a session that is already running without retyping it, exits 1 when
+  the session ends and kills the session on SIGTERM. Its log is
+  <agents-root>/<agent-name>/state/session.log (BOOT MESSAGE NOT SENT lands
+  there). Create the state/ directory before loading the job, as the agent's
+  user: launchd creates a missing log directory itself, but with mode 0744
+  (measured in the user domain) and, in the system form, presumably owned by
+  root (not measured), where the agent writes its own files.
+
+  The credential file is an ARGUMENT (env-file), not an environment variable of
+  this job: the session's login shell sources it, so the token never appears in
+  this file or in `launchctl print`. It is required: a login agent's is empty.
+
+  TMUX_TMPDIR is <agents-root>/run/claude-tmux-<agent-name>: launchd has no
+  runtime directory, so the socket lives under the agents root, where
+  bin/claude-attach, the stall watchdog's config and agent-revive's
+  fleet.tmux.tmpdir name it. The socket path, that directory plus
+  /tmux-<uid>/default, must stay under 104 bytes.
+
+  THE BOOT MESSAGE is typed literally (tmux send-keys -l), so unlike the systemd
+  template's it may carry any character; as XML text, its ampersands and
+  less-than signs are escaped. tmux_triage.sh in agent-revive reads it back from
+  the argument after boot, so a revival re-briefs with these exact words.
+
+  KeepAlive SuccessfulExit=false relaunches every exit but 0, after
+  ThrottleInterval: the supervisor exits 1 when the session ends (somebody
+  typing /exit into an attached pane included) and 0 only when stopped. PATH
+  reaches tmux (Homebrew) and Homebrew's python3, which the fleet's floor needs
+  (/usr/bin/python3 is older); launchd's own PATH has neither.
+  PYTHONDONTWRITEBYTECODE=1 holds for the whole session: the fleet checkout is
+  the administrator's and read-only to the agents, so no Python the session runs
+  may write a __pycache__ into it.
+
+  CHANGING THIS FILE NEVER RESTARTS THE SESSION. The new shape applies when the
+  job is next booted out and bootstrapped, which kills the agent's session and
+  every subagent it is supervising.
+
+  agent-session.test.py fills every placeholder of this file and parses it.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string><launchd-prefix>.session.<agent-name></string>
+  <!--system: <key>UserName</key><string><agents-user></string> -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/python3</string>
+    <string><fleet>/systemd/agent-session.py</string>
+    <string>--agent</string>
+    <string><agent-name></string>
+    <string>--env-file</string>
+    <string><agents-root>/<agent-name>/secrets/personal/claude-auth.env</string>
+    <string>--boot</string>
+    <string>You are <Agent-Name>, started by your service; if you had an earlier conversation, it was resumed. On this first turn, before anything else, load the agent skill and read your charter, then arm your two log followers. Your scheduler and chat watcher run as the always-on launchd jobs <launchd-prefix>.sched.<agent-name> and <launchd-prefix>.<watch-job>.<agent-name> - do not start them yourself. Arm each under a persistent Monitor and re-arm it whenever its Monitor ends: /opt/homebrew/bin/python3 <fleet>/systemd/agent-daemons.py follow <agent-name> sched 2&gt;&amp;1 ; and /opt/homebrew/bin/python3 <fleet>/systemd/agent-daemons.py follow <agent-name> <watch-job> 2&gt;&amp;1 . Verify both with /opt/homebrew/bin/python3 <fleet>/systemd/agent-daemons.py status <agent-name> - an unread scheduler looks exactly like a day with nothing due. Then carry on with the duties your charter names.</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string><agents-root>/<agent-name>/<project-dir></string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>CLAUDE_CONFIG_DIR</key>
+    <string><agents-root>/<agent-name>/.claude</string>
+    <key>FLEET_AGENT_AUTH</key>
+    <string><auth-mode></string>
+    <key>SCHED_CONFIG</key>
+    <string><agents-root>/<agent-name>/config/scheduler.json</string>
+    <key><watch-config-env></key>
+    <string><agents-root>/<agent-name>/config/<watch-job>.json</string>
+    <key>TMUX_TMPDIR</key>
+    <string><agents-root>/run/claude-tmux-<agent-name></string>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>PYTHONDONTWRITEBYTECODE</key>
+    <string>1</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string><agents-root>/<agent-name>/state/session.log</string>
+  <key>StandardErrorPath</key>
+  <string><agents-root>/<agent-name>/state/session.log</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>ExitTimeOut</key>
+  <integer>30</integer>
+  <key>ProcessType</key>
+  <string>Standard</string>
+</dict>
+</plist>

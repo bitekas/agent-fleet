@@ -1,0 +1,14 @@
+{
+  "_comment": [
+    "FIXTURE install config for rate-graphic. Synthetic values only; it is what",
+    "`fleet where rate-graphic config.json` resolves to when FLEET_CONTEXT_ROOT",
+    "points at tests/fixtures/install. The log path is relative to this file;",
+    "its directory exists (ratings-log/README.md holds it in git) so that a",
+    "stray write CAN land, and rate.test.mjs guards it as the real log: no case",
+    "may create or touch ratings-log/ratings.jsonl."
+  ],
+  "ratings_log": { "path": "ratings-log/ratings.jsonl" },
+  "credentials": { "service_account_key_path": "/tmp/fleet-fixture-secrets/service-account-*.json" },
+  "secret": { "name": "EXAMPLE_API_KEY", "project": "example-project" },
+  "api": { "base": "https://generativelanguage.googleapis.com/v1beta" }
+}

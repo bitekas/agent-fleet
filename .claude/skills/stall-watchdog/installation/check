@@ -1,0 +1,737 @@
+#!/usr/bin/env python3
+"""[" -f "${BASH_SOURCE:-$0}" ] || { echo "a Python script: run it with python3" >&2; exit 126; }; exec python3 "${BASH_SOURCE:-$0}" "$@" || exit # sh/bash: hand off to python3 before reading the docstring
+Is the stall watchdog installed for one session, and is it current?
+
+    check <config path>          # the session to report on
+    STALL_WATCHDOG_CONFIG=... check
+
+Prints ONE line and exits:
+
+    0  installed, current      -> proceed
+    1  installed, but stale, or a leg this script could not measure -> do not proceed
+    2  not installed           -> follow SKILL.md
+
+⚠️ STATE 1 IS THE WHOLE REASON THIS EXISTS, AND IT IS TWO THINGS AT ONCE.
+Absent is loud: the daemon exits with WATCHDOG-CONFIG, systemctl shows failed,
+somebody notices. Stale is silent - everything runs and the behaviour is subtly
+the old one. So is BLIND: a watchdog whose captures all fail looks identical to a
+healthy one from `systemctl status`, and the whole point of this service is to be
+the thing nobody is watching. Both report 1, and the printed LINE says which,
+because the code alone cannot carry that difference.
+
+⚠️ IT VERIFIES REAL ARTIFACTS, NEVER A MARKER FILE. It imports watchdog.py with
+this config, so every required key is resolved by the same loader the daemon uses;
+it finds the systemd unit BY the config path it names, so a unit pointing somewhere
+else cannot be mistaken for this one; and it compares the state file's mtime against
+the service start, which is the only cheap proof that captures are actually landing.
+A marker file can lie; none of those can.
+
+⚠️ THE SERVICE IS FOUND ON THE HOST'S SERVICE MANAGER (fleetlib.services: systemd,
+or launchd on macOS). Under systemd it is the system unit whose Environment= names
+this config. Under launchd it is the job whose plist's EnvironmentVariables name it:
+a LaunchDaemon in /Library/LaunchDaemons (system domain), else a LaunchAgent in
+~/Library/LaunchAgents (the user's gui domain). ⚠️ A LAUNCHAGENT WATCHDOG IS
+REPORTED UNPROTECTED, EXIT 1, EVEN WHEN IT IS CAPTURING: the agent it watches can
+bootout, disable or delete a job in its own domain, and the protection is the point
+of running the watchdog as a separate root-owned service. Only the LaunchDaemon
+form, which runs as the agent's user under a root-owned definition, reads OK.
+The directories are fleetlib.services' unit_dir(), so $FLEET_LAUNCHD_SYSTEM_DIR,
+the fleet's one seam for launchd's system directory, replaces /Library/LaunchDaemons
+here too (the tests use it; HOME moves the user's). A restart remedy under launchd
+is the bootout and the bootstrap of the plist, never `kickstart -k`, which restarts
+from the definition launchd loaded.
+
+⚠️ REPORTS THE HOST IT IS ON. .install-state.json is committed, so it travels to
+machines that never ran the install. Without the host key every one of them would
+read "installed and current" while nothing is installed at all.
+
+⚠️ THIS SCRIPT IS PER SESSION, NOT PER MACHINE. One agent's watchdog being fine
+says nothing about another's. Run it once per config.
+
+⚠️ EVERY PATH LEG PERFORMS THE DAEMON'S OWN OPERATION AND NEVER ASKS WHETHER THE
+PATH EXISTS. exists(), isdir(), getmtime() and os.access() are all stat(2)-class:
+they answer from the inode and open nothing, so each of them is green on a state
+directory the daemon dies in. Three of those were here, and each had a state that
+passed it while the watchdog could not start:
+
+  * `os.access(STATE_DIR, W_OK)` ANSWERS A QUESTION ABOUT THE DIRECTORY, AND THE
+    DAEMON DOES NOT WRITE "A FILE" INTO A DIRECTORY. It writes exactly two names,
+    `<prefix>.json.tmp` (renamed over `<prefix>.json`) and `<prefix>.lock`, so a
+    directory that is genuinely, fully writable while one of those two paths is a
+    DIRECTORY or a mode-000 file passes W_OK and crashes acquire_singleton_lock()
+    or save_state(). Measured 2026-09-09: with `<prefix>.lock` a directory,
+    os.access(state_dir, W_OK) -> True and the check reported the whole state-dir
+    section clean. That is the defect; the permission bits were never the point.
+    ⚠️ DO NOT OVERSTATE THE REST OF IT, because a false mechanism is worse than
+    no argument: on this kernel access(2) DOES catch a read-only remount
+    (measured: EROFS, access -> False) and DOES catch the immutable flag, and for
+    uid 0 its W_OK -> True is CORRECT because root really can write. What it
+    still cannot see is an LSM denial and a container device/mount policy - and
+    that half is argued from the syscall's documented behaviour, not measured
+    here. The measured half above is on its own sufficient reason to write.
+  * `os.path.exists(state_file)` followed by `getmtime` - stat succeeds on a
+    file this user cannot read and on a DIRECTORY of that name, so a state path
+    the daemon's load_state() dies on (PermissionError and IsADirectoryError are
+    both outside its `except (FileNotFoundError, JSONDecodeError)`) reported OK,
+    with a fresh mtime making the freshness leg pass too.
+  * `os.path.exists(config)` before importing watchdog.py - a readable-looking
+    config that cannot be opened surfaced as "watchdog.py does not load", a true
+    sentence about the wrong file that sends the reader to debug the daemon.
+
+⚠️ NEGATIVE CONTROLS, AND THE VERDICT THEY GATE. Against a TEMP COPY of a config
+(never a live one): make `<state.dir>/<prefix>.lock` a directory; `chmod 000` the
+state file; `chmod 000` the config. Each must exit non-zero naming that path and
+handing over a command. ⚠️ IF ANY OF THOSE CONTROLS PASSES, ISSUE NO VERDICT
+ABOUT THAT SESSION - a leg that stays green under its own control measures
+nothing, and an OK from it is worse than no reading at all, because this is the
+service nobody is watching. Three outcomes and only two are a verdict: control
+red (the leg works), control green (report INCONCLUSIVE, not OK), control never
+reached because an earlier leg exited first (also INCONCLUSIVE - the printed line
+names the leg that spoke, so read it before concluding anything).
+
+⚠️ THE REMEDIATIONS NAME AN ADMIN AND A COMMAND, AND EACH ERRNO GETS ITS OWN.
+State directories are 0700 and configs 0600 by install; repairing one is machine
+configuration, not an agent's work, and a line that describes the broken state
+without handing over the exact `chmod`/`rm -f`/`install` is a line the blocked
+reader cannot act on. ⚠️ ONE COMMAND FOR A CLASS OF CAUSES IS THE SAME DEFECT AS
+NO COMMAND AT ALL, and worse, because it is confident: `chown` returns EROFS on a
+read-only filesystem and EPERM against an immutable directory, `mkdir` does
+nothing for a path that is a regular file, and `df`/`mount` say nothing about a
+symlink loop. So EROFS, EPERM, EACCES, ENOTDIR/ELOOP and ENOENT each have their
+own branch below. Do not group them together.
+
+⚠️ THIS CHECK WRITES. It is not pure stat(2): it creates and removes one probe
+file inside `state.dir` to prove the directory is genuinely writable. That directory is a systemd `ReadWritePaths=` entry belonging
+to a LIVE session's daemon, so anyone wiring this script into an automated runner
+is wiring a writer, not a reader. `fleet check-all` runs it, on demand, once per
+linked skill; any further automated invoker inherits the same write. The probe's name carries
+this process's pid so two concurrent runs cannot race - see PROBE_STEM for the
+measured failure that rule comes from.
+
+Every exit path in here has been driven by hand against a temp copy of the skill,
+each asserted on its wording as well as its code. Re-drive them after changing any
+branch: a check nobody has seen go red is a check nobody knows the meaning of.
+"""
+import errno
+import glob
+import json
+import os
+import re
+import socket
+import stat
+import subprocess
+import sys
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+SKILL = os.path.dirname(HERE)
+# The fleet tree this file lives in. realpath, never abspath: through a personal skill
+# link abspath is the link path, and four parents up from there is not the fleet tree.
+FLEET_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.realpath(__file__))))))
+UNIT_DIRS = ("/etc/systemd/system", "/usr/lib/systemd/system", "/lib/systemd/system")
+DARWIN = sys.platform == "darwin"
+
+
+def fleet_services():
+    """fleetlib.services, from the fleet tree this file lives in."""
+    sys.path.insert(0, os.path.join(FLEET_ROOT, "lib"))
+    from fleetlib import services  # noqa: E402
+    return services
+
+
+def launchd_dirs():
+    """(scope, directory) where a launchd watchdog job can live, protected first."""
+    s = fleet_services()
+    return tuple((scope, str(s.unit_dir(scope))) for scope in ("system", "user"))
+
+
+def find_job(config_path: str):
+    """(label, scope, plist path) of the launchd job whose EnvironmentVariables name
+    THIS config, or None: found by content, for the reason find_unit gives."""
+    import plistlib
+    want = os.path.realpath(config_path)
+    for scope, d in launchd_dirs():
+        for path in sorted(glob.glob(os.path.join(d, "*.plist"))):
+            try:
+                with open(path, "rb") as f:
+                    job = plistlib.load(f)
+            except Exception:  # noqa: BLE001 - any unreadable or malformed plist is not ours
+                continue
+            env = job.get("EnvironmentVariables") if isinstance(job, dict) else None
+            named = env.get("STALL_WATCHDOG_CONFIG") if isinstance(env, dict) else None
+            if isinstance(named, str) and os.path.realpath(named) == want:
+                return str(job.get("Label") or os.path.basename(path)[:-len(".plist")]), scope, path
+    return None
+
+
+def restart_hint() -> str:
+    """The command an admin runs to restart the watchdog, before its unit is known."""
+    try:
+        s = fleet_services()
+        launchd, system_dir = s.backend() == "launchd", s.unit_dir("system")
+    except Exception:  # noqa: BLE001 - no library: the platform's word, and the default directory
+        launchd, system_dir = DARWIN, "/Library/LaunchDaemons"
+    if launchd:
+        return ("`sudo launchctl bootout system/<that label>`, then `sudo launchctl bootstrap system "
+                f"{system_dir}/<that label>.plist`")
+    return "`sudo systemctl restart <that unit>`"
+
+
+def state_path() -> str:
+    """The install record, `installation/.install-state.json` in this skill's install
+    context. It is SPECIFIC - it describes one install - so it lives with the install,
+    never beside this script, and fleetlib is the one resolver for where that is."""
+    sys.path.insert(0, os.path.join(FLEET_ROOT, "lib"))
+    from fleetlib import paths  # noqa: E402
+    return str(paths.skill_context("stall-watchdog") / "installation" / ".install-state.json")
+
+
+def out(code: int, msg: str) -> None:
+    print(msg)
+    sys.exit(code)
+
+
+def declared_version() -> int:
+    """The version SKILL.md declares. Absent means the skill predates the
+    convention, which is itself a reason to re-install rather than to guess."""
+    with open(os.path.join(SKILL, "SKILL.md"), encoding="utf-8") as f:
+        head = f.read(4096)
+    m = re.search(r"^version:\s*(\d+)\s*$", head, re.M)
+    return int(m.group(1)) if m else 0
+
+
+def find_unit(config_path: str):
+    """The unit that names THIS config, or None.
+
+    Found by content rather than by filename: the unit is named per session and this
+    script is universal, so a name pattern here would be one install's convention
+    hardcoded into a common file. Matching on the config path also means a unit that
+    watches a DIFFERENT session can never be reported as this one's.
+    """
+    want = os.path.realpath(config_path)
+    for d in UNIT_DIRS:
+        for path in sorted(glob.glob(os.path.join(d, "*.service"))):
+            try:
+                with open(path, encoding="utf-8", errors="replace") as f:
+                    text = f.read()
+            except OSError:
+                continue
+            for line in text.splitlines():
+                line = line.strip()
+                if not line.startswith("Environment="):
+                    continue
+                m = re.search(r"STALL_WATCHDOG_CONFIG=(\S+)", line)
+                if m and os.path.realpath(m.group(1).strip('"')) == want:
+                    return os.path.basename(path)
+    return None
+
+
+def whoami():
+    """This process's real user NAME, resolved rather than read from $USER.
+
+    ⚠️ NEVER PUT A LITERAL `$USER` IN A REMEDIATION. A message that has already
+    had to fall back because $USER is unset must not then hand the operator
+    `sudo chown $USER <path>`: under systemd-run, `su` without `-` and
+    `docker exec` that variable is unset, and the command fails with `the
+    following required arguments were not provided: <FILE>` - the one line the
+    already-blocked reader copy-pastes does not run. This service is INSTALLED
+    UNDER SYSTEMD, so the scrubbed-environment case is the normal one here, not
+    an exotic one."""
+    try:
+        import pwd as _pwd
+        return _pwd.getpwuid(os.getuid()).pw_name
+    except Exception:  # noqa: BLE001 - a uid with no passwd entry is routine in a container
+        return os.environ.get("USER") or os.environ.get("LOGNAME") or f"uid {os.getuid()}"
+
+
+def errname(e):
+    """A legible name for an OSError's errno.
+
+    ⚠️ OSError.errno CAN BE None - TimeoutError, InterruptedError and the whole
+    ConnectionError family are OSError subclasses that may carry none - and
+    formatting one straight into errno.errorcode.get renders `(None: None)` in
+    the exact sentence the operator is going to act on."""
+    if e.errno is None:
+        return type(e).__name__
+    return errno.errorcode.get(e.errno, str(e.errno))
+
+
+def file_kind(mode):
+    for pred, name in ((stat.S_ISDIR, "a directory"), (stat.S_ISFIFO, "a FIFO"),
+                       (stat.S_ISSOCK, "a socket"), (stat.S_ISCHR, "a character device"),
+                       (stat.S_ISBLK, "a block device")):
+        if pred(mode):
+            return name
+    return "not a regular file"
+
+
+def wrong_shape(err):
+    """"This path is not a usable regular file", as against a permission or a
+    resource problem. They need different remediations, and one line for both is
+    the failure this whole file is about."""
+    return err.errno in (errno.EISDIR, errno.ENOTDIR, errno.ELOOP,
+                         errno.ENAMETOOLONG, errno.EINVAL)
+
+
+def read_text_head(path, cap=1 << 20):
+    """Open PATH the way load_state() does and decode it -> (ok, OSError-or-None).
+
+    THE REAL OPERATION. See the header: stat(2) answers from the inode, and every
+    one of these paths is consumed by opening it, so opening it is the only test
+    whose green means anything.
+
+    ⚠️ TEXT, NOT BYTES, AND THAT IS THE POINT. watchdog.py's load_state() is
+    `json.load(open(path))` under `except (FileNotFoundError, JSONDecodeError)`,
+    so a state file containing invalid UTF-8 raises UnicodeDecodeError, which it
+    does NOT catch, and the daemon dies at startup. A one-byte binary read is
+    green on exactly that file. Decoding is what closes the hole.
+
+    ⚠️ CAPPED, because an unbounded read of a path this process does not control
+    is a memory bomb dressed as thoroughness. A capped read cannot prove the
+    WHOLE file decodes, and that residual is real: a valid prefix followed by a
+    bad byte beyond the cap still passes here and still kills the daemon. The
+    cap is 1 MiB against a state file measured in tens of bytes, so the gap is
+    unreachable in practice and stated rather than hidden.
+
+    ⚠️ O_NONBLOCK AND THE S_ISREG TEST STOP THIS FROM HANGING. A plain open() on
+    a FIFO blocks forever waiting for a writer, and the state directory is a path
+    this check does not own. A readiness check that never returns is worse than
+    one that is wrong - it is indistinguishable from a slow machine, nothing
+    times it out, and a session that hangs with nobody at the terminal stays
+    hung for hours."""
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+    except OSError as e:
+        return False, e
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            err = OSError(errno.EINVAL, f"is {file_kind(st.st_mode)}, not a regular file")
+            err.filename = path
+            return False, err
+        raw = os.read(fd, cap)
+    except OSError as e:
+        return False, e
+    finally:
+        os.close(fd)
+    try:
+        raw.decode("utf-8")
+    except UnicodeDecodeError as e:
+        err = OSError(errno.EILSEQ, f"is not valid UTF-8 ({e.reason} at byte {e.start}), so "
+                                    "load_state()'s json.load raises UnicodeDecodeError, "
+                                    "which it does not catch")
+        err.filename = path
+        return False, err
+    return True, None
+
+
+# ⚠️ THE PROBE FILE'S NAME CARRIES THIS PROCESS'S PID, AND A CONSTANT NAME IS A
+# BUG. Two runs of this check against the SAME config race on a shared name: A's
+# os.replace moves the shared tmp away and B's os.replace then gets ENOENT on a
+# perfectly writable directory, which the caller reports as "state dir does not
+# exist. install -d ...". The operator runs a command that succeeds and changes
+# nothing, re-runs, and it passes - which teaches them the check is flaky, and a
+# flaky gate trains its readers to excuse red. Measured: 12 concurrent probers,
+# 5-7 spurious ENOENTs per round, 6 rounds out of 6.
+PROBE_STEM = f".stall-watchdog-check-probe.{os.getpid()}"
+
+
+def probe_writable_dir(directory, stem):
+    """Perform save_state()'s OWN sequence in DIRECTORY -> OSError or None.
+
+    create <stem>.tmp, write, os.replace it over <stem>, unlink. That is
+    watchdog.py's save_state shape, not a generic touch: the rename is a separate
+    kernel operation with its own failure modes (a cross-device state dir, an
+    immutable target) and skipping it would leave the one syscall that actually
+    lands the state file unmeasured.
+
+    ⚠️ NO fsync, DELIBERATELY, AND ADDING ONE MAKES THIS CHECK STRICTER THAN THE
+    DAEMON IT REPORTS ON. save_state() is `open(tmp,"w")`, `json.dump`,
+    `os.replace` - there is no fsync in it and no directory fsync either. On a
+    mount where fsync fails but write+rename succeed (9p, virtiofs and several
+    FUSE and container overlays return EINVAL or ENOSYS; some network mounts
+    return EIO) an fsync here would return that errno and this check would report
+    NOT INSTALLED on a machine where the watchdog runs perfectly. A check may be
+    weaker than its subject; it may not be stronger. If durability is ever wanted
+    here, it belongs in save_state first and in this probe second.
+
+    ⚠️ THE unlink RUNS EVEN WHEN THE WRITE FAILED, and the cleanup's own errors
+    are swallowed on purpose: a readiness check that leaves debris in a directory
+    systemd has declared ReadWritePaths= turns a diagnostic into a change to the
+    machine. The probe names itself for this script AND this pid, so a leftover -
+    if the process is killed between the write and the unlink - is attributable
+    rather than mysterious, and so two concurrent runs cannot collide."""
+    tmp = os.path.join(directory, stem + ".tmp")
+    dst = os.path.join(directory, stem)
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, b"probe\n")
+        finally:
+            os.close(fd)
+        os.replace(tmp, dst)
+    except OSError as e:
+        return e
+    finally:
+        for p in (tmp, dst):
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+    return None
+
+
+def probe_openable(path, mode):
+    """Open PATH the way the daemon does -> OSError or None; a plain absent path
+    is None.
+
+    MODE is os.O_RDONLY or os.O_WRONLY. NO O_CREAT and NO O_TRUNC, deliberately:
+    this runs against a LIVE session's state directory, the lock file is held
+    open by a running daemon, and a check that truncates or creates the very
+    files it is reporting on has changed the thing it measured. (The daemon's own
+    open is `open(path,"w")`, i.e. O_TRUNC - this probe is strictly gentler.)
+
+    ⚠️ O_NONBLOCK, so a FIFO at this path cannot hang the check. O_WRONLY on a
+    FIFO with no reader is the textbook indefinite block; with O_NONBLOCK it
+    returns ENXIO. The fstat then reports a non-regular file as its own finding.
+
+    ⚠️ ENOENT IS NOT AUTOMATICALLY "NO FINDING", AND THE DANGLING SYMLINK IS WHY.
+    Absent means the daemon has not written that path yet, which the freshness
+    legs judge with far better information than this function has. But a DANGLING
+    SYMLINK also opens ENOENT while genuinely EXISTING, and the daemon dies on it
+    exactly as it dies on a mode-000 file - so lexists() separates the two.
+    Collapsing them puts a real, silent breakage back under a carve-out written
+    for a legitimate state."""
+    try:
+        fd = os.open(path, mode | getattr(os, "O_NONBLOCK", 0))
+    except OSError as e:
+        if e.errno == errno.ENOENT and not os.path.lexists(path):
+            return None
+        return e
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            err = OSError(errno.EINVAL, f"is {file_kind(st.st_mode)}, not a regular file")
+            err.filename = path
+            return err
+    except OSError as e:
+        return e
+    finally:
+        os.close(fd)
+    return None
+
+
+def systemctl(*args):
+    try:
+        r = subprocess.run(("systemctl",) + args, capture_output=True, text=True,
+                           timeout=20)
+    except (FileNotFoundError, subprocess.SubprocessError) as e:
+        return None, f"{type(e).__name__}: {e}"
+    return r.stdout.strip(), None
+
+
+def main() -> None:
+    host = socket.gethostname()
+
+    config = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("STALL_WATCHDOG_CONFIG")
+    if not config:
+        out(2, "NOT INSTALLED: no config selected. Pass the config path as an argument, "
+               "or set STALL_WATCHDOG_CONFIG. This service is installed per SESSION, so "
+               "there is nothing to check until you say which one.")
+    config = os.path.expanduser(config)
+    # OPENED, not stat'ed: watchdog.py's module scope reads this file, so an
+    # unreadable one would otherwise surface below as "watchdog.py does not load".
+    # The byte count is deliberately DISCARDED here: this leg's requirement is
+    # "readable", and an empty or malformed config is watchdog.py's own loader to
+    # reject, in its own WATCHDOG-CONFIG wording naming the missing key. Adding
+    # an emptiness rule here would make this check stricter than the install it
+    # reports on, and would pre-empt a better diagnostic with a worse one.
+    ok, err = read_text_head(config)
+    if not ok:
+        if err.errno == errno.ENOENT:
+            out(2, f"NOT INSTALLED: no config at {config}. Run: `install -m 0600 "
+                   f"{os.path.join(SKILL, 'config.example.json')} {config}`, then fill it "
+                   f"in per SKILL.md step 2.")
+        if wrong_shape(err):
+            # ⚠️ "SOME COMPONENT OF", not "this file". ENOTDIR and ELOOP are
+            # raised just as readily by a PARENT component, and a remediation
+            # that assumes the final one hands over `rm -rf <full path> &&
+            # install ...` whose second half fails with "No such file or
+            # directory" - measured. Naming the path and letting the operator
+            # find the offending component is less satisfying and correct.
+            out(2, f"NOT INSTALLED: some component of {config} is not a readable regular "
+                   f"file ({errname(err)}: {err.strerror or err}). `ls -ld` each component "
+                   f"to find it, remove what is in the way, and put the config there: "
+                   f"`install -m 0600 {os.path.join(SKILL, 'config.example.json')} "
+                   f"{config}`, then fill it in per SKILL.md step 2.")
+        out(2, f"NOT INSTALLED: the config at {config} exists but cannot be read by "
+               f"{whoami()} ({errname(err)}: {err.strerror or err}), so the daemon cannot "
+               f"start either - it reads this file at import. A machine ADMIN repairs it: "
+               f"`sudo chown {whoami()} {config} && chmod 0600 {config}`.")
+
+    # Import the daemon itself, with this config. Its module scope loads the file and
+    # resolves every required key; a SystemExit here is its own WATCHDOG-CONFIG
+    # diagnostic, which is better worded than anything this script could invent.
+    sys.path.insert(0, SKILL)
+    os.environ["STALL_WATCHDOG_CONFIG"] = config
+    try:
+        import watchdog  # noqa: E402
+    except SystemExit as e:
+        out(2, f"NOT INSTALLED: {e}")
+    except Exception as e:  # noqa: BLE001 - any import failure is "not installed"
+        out(2, f"NOT INSTALLED: watchdog.py does not load ({type(e).__name__}: {e})")
+
+    # THE DIRECTORY, WRITTEN. probe_writable_dir replays save_state()'s own
+    # create/write/fsync/rename/unlink rather than asking access(2) whether the
+    # bits permit it - see the header for the four states that pass W_OK and
+    # crash the daemon. The errno branches below are separate because their fixes
+    # are: a missing directory is created, an unwritable one is chown'd, and
+    # neither command does anything for a path that is a regular file.
+    state_dir = watchdog.STATE_DIR
+    err = probe_writable_dir(state_dir, PROBE_STEM)
+    if err is not None:
+        who = whoami()
+        # ⚠️ ONE REMEDIATION PER CAUSE, AND THE BRANCHES BELOW ARE NOT
+        # INTERCHANGEABLE. Every one of these errnos reaches this point, and the
+        # command that fixes one is a command that FAILS for the next: chown
+        # returns EROFS on a read-only filesystem and EPERM on an immutable
+        # directory, `mkdir` does nothing for a path that is a regular file, and
+        # `df`/`mount` say nothing about a symlink loop. Grouping them is the
+        # exact "one confident prescription for causes it cannot distinguish"
+        # defect this file exists to remove; do not re-flatten them.
+        if err.errno == errno.ENOENT:
+            why = ("the watchdog keeps its lock and cursor in it; launchd creates a missing log "
+                   "directory itself, but with mode 0744 (measured in the user domain) and, for "
+                   "this root-owned LaunchDaemon, presumably owned by root (not measured)"
+                   if DARWIN else "it is a ReadWritePaths= entry, and systemd fails the unit at "
+                   "start (226/NAMESPACE) if it is missing")
+            out(2, f"NOT INSTALLED: state dir {state_dir} does not exist. Create it "
+                   f"before enabling the service - {why}: "
+                   f"`install -d -m 0700 {state_dir}`.")
+        if err.errno in (errno.ENOTDIR, errno.ELOOP, errno.ENAMETOOLONG):
+            out(2, f"NOT INSTALLED: state.dir names {state_dir}, and some component of that "
+                   f"path is not a usable directory ({errname(err)}: "
+                   f"{err.strerror or err}); the lock and the cursor cannot live there. "
+                   f"`ls -ld` each component to find the one in the way, remove it, then "
+                   f"`install -d -m 0700 {state_dir}`.")
+        if err.errno == errno.EROFS:
+            out(2, f"NOT INSTALLED: state dir {state_dir} is on a READ-ONLY filesystem "
+                   f"({err.strerror or err}), so the daemon can never write its cursor or "
+                   f"take its lock. chown and chmod BOTH return EROFS here and neither is "
+                   f"the fix. A machine ADMIN remounts it read-write, or moves state.dir: "
+                   f"`df -P {state_dir}` names its mount point (the last column), and "
+                   f"`mount` shows how that is mounted.")
+        if err.errno == errno.EPERM:
+            # EPERM rather than EACCES on a directory this user can otherwise
+            # write is the immutable-attribute signature, which is precisely the
+            # state access(2) DOES catch and chown does NOT fix.
+            if DARWIN:
+                flag = (f"`ls -lOd {state_dir}` and clears it with `sudo chflags nouchg,noschg "
+                        f"{state_dir}`; if ls shows neither flag, treat it as a sandbox or TCC "
+                        f"denial (a protected folder) and read the system log")
+            else:
+                flag = (f"`lsattr -d {state_dir}` and clears it with `sudo chattr -i "
+                        f"{state_dir}`; if lsattr shows no `i`, treat it as an LSM denial and "
+                        f"read the audit log")
+            out(2, f"NOT INSTALLED: state dir {state_dir} refused a write with EPERM "
+                   f"({err.strerror or err}). On a directory whose mode already permits "
+                   f"the write this is the immutable attribute, not ownership - `chown` "
+                   f"itself returns EPERM against it. A machine ADMIN reads {flag}.")
+        if err.errno == errno.EACCES:
+            out(2, f"NOT INSTALLED: state dir {state_dir} exists but {who} cannot write "
+                   f"into it ({err.strerror or err}); the lock and the cursor live there, "
+                   f"so the daemon dies at start. A machine ADMIN repairs it: "
+                   f"`sudo chown -R {who} {state_dir} && chmod 0700 {state_dir}`.")
+        out(2, f"NOT INSTALLED: state dir {state_dir} exists but a write into it failed "
+               f"({errname(err)}: {err.strerror or err}). This is neither a permission "
+               f"problem nor a wrong path shape - both are handled above - so chown, chmod "
+               f"and mkdir will all fail or do nothing. ENOSPC and a full inode table land "
+               f"here: a machine ADMIN reads `df -h {state_dir}` and "
+               f"`df -i {state_dir}`.")
+
+    # THE TWO PATHS THE DAEMON ACTUALLY OPENS, opened the way it opens them. The
+    # directory being writable says nothing about these: watchdog.py does not
+    # write "a file" here, it writes exactly these two names, and either of them
+    # existing as a directory or as a mode-000 file crashes the daemon on a state
+    # dir that passes every test above. ENOENT is not a finding (see
+    # probe_openable) - the freshness legs below judge absence with far better
+    # information than this leg has.
+    lock_file = os.path.join(state_dir, watchdog.STATE_PREFIX + ".lock")
+    err = probe_openable(lock_file, os.O_WRONLY)
+    if err is not None:
+        # ⚠️ THE REMEDIATION DOES NOT ENUMERATE SHAPES IT CANNOT SEE. An earlier
+        # draft offered "chown if it is a file, rm -rf if it is a directory",
+        # which covers neither a symlink loop nor a dangling symlink nor a FIFO -
+        # all of which reach here. `rm -f` removes every one of them, and the
+        # daemon recreates the lock on its next start, so ONE command is correct
+        # for the whole class and no enumeration is needed.
+        out(2, f"NOT INSTALLED: the singleton lock {lock_file} is present but cannot be "
+               f"opened for writing ({errname(err)}: {err.strerror or err}), so "
+               f"acquire_singleton_lock() raises before the daemon polls anything - on a "
+               f"state dir that IS writable. The lock carries no state: a machine ADMIN "
+               f"removes it and restarts the unit that names "
+               f"STALL_WATCHDOG_CONFIG={config} - `sudo rm -f {lock_file}` (add `-r` if it "
+               f"is a directory), then {restart_hint()}.")
+
+    try:
+        services = fleet_services()
+        backend = services.backend()
+    except Exception as e:  # noqa: BLE001 - fleetlib's refusal is the whole finding
+        out(1, f"NO VERDICT: the service manager cannot be asked ({type(e).__name__}: {e}), "
+               f"so whether the watchdog runs and captures is UNMEASURED here.")
+    unprotected = None
+    if backend == "launchd":
+        job = find_job(config)
+        if job is None:
+            out(2, f"NOT INSTALLED: no launchd job names STALL_WATCHDOG_CONFIG={config} "
+                   f"({' or '.join(d for _, d in launchd_dirs())}). Install one from "
+                   f"installation/agent-stall-watchdog.plist.example, per SKILL.md steps 4 to 6.")
+        unit, scope, plist = job
+        domain = services.domain(scope)
+        st = services.status(unit, scope)
+        if st["load"] == "unknown":
+            out(1, f"NO VERDICT: {plist} names this config, but launchctl could not report "
+                   f"{domain}/{unit} ({st['error']}), so whether the service runs and captures "
+                   f"is UNMEASURED here. Confirm by hand before relying on it.")
+        if st["load"] == "not-found":
+            out(2, f"NOT INSTALLED: {plist} names this config but launchd has not loaded it, "
+                   f"so it does not run: {'sudo ' if scope == 'system' else ''}launchctl "
+                   f"bootstrap {domain} {plist}")
+        if st["active"] != "active":
+            out(1, f"STALE: {unit} is loaded in {domain} but '{st['active']}' (last result "
+                   f"{st['result']}). The session it watches is unsupervised right now. "
+                   f"{services.hint('log', unit, scope)}")
+        if scope == "user":
+            unprotected = (f"UNPROTECTED: {unit} runs as a LaunchAgent in {domain}, so the agent "
+                           f"it watches can bootout, disable or delete it. Install the "
+                           f"LaunchDaemon form instead (SKILL.md step 6): render "
+                           f"installation/agent-stall-watchdog.plist.example, `sudo install -m 644 "
+                           f"-o root -g wheel <rendered> {services.unit_dir('system')}/{unit}.plist && "
+                           f"sudo launchctl bootstrap system {services.unit_dir('system')}/{unit}.plist`, "
+                           f"then `launchctl bootout {domain}/{unit}` and remove {plist}.")
+    else:
+        scope = "system"
+        unit = find_unit(config)
+        if unit is None:
+            out(2, f"NOT INSTALLED: no systemd unit names STALL_WATCHDOG_CONFIG={config}. "
+                   f"Install one from installation/agent-stall-watchdog.service.example, "
+                   f"per SKILL.md steps 4 to 6.")
+
+        enabled, err = systemctl("is-enabled", unit)
+        if err:
+            out(1, f"NO VERDICT: {unit} exists but systemctl could not be run ({err}), so "
+                   f"whether the service is enabled and capturing is UNMEASURED here. "
+                   f"Confirm by hand before relying on it.")
+        if enabled not in ("enabled", "enabled-runtime", "static"):
+            out(2, f"NOT INSTALLED: {unit} is present but '{enabled}'. It will not start on "
+                   f"boot: sudo systemctl enable --now {unit}")
+
+        active, _ = systemctl("is-active", unit)
+        if active != "active":
+            out(1, f"STALE: {unit} is installed and enabled but '{active}'. The session it "
+                   f"watches is unsupervised right now. journalctl -u {unit} -n 30")
+
+    # Proof of CAPTURE, not merely of running. A capture failure raises before
+    # save_state, so a state file older than the service start is the exact signature
+    # of a watchdog that is up and blind - which the service manager reports as
+    # healthy. The start is the running process's (services.started_at); an active
+    # service whose start cannot be read is NO VERDICT, never a skipped leg.
+    state_file = os.path.join(state_dir, watchdog.STATE_PREFIX + ".json")
+    started = services.started_at(unit, scope)
+    if started is None:
+        out(1, f"NO VERDICT: {unit} is active, but when its process started cannot be read, "
+               f"so whether its captures are landing is UNMEASURED here. Confirm by hand: "
+               f"{services.hint('status', unit, scope)}")
+    ran_for = time.time() - started
+    # OPENED, not exists()-ed. load_state() catches FileNotFoundError and
+    # JSONDecodeError and NOTHING ELSE, so a state file this user cannot read
+    # - or a DIRECTORY of that name - kills the daemon at startup while
+    # exists() says yes and getmtime() below happily returns a fresh
+    # timestamp, which greened the whole freshness section. Absence is still
+    # handled by the two branches after this one: it is a legitimate state,
+    # unreadability never is.
+    st_ok, st_err = read_text_head(state_file)
+    # ⚠️ A DANGLING SYMLINK OPENS ENOENT WHILE GENUINELY EXISTING, and the
+    # daemon dies on it exactly as it dies on a mode-000 file. lexists()
+    # separates it from the legitimate absent case below, which the freshness
+    # branches judge with far better information than an open() has.
+    if not st_ok and (st_err.errno != errno.ENOENT or os.path.lexists(state_file)):
+        out(1, f"STALE: {state_file} is present but cannot be read as the daemon reads "
+               f"it ({errname(st_err)}: {st_err.strerror or st_err}), so watchdog.py's "
+               f"load_state() raises before the first poll - it catches "
+               f"FileNotFoundError and JSONDecodeError and nothing else. This session "
+               f"is UNSUPERVISED. The state file is a rebuildable cursor, not a record: "
+               f"a machine ADMIN removes it and restarts the unit that names "
+               f"STALL_WATCHDOG_CONFIG={config} - `sudo rm -f {state_file}` (add `-r` "
+               f"if it is a directory), then {restart_hint()}.")
+    if not st_ok:  # a genuinely absent file - every other case exited above.
+        if ran_for < watchdog.POLL_SECS * 2:
+            out(1, f"NO VERDICT: {unit} started {ran_for:.0f}s ago and has not written "
+                   f"{state_file} yet; the first poll is due within "
+                   f"{watchdog.POLL_SECS:.0f}s. Too early to tell - re-run.")
+        where = ("the job's TMUX_TMPDIR" if backend == "launchd"
+                 else "ReadWritePaths for the tmux dir")
+        out(1, f"STALE: {unit} has run {ran_for:.0f}s and never wrote {state_file}. "
+               f"Every capture is failing: it is up and BLIND. Check {where}, and "
+               f"tmux.tmpdir against the live session.")
+    age = os.path.getmtime(state_file)
+    if time.time() - age > ran_for:
+        out(1, f"STALE: {state_file} predates this run of {unit} (started "
+               f"{ran_for:.0f}s ago). Nothing has been captured since it started: "
+               f"up and BLIND. See technical/watchdog.md section 11.")
+
+    # Captures are landing. A watchdog the agent can switch off is still not the
+    # service this skill installs: said before the version, which cannot change it.
+    if unprotected:
+        out(1, unprotected)
+
+    # Artifacts are present and captures are landing. Only the recorded version can
+    # still be wrong.
+    want = declared_version()
+    # The record lives in the install context. A context that does not resolve is a
+    # leg this script cannot measure, which is 1 with the reason in words - never a
+    # guess at a path, and never "not recorded", which would send the operator to
+    # re-run an install step that cannot fix it.
+    try:
+        record_path = state_path()
+    except Exception as e:  # noqa: BLE001 - fleetlib's refusal is the whole finding
+        out(1, f"NO VERDICT on the recorded version: the install context does not "
+               f"resolve ({type(e).__name__}: {e}). Run this with FLEET_CONTEXT_ROOT "
+               f"set to the install's checkout, or from inside it.")
+    # ONE operation. exists()-then-open reported an unreadable state file under
+    # "no .install-state.json records which version" - a claim about a file that
+    # is sitting right there, and the operator then re-runs an install step that
+    # cannot fix a mode.
+    try:
+        with open(record_path, encoding="utf-8") as f:
+            recorded = json.load(f)
+    except FileNotFoundError:
+        out(1, f"STALE: installed, but no .install-state.json at {record_path} records which "
+               f"version (SKILL.md declares {want}). Re-run SKILL.md step 7.")
+    except Exception as e:  # noqa: BLE001
+        out(1, f"STALE: .install-state.json at {record_path} unreadable ({type(e).__name__}: {e}). "
+               f"Run `chmod 0644 {record_path}`, or delete it and re-run SKILL.md step 7 to "
+               f"rewrite it.")
+
+    entry = (recorded.get("hosts", {}).get(host, {}) or {}).get(config)
+    if entry is None:
+        out(1, f"STALE: nothing recorded for {config} on {host}. The state file is "
+               f"committed and travels to machines that never ran the install, so an "
+               f"unrecorded host is an unverified one. Re-run SKILL.md step 7.")
+    have = int(entry.get("version", -1))
+    if have < want:
+        out(1, f"STALE: installed version {have}, SKILL.md declares {want}. "
+               f"Re-run SKILL.md.")
+    if have > want:
+        out(1, f"STALE: installed version {have} is NEWER than SKILL.md's {want}. "
+               f"The fleet tree this check runs from ({FLEET_ROOT}) is older than the "
+               f"install that was recorded: `fleet upgrade` to the tag that made it.")
+
+    out(0, f"OK: installed and current (version {want}) on {host} - {unit} active, "
+           f"watching {watchdog.TMUX_TARGET} in {watchdog.TMUX_TMPDIR}, "
+           f"stall {watchdog.STALL_SECS:.0f}s, state {state_file}")
+
+
+if __name__ == "__main__":
+    main()

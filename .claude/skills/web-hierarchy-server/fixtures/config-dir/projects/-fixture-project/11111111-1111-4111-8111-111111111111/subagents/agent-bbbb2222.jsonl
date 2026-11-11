@@ -1,0 +1,2 @@
+{"parentUuid":null,"isSidechain":true,"type":"user","agentId":"bbbb2222","message":{"role":"user","content":"FIXTURE TASK B - obviously fake. Check one fixture assertion."},"uuid":"b-u1","timestamp":"2020-01-01T00:00:00.000Z"}
+{"parentUuid":"b-u1","isSidechain":true,"type":"assistant","agentId":"bbbb2222","message":{"role":"assistant","model":"claude-fixture-1","content":[{"type":"text","text":"Fixture agent B finished long ago."}]},"uuid":"b-u2","timestamp":"2020-01-01T00:00:05.000Z"}

@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "name": "discord",
+  "status": "placeholder",
+  "line_prefix": "DISCORD",
+  "kinds": ["channel", "dm", "thread"],
+  "ids": { "user": "^[0-9]{17,20}$",
+           "conversation": "^[0-9]{17,20}$",
+           "message": "^[0-9]{17,20}$" },
+  "watch": { "script": "watch.py", "job": "discord-watch", "config_env": "DISCORD_WATCH_CONFIG",
+             "follow_include": "^DISCORD |^DAEMON-|WATCH-GUARD|WATCH-INFO|Traceback|WATCH-ERROR" }
+}

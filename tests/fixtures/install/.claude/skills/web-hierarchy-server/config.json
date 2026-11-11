@@ -1,0 +1,15 @@
+{
+  "_comment": [
+    "FIXTURE install config for web-hierarchy-server. Synthetic values only; it is",
+    "what `fleet where web-hierarchy-server config.json` resolves to when",
+    "FLEET_CONTEXT_ROOT points at tests/fixtures/install. No real agent, host or",
+    "port is named here."
+  ],
+  "server": { "host": "127.0.0.1", "cap_kb": 16, "preferred_ip_prefix": "" },
+  "transcripts": { "config_dir": "~/agents/ada/.claude", "projects_subdir": "projects" },
+  "identities": { "file": null },
+  "packages": { "repo_root": null, "dir_pattern": "docs/design/<slug>" },
+  "labels": { "root_owner": "grace" },
+  "fleet": { "by_config_dir": { "ada": "ada", "alan": "alan" } },
+  "servers": { "web-hierarchy-1.service": { "config_dir": "~/agents/ada/.claude", "port": 8091 } }
+}

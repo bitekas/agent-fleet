@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "name": "telegram",
+  "status": "placeholder",
+  "line_prefix": "TELEGRAM",
+  "kinds": ["channel", "dm", "thread"],
+  "ids": { "user": "^[0-9]{5,15}$",
+           "conversation": "^-?[0-9]{5,20}$",
+           "message": "^[0-9]{1,12}$" },
+  "watch": { "script": "watch.py", "job": "telegram-watch", "config_env": "TELEGRAM_WATCH_CONFIG",
+             "follow_include": "^TELEGRAM |^DAEMON-|WATCH-GUARD|WATCH-INFO|Traceback|WATCH-ERROR" }
+}

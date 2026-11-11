@@ -1,0 +1,27 @@
+{
+  "title": "agent-fleet one VM",
+  "description": "Create and manage one agent-fleet VM in this project: the instance, its boot disk, its SSH key in instance metadata, its labels and network tag, and the SSH firewall rule. Nothing else.",
+  "stage": "GA",
+  "includedPermissions": [
+    "compute.disks.create",
+    "compute.firewalls.create",
+    "compute.firewalls.delete",
+    "compute.firewalls.get",
+    "compute.firewalls.list",
+    "compute.firewalls.update",
+    "compute.globalOperations.get",
+    "compute.instances.create",
+    "compute.instances.delete",
+    "compute.instances.get",
+    "compute.instances.list",
+    "compute.instances.setLabels",
+    "compute.instances.setMetadata",
+    "compute.instances.setTags",
+    "compute.instances.start",
+    "compute.instances.stop",
+    "compute.networks.updatePolicy",
+    "compute.subnetworks.use",
+    "compute.subnetworks.useExternalIp",
+    "compute.zoneOperations.get"
+  ]
+}

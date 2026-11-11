@@ -1,0 +1,5 @@
+#fixture `launchctl print gui/<uid>/<label>` of a label the domain does not hold,
+#fixture captured on macOS 27.0.1 (stdout and stderr together). The label is the
+#fixture capture's; only the uid is synthetic. services.test.py drops these lines.
+Bad request.
+Could not find service "com.agent-fleet-test.nonexistent" in domain for user gui: 501

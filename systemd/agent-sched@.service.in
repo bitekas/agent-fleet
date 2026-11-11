@@ -1,0 +1,43 @@
+[Unit]
+Description=Scheduler daemon (sched.py) of agent %i
+Documentation=file://@FLEET@/systemd/README.md
+# Never give up. A unit that hit a start limit stays dead with nothing to say so,
+# which is the silence this unit exists to end; RestartSteps below is the brake.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=@AGENTS_ROOT@/%i/@PROJECT_DIR@
+# Set HERE, in the unit, not in a wrapper: the owner guard reads CLAUDE_CONFIG_DIR,
+# and the agents verify a daemon by reading it out of /proc/<pid>/environ.
+Environment=CLAUDE_CONFIG_DIR=@AGENTS_ROOT@/%i/.claude
+Environment=@CONFIG_ENV@=@AGENTS_ROOT@/%i/@CONFIG@
+Environment=PYTHONUNBUFFERED=1
+# No bytecode: the fleet checkout is code the agents user may not write.
+Environment=PYTHONDONTWRITEBYTECODE=1
+# The host settings file fleet install writes (render-units --host-config), so
+# the daemon reads it whatever HOME is. A path, so never set in the env file below.
+Environment=FLEET_HOST_CONFIG=@HOST_CONFIG@
+# Per-agent tunables (SCHED_TICK_SECS ...). Optional. A value here overrides the
+# Environment= lines above, so it holds tunables only, never the two paths.
+EnvironmentFile=-@AGENTS_ROOT@/%i/config/@JOB@.env
+ExecStartPre=@PYTHON@ @FLEET@/systemd/agent-daemons.py rotate @AGENTS_ROOT@/%i/state/daemons/@JOB@.log
+ExecStart=@PYTHON@ -u @SCRIPT@
+# The session reads this log through `agent-daemons.py follow`, never the journal.
+# The directory must exist before the first start (--install creates it).
+StandardOutput=append:@AGENTS_ROOT@/%i/state/daemons/@JOB@.log
+StandardError=append:@AGENTS_ROOT@/%i/state/daemons/@JOB@.log
+Restart=always
+# ⚠️ Exit 0 is the GUARD refusal (not the owner, or another scheduler holds the
+# lock), and the one exit that must NOT be retried: retrying it is a loop that
+# changes nothing. The unit stays inactive and the follower raises DAEMON-ALERT.
+RestartPreventExitStatus=0
+# A crash restarts after 10 s, backing off to 5 min over five restarts, so a
+# crash loop is slow and visible (NRestarts climbs; the follower alerts on it).
+RestartSec=10s
+RestartSteps=5
+RestartMaxDelaySec=5min
+TimeoutStopSec=15s
+
+[Install]
+WantedBy=default.target

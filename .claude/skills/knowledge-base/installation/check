@@ -1,0 +1,194 @@
+#!/usr/bin/env python3
+"""[" -f "${BASH_SOURCE:-$0}" ] || { echo "a Python script: run it with python3" >&2; exit 126; }; exec python3 "${BASH_SOURCE:-$0}" "$@" || exit # sh/bash: hand off to python3 before reading the docstring
+Is this skill installed on this machine, and is it current?
+
+Prints ONE line and exits:
+
+    0  installed, current      -> proceed
+    1  installed, but stale    -> do not proceed; read the line, then re-check
+       (or a leg that could not be measured: the line says NO VERDICT)
+    2  not installed           -> do not proceed; follow INSTRUCTION.md
+
+State 1 is the reason this exists. Absent is loud: there is no directory, and
+the first attempt to write knowledge fails at the filesystem. Stale is silent:
+an agent finds a store, reads it, trusts it, and writes into it.
+
+Two different things put this script in state 1, and the printed LINE is what
+distinguishes them, not the code:
+
+  - this machine's recorded install version is behind SKILL.md's, or no
+    install is recorded for this machine at all. The state file is committed
+    in the install and travels with it; the store root does not, because it
+    lives outside the repository.
+  - the store exists but its index wiring is broken. That is not an install
+    defect and re-running INSTRUCTION.md will not fix it: fix the indexes.
+    It reports do-not-proceed anyway, because an index that lies is read
+    INSTEAD of the directory it describes, so the errors propagate into
+    whatever is done next. Reporting it as OK would be the marker-file lie the
+    convention exists to prevent, one layer out.
+
+ONE ENTRY PER HOST. `.install-state.json` keys its records by hostname
+(`{"hosts": {"<hostname>": {"version": N, ...}}}`) and this check reads only
+this machine's entry: a single `host` field would make every other machine
+read stale, and re-recording it would un-record the machine before it. The
+single-host form an older INSTRUCTION.md wrote is read as one entry, so an
+install recorded that way stays current where it was recorded.
+
+THE SPECIFIC FILES ARE READ FROM THE INSTALL CONTEXT, THROUGH fleetlib, NEVER
+BESIDE THIS SCRIPT. `config.json` and `installation/.install-state.json` live in
+`fleetlib.paths.skill_context('knowledge-base')`; the fleet's skill directory
+holds COMMON files only. `store.root` is expanded and, when relative, resolved
+against the directory of the config.json that names it
+(`paths.resolve_config_path`), never against this script. When no install resolves, the check has looked at nothing
+and says NO VERDICT. The fleet root comes from realpath(__file__): through an
+agent's personal skill link, abspath would name the link's directory.
+`check.test.py` beside this file pins all of it against the fleet's fixture
+install.
+
+It verifies REAL ARTIFACTS, never a marker file alone: config.json parses and
+names a root, that root is a directory, it carries a root index.md, and
+check_indexes.py - the same script the skill tells an agent to run after every
+change - passes over it. A marker file can lie; a tree that satisfies its own
+checker cannot.
+"""
+import json
+import os
+import re
+import socket
+import subprocess
+import sys
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+SKILL = os.path.dirname(HERE)
+FLEET_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(SKILL)))
+
+
+def out(code, msg):
+    print(msg)
+    sys.exit(code)
+
+
+def declared_version():
+    """The version SKILL.md declares. Absent means the skill predates the
+    convention, which is itself a reason to re-install rather than to guess."""
+    with open(os.path.join(SKILL, "SKILL.md"), encoding="utf-8") as f:
+        head = f.read(4096)
+    m = re.search(r"^version:\s*(\d+)\s*$", head, re.M)
+    return int(m.group(1)) if m else 0
+
+
+def recorded_hosts(state_path):
+    """{hostname: entry} from the state file; {} when it is absent.
+
+    Raises ValueError for a file that exists and cannot be read as a record.
+    The single-host form is one entry.
+    """
+    try:
+        with open(state_path, encoding="utf-8") as f:
+            state = json.load(f)
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as e:
+        raise ValueError("%s: %s" % (type(e).__name__, e))
+    if not isinstance(state, dict):
+        raise ValueError("not a JSON object")
+    if isinstance(state.get("hosts"), dict):
+        return state["hosts"]
+    if state.get("host"):
+        return {state["host"]: state}
+    raise ValueError("neither a `hosts` map nor a `host` field")
+
+
+def main():
+    want = declared_version()
+    sys.path.insert(0, os.path.join(FLEET_ROOT, "lib"))
+    try:
+        from fleetlib import paths
+        context = str(paths.skill_context("knowledge-base"))
+    except Exception as e:  # noqa: BLE001 - every fleetlib refusal is one verdict
+        out(1, f"NO VERDICT: no install context for this skill ({type(e).__name__}: "
+               f"{e}). Nothing was looked at, so this says nothing about the store.")
+
+    cfg_path = os.path.join(context, "config.json")
+    state_path = os.path.join(context, "installation", ".install-state.json")
+    try:
+        with open(cfg_path, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except FileNotFoundError:
+        out(2, f"NOT INSTALLED: no {cfg_path}. Run: `install -m 644 "
+               f"{os.path.join(SKILL, 'config.example.json')} {cfg_path}`, then fill it in.")
+    except OSError as e:
+        out(1, f"NO VERDICT: {cfg_path} exists but cannot be read ({e}); the store "
+               f"was never looked at.")
+    except ValueError as e:
+        out(2, f"NOT INSTALLED: {cfg_path} does not parse ({type(e).__name__}: {e})")
+    if not isinstance(cfg, dict):
+        out(2, f"NOT INSTALLED: {cfg_path} is not a JSON object")
+
+    root = (cfg.get("store") or {}).get("root")
+    if not root:
+        out(2, f"NOT INSTALLED: {cfg_path} does not set store.root")
+    try:
+        # resolve_config_path expands ~ and $VAR first, then resolves a relative
+        # value against the config file's directory.
+        root = str(paths.resolve_config_path(root, cfg_path))
+    except Exception as e:  # noqa: BLE001 - an unexpandable value names no store
+        out(2, f"NOT INSTALLED: store.root {root!r} in {cfg_path} does not expand "
+               f"({type(e).__name__}: {e})")
+
+    me = socket.gethostname()
+    try:
+        hosts = recorded_hosts(state_path)
+    except ValueError as e:
+        hosts, unreadable = None, str(e)
+
+    if not os.path.isdir(root):
+        elsewhere = ""
+        if hosts and me not in hosts:
+            elsewhere = (f" It is recorded as installed on {', '.join(sorted(hosts))}; the "
+                         f"state file travels with the install and the store does not, so "
+                         f"this machine needs its own store.")
+        out(2, f"NOT INSTALLED: no store at {root}.{elsewhere}")
+    index = os.path.join(root, "index.md")
+    if not os.path.isfile(index):
+        out(2, f"NOT INSTALLED: {root} exists but has no index.md, so it is a "
+               f"directory and not a knowledge store.")
+    if os.path.getsize(index) == 0:
+        out(2, f"NOT INSTALLED: the root index at {index} is empty.")
+
+    # Artifacts are present. Only this machine's record can still be wrong.
+    if hosts is None:
+        out(1, f"STALE: {state_path} is unreadable ({unreadable}). Redo the record "
+               f"step in installation/INSTRUCTION.md.")
+    if me not in hosts:
+        where = f" (recorded on: {', '.join(sorted(hosts))})" if hosts else ""
+        out(1, f"STALE: a store exists at {root}, but no install is recorded for this "
+               f"machine ({me}){where}; SKILL.md declares version {want}. Redo the "
+               f"record step in installation/INSTRUCTION.md.")
+    try:
+        have = int(hosts[me].get("version", -1))
+    except (AttributeError, TypeError, ValueError):
+        have = -1
+    if have < want:
+        out(1, f"STALE: installed version {have} on {me}, SKILL.md declares {want}. "
+               f"Re-run installation/INSTRUCTION.md.")
+    if have > want:
+        out(1, f"STALE: installed version {have} on {me} is NEWER than SKILL.md's {want}. "
+               f"The fleet checkout is older than the one that recorded the install; "
+               f"check `fleet status`.")
+
+    # The strongest artifact test: the store satisfies the skill's own checker.
+    checker = os.path.join(SKILL, "check_indexes.py")
+    p = subprocess.run([sys.executable, checker, root], capture_output=True, text=True)
+    if p.returncode != 0:
+        detail = " | ".join(l.strip() for l in p.stdout.splitlines() if l.strip())
+        out(1, f"STALE: installed and current (version {want}), but the store at "
+               f"{root} fails check_indexes.py. This is NOT a version problem and "
+               f"re-installing will not fix it - fix the indexes: {detail}")
+
+    out(0, f"OK: installed and current (version {want}) on {me}, store at {root}, "
+           f"indexes clean")
+
+
+if __name__ == "__main__":
+    main()

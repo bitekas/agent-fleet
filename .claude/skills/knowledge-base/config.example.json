@@ -1,0 +1,24 @@
+{
+  "_comment": [
+    "TEMPLATE. Copy to config.json in this skill's install context (the directory",
+    "`fleet where knowledge-base` prints) and replace every placeholder.",
+    "",
+    "One key, because one thing about a knowledge store is deployment-specific:",
+    "where it is. Everything else about it - the index rule, the file format,",
+    "what is worth writing down, the remote-store discipline - is mechanism and",
+    "lives in SKILL.md, and the human layer (who shares this store, what may be",
+    "written in it, what may never leave it, its remote) is prose and lives in",
+    "CONTEXT.md beside config.json.",
+    "",
+    "check_indexes.py deliberately does NOT read this file: it takes the root as",
+    "an argument, which is what keeps it runnable against a throwaway fixture",
+    "tree with no install present. installation/check is the reader.",
+    "",
+    "JSON has no comments, so every _comment key here is documentation. Leave",
+    "them in your config.json or delete them; nothing reads them."
+  ],
+  "store": {
+    "_comment": "Absolute path to the knowledge store's root directory. It is deliberately OUTSIDE any repository and outside any single agent's home directory, so that one store serves every agent on the machine rather than each keeping its own. ~ and $VAR / ${VAR:-default} are expanded, and a relative path resolves against the directory of this config file, never against the skill's. The path is not created for you: installation/INSTRUCTION.md creates it together with its root index.md, and creates nothing else - a store scaffolded with empty topic folders reports what someone planned to learn instead of what is known. Point this somewhere with no other purpose: everything under it is read as knowledge.",
+    "root": "/path/to/your/knowledge-base"
+  }
+}

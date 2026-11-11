@@ -1,0 +1,293 @@
+#!/usr/bin/env python3
+"""[" -f "${BASH_SOURCE:-$0}" ] || { echo "a Python script: run it with python3" >&2; exit 126; }; exec python3 "${BASH_SOURCE:-$0}" "$@" || exit # sh/bash: hand off to python3 before reading the docstring
+Is this skill installed, and is it current?
+
+Prints `note:` lines for anything it deliberately did not measure, then ONE
+verdict line, and exits:
+
+    0  installed, current      -> proceed
+    1  installed, but stale    -> re-run INSTRUCTION.md, then re-check
+    2  not installed           -> follow INSTRUCTION.md
+
+State 1 is the reason this exists. Absent is loud: there is no key, and the
+first call dies naming it. Stale is silent - everything runs, against a config
+that has drifted, or under an install nobody has revisited since the procedure
+changed.
+
+================================================================================
+EVERY LEG PERFORMS THE OPERATION THE SKILL PERFORMS
+================================================================================
+None of these legs ask the filesystem a question about an inode. Each one does
+the thing this skill does, because every stat(2)/access(2)-class test is GREEN
+on an artifact the skill cannot use.
+
+  * PyJWT is not imported and inspected - it SIGNS. `import jwt` succeeds
+    without the cryptography backend, and every RS256 signature then dies at
+    `NotImplementedError: Algorithm 'RS256' could not be found`, which is a
+    runtime failure inside the first real call. So this leg generates a
+    throwaway RSA key and signs an assertion with it. Measured on this machine:
+    keygen plus encode, under 0.1s.
+  * The service-account key is not stat'ed - it is OPENED, PARSED, and USED TO
+    SIGN. A key that is present, 2400 bytes and unreadable passes exists() and
+    getsize() and fails at the first mint; a key whose `private_key` was
+    truncated by a bad copy-paste parses as JSON and fails the same way. Signing
+    with the real key is the whole of what this skill does offline, so it is the
+    only test whose green means the credential works.
+  * config.json is OPENED, not exists()-tested. exists() collapses every errno
+    to False, so a config the process cannot reach reports as "not installed
+    here" - a wrong diagnosis that sends the operator to write a file that is
+    already sitting there.
+
+⚠️ THE MODE CHECK IS THE ONE DELIBERATE EXCEPTION, AND IT IS NOT AN AVAILABILITY
+TEST. `0600` on the key is a SECURITY property, and the only instrument for it
+is the inode. It therefore never substitutes for the open above - both run, in
+that order - and a wrong mode is exit 1 (installed, repairable) rather than
+exit 2, because a world-readable key works perfectly and that is exactly the
+problem.
+
+================================================================================
+NEGATIVE CONTROLS, AND THE STATE THEY MUST NOT COLLAPSE
+================================================================================
+Build a throwaway service-account key (any RSA key in the service-account JSON
+shape) in a scratch directory, point a copy of config.json at it with
+GSHEETS_CONFIG, and run this script once per control:
+
+  1. `chmod 000` the throwaway key      -> exit 2, naming EACCES, NOT "missing"
+  2. delete it                          -> exit 2, naming the path
+  3. blank its `private_key`            -> exit 2, saying the key cannot sign
+  4. `chmod 0644` it                    -> exit 1, naming chmod 0600
+  5. remove a required key from config  -> exit 2, naming THAT key
+  6. run with a PyJWT that cannot do RS256 -> exit 2, naming the install line
+
+⚠️ IF ANY CONTROL PASSES, ISSUE NO VERDICT ABOUT THIS INSTALL. A leg that stays
+green under its own control is not measuring anything, and reporting OK launders
+that into a confident answer. Three outcomes, and only two of them are a
+verdict: control red (the leg works), control green (the leg is decoration -
+report INCONCLUSIVE), control never reached because an earlier leg exited first
+(also INCONCLUSIVE - the printed line names which leg spoke, so read it).
+
+Controls 1-6 were run against this file and each produced the exit above.
+
+================================================================================
+WHAT THIS CANNOT MEASURE OFFLINE, AND WHY IT SAYS SO
+================================================================================
+THE DOMAIN-WIDE DELEGATION GRANT HAS NO ARTIFACT ON THIS MACHINE. It is an entry
+in a Workspace admin console - the service account's client id plus the scope
+list - and nothing on disk changes when it is granted or revoked. A key that
+signs perfectly mints NOTHING without it (`unauthorized_client`).
+
+So the offline run prints a `note:` saying the delegation is unmeasured and
+names the one instrument that measures it, and `--online` runs that instrument:
+it mints a token and asks Drive who it is. An offline OK is a claim about the
+ARTIFACTS ON THIS MACHINE and never about the grant; reporting it as "installed"
+without the note would be the marker-file lie wearing a different hat.
+
+`.install-state.json` is committed like everything else, so it travels to
+machines that never ran the install. That is why it is keyed by HOST and then by
+AGENT: the machine-wide half of this install is PyJWT, and the per-agent half is
+one key file per agent, so a single flat `version` would make every agent but
+the last one recorded read as installed.
+"""
+import argparse
+import errno
+import importlib.util
+import json
+import os
+import socket
+import stat
+import sys
+
+# realpath: run through an agent's skill link, the unresolved path is the link
+# directory, and gsheets.py must be imported from the fleet tree it lives in.
+HERE = os.path.dirname(os.path.realpath(__file__))
+SKILL = os.path.dirname(HERE)
+
+NOTES = []
+
+
+def out(code, msg):
+    for note in NOTES:
+        print(f"note: {note}")
+    print(msg)
+    sys.exit(code)
+
+
+def errname(e):
+    """A legible name for an OSError's errno. It CAN be None - TimeoutError and
+    the ConnectionError family are OSErrors that may carry none - and
+    `errorcode.get(None)` renders `(None: None)` in the sentence the operator is
+    about to act on."""
+    if e.errno is None:
+        return type(e).__name__
+    return errno.errorcode.get(e.errno, str(e.errno))
+
+
+def whoami_user():
+    """This process's real user NAME, resolved rather than read from $USER.
+
+    ⚠️ NEVER PUT A LITERAL `$USER` IN A REMEDIATION: under systemd-run, `su`
+    without `-` and `docker exec` it is unset, and the one line the already
+    blocked reader copy-pastes then fails."""
+    try:
+        import pwd
+        return pwd.getpwuid(os.getuid()).pw_name
+    except Exception:  # noqa: BLE001 - a uid with no passwd entry is routine in a container
+        return os.environ.get("USER") or f"uid {os.getuid()}"
+
+
+def declared_version():
+    with open(os.path.join(SKILL, "SKILL.md"), encoding="utf-8") as f:
+        head = f.read(4096)
+    import re
+    m = re.search(r"^version:\s*(\d+)\s*$", head, re.M)
+    return int(m.group(1)) if m else 0
+
+
+def load_helper():
+    """Import gsheets.py itself, so this check resolves the config and the key
+    path through THE SAME CODE the skill runs. A second resolver here would be a
+    second copy of the rule, and the copy that is fixed and the copy that is not
+    is how a check keeps passing against a path nothing uses."""
+    spec = importlib.util.spec_from_file_location(
+        "gsheets_for_check", os.path.join(SKILL, "gsheets.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def main():
+    ap = argparse.ArgumentParser(add_help=True)
+    ap.add_argument("--online", action="store_true",
+                    help="also mint a token and ask Drive who it is - the only "
+                         "instrument that can see the delegation grant")
+    args = ap.parse_args()
+
+    want = declared_version()
+
+    try:
+        gsheets = load_helper()
+    except Exception as e:  # noqa: BLE001
+        out(2, f"NOT INSTALLED: gsheets.py beside this directory will not import "
+               f"({type(e).__name__}: {e}).")
+
+    # --- config -----------------------------------------------------------
+    try:
+        cfg = gsheets.load_config()
+    except gsheets.ConfigError as e:
+        out(2, f"NOT INSTALLED: {e}")
+
+    # --- PyJWT must actually SIGN -----------------------------------------
+    try:
+        import jwt
+    except ImportError as e:
+        out(2, f"NOT INSTALLED: PyJWT is not importable ({e}). Run: "
+               f"`python3 -m pip install -r {os.path.join(HERE, 'requirements.txt')}`.")
+    try:
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        throwaway = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        pem = throwaway.private_bytes(serialization.Encoding.PEM,
+                                      serialization.PrivateFormat.PKCS8,
+                                      serialization.NoEncryption()).decode()
+        jwt.encode({"iss": "check"}, pem, algorithm="RS256")
+    except Exception as e:  # noqa: BLE001
+        out(2, f"NOT INSTALLED: PyJWT imports but cannot sign RS256 "
+               f"({type(e).__name__}: {e}), so every token mint will fail inside the "
+               f"first call. Its cryptography backend is missing. Run: "
+               f"`python3 -m pip install -r {os.path.join(HERE, 'requirements.txt')}`.")
+
+    # --- the key: opened, parsed, and used to sign ------------------------
+    path = gsheets.key_path(cfg)
+    try:
+        key = gsheets.load_key(cfg)
+    except gsheets.CredentialError as e:
+        out(2, f"NOT INSTALLED: {e}")
+    try:
+        jwt.encode({"iss": key["client_email"]}, key["private_key"], algorithm="RS256")
+    except Exception as e:  # noqa: BLE001
+        out(2, f"NOT INSTALLED: the key at {path} parses but cannot sign "
+               f"({type(e).__name__}: {e}) - its private_key is truncated or is not a "
+               f"PEM private key. Re-download the service-account key and install it "
+               f"with `install -m 0600 <downloaded>.json {path}`.")
+
+    # --- mode: a security property, and the only instrument is the inode ---
+    mode = stat.S_IMODE(os.stat(path).st_mode)
+    if mode & 0o077:
+        out(1, f"STALE: the service-account key at {path} is mode {mode:04o} - readable "
+               f"by users other than {whoami_user()}. It signs as a Workspace user and "
+               f"is a live credential for as long as it exists. Run: "
+               f"`chmod 0600 {path}`.")
+    parent_mode = stat.S_IMODE(os.stat(os.path.dirname(path)).st_mode)
+    if parent_mode & 0o077:
+        out(1, f"STALE: the directory holding the key, {os.path.dirname(path)}, is mode "
+               f"{parent_mode:04o}. Run: `chmod 0700 {os.path.dirname(path)}`.")
+
+    # --- the recorded install ---------------------------------------------
+    # .install-state.json is the INSTALL's file: it lives in the install context
+    # (fleetlib), beside the install's config.json and CONTEXT.md, never in the
+    # fleet tree.
+    host = socket.gethostname()
+    who = gsheets.agent(cfg)
+    try:
+        STATE = str(gsheets._fleetlib_paths().skill_context("google-spreadsheet")
+                    / "installation" / ".install-state.json")
+    except Exception as e:  # noqa: BLE001
+        out(1, f"STALE: the install context does not resolve, so no .install-state.json "
+               f"can be read ({type(e).__name__}: {e}).")
+    try:
+        with open(STATE, encoding="utf-8") as f:
+            state = json.load(f)
+    except FileNotFoundError:
+        out(1, f"STALE: installed, but no .install-state.json records which version "
+               f"(SKILL.md declares {want}). Re-run installation/INSTRUCTION.md.")
+    except OSError as e:
+        out(1, f"STALE: .install-state.json at {STATE} cannot be read ({errname(e)}: "
+               f"{e.strerror or e}). Run `chmod 0644 {STATE}`, or delete it and re-run "
+               f"installation/INSTRUCTION.md.")
+    except ValueError as e:
+        out(1, f"STALE: .install-state.json at {STATE} does not parse ({e}). Delete it "
+               f"and re-run installation/INSTRUCTION.md.")
+
+    recorded = ((state.get("hosts") or {}).get(host) or {}).get(who)
+    if not recorded:
+        out(1, f"STALE: .install-state.json records no install for agent '{who}' on "
+               f"{host} (it records {sorted((state.get('hosts') or {}).get(host, {}))} "
+               f"here). The state file travels with the repo; the install does not. "
+               f"Re-run installation/INSTRUCTION.md.")
+    have = int(recorded.get("version", -1))
+    if have < want:
+        out(1, f"STALE: agent '{who}' on {host} has version {have}, SKILL.md declares "
+               f"{want}. Re-run installation/INSTRUCTION.md.")
+    if have > want:
+        out(1, f"STALE: agent '{who}' on {host} has version {have}, NEWER than "
+               f"SKILL.md's {want}. The fleet tree is older than the install it "
+               f"recorded; upgrade the fleet first.")
+
+    subject = gsheets.default_subject(cfg)
+
+    # --- the grant, which has no artifact ---------------------------------
+    if not args.online:
+        NOTES.append(f"the domain-wide delegation grant is NOT measured offline - it has "
+                     f"no artifact on this machine. `{os.path.join(SKILL, 'gsheets.py')} "
+                     f"whoami` is the only instrument that can see it.")
+        out(0, f"OK: installed and current (version {want}) for agent '{who}' on {host}; "
+               f"key signs, acting as {subject}. Delegation unmeasured - see the note.")
+
+    try:
+        who_drive = gsheets.about(cfg=cfg).get("user", {})
+    except gsheets.MintError as e:
+        out(2, f"NOT INSTALLED: the artifacts are all in place, but the mint was refused: "
+               f"{e}")
+    except gsheets.ApiError as e:
+        out(2, f"NOT INSTALLED: a token minted (so the delegation exists) but Drive "
+               f"refused the call: {e}")
+    seen = (who_drive.get("emailAddress") or "").strip()
+    if seen.lower() != subject.lower():
+        out(2, f"NOT INSTALLED: a token minted, but it acts as {seen}, not the configured "
+               f"{subject}. Fix identity.subject_template in {cfg['_path']}.")
+    out(0, f"OK: installed and current (version {want}) for agent '{who}' on {host}; "
+           f"key signs, delegation granted, acting as {seen}.")
+
+
+if __name__ == "__main__":
+    main()

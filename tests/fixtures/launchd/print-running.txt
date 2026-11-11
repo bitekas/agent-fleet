@@ -1,0 +1,72 @@
+#fixture `launchctl print gui/<uid>/<label>` of a running KeepAlive LaunchAgent,
+#fixture captured on macOS 27.0.1 (Apple Silicon) and cut after the resource
+#fixture coalition block. The layout - tabs, blank lines, `=` and `=>`, the order
+#fixture of the keys, the three environment blocks and the nested block with its
+#fixture own `state =` and `active count =` - is the capture's; the label, paths,
+#fixture arguments, environment, pid and ids are synthetic. lib/fleetlib/services.test.py
+#fixture drops these #fixture lines.
+gui/501/com.agent-fleet-test.sched.ada = {
+	active count = 1
+	path = /tmp/fleet-fixture/home/Library/LaunchAgents/com.agent-fleet-test.sched.ada.plist
+	type = LaunchAgent
+	state = running
+
+	program = /opt/homebrew/bin/python3
+	arguments = {
+		/opt/homebrew/bin/python3
+		/tmp/fleet-fixture/agents/fleet/systemd/agent-daemons.py
+		exec
+		--log
+		/tmp/fleet-fixture/agents/ada/state/daemons/sched.log
+		--
+		/opt/homebrew/bin/python3
+		-u
+		/tmp/fleet-fixture/agents/fleet/.claude/skills/scheduled-tasks/sched.py
+	}
+
+	working directory = /tmp/fleet-fixture/agents/ada/product
+
+	stdout path = /tmp/fleet-fixture/agents/ada/state/daemons/sched.log
+	stderr path = /tmp/fleet-fixture/agents/ada/state/daemons/sched.log
+	inherited environment = {
+		SSH_AUTH_SOCK => /private/tmp/com.apple.launchd.fixture/Listeners
+	}
+
+	default environment = {
+		PATH => /usr/bin:/bin:/usr/sbin:/sbin
+	}
+
+	environment = {
+		OSLogRateLimit => 64
+		CLAUDE_CONFIG_DIR => /tmp/fleet-fixture/agents/ada/.claude
+		SCHED_CONFIG => /tmp/fleet-fixture/agents/ada/config/scheduler.json
+		PATH => /opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin
+		XPC_SERVICE_NAME => com.agent-fleet-test.sched.ada
+	}
+
+	domain = gui/501 [100015]
+	asid = 100015
+	minimum runtime = 10
+	exit timeout = 5
+	runs = 1
+	pid = 2132
+	immediate reason = speculative
+	forks = 2
+	execs = 1
+	initialized = 1
+	trampolined = 1
+	started suspended = 0
+	proxy started suspended = 0
+	checked allocations = 0 (queried = 1)
+	checked allocations reason = no host
+	checked allocations flags = 0x0
+	last exit code = (never exited)
+
+	resource coalition = {
+		ID = 2609
+		type = resource
+		state = active
+		active count = 1
+		name = com.agent-fleet-test.sched.ada
+	}
+}

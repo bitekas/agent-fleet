@@ -1,0 +1,34 @@
+{
+  "_comment": [
+    "TEMPLATE. Copy to config.json in this skill's install context",
+    "(`fleet where restart config.json` prints the path) and replace every placeholder.",
+    "",
+    "Every machine- and repo-specific name the wind-down needs. SKILL.md names",
+    "none of them: it refers to the keys below, so the same wind-down order",
+    "serves a differently-wired machine by editing config.json alone.",
+    "",
+    "Nothing here is read by a script - this skill owns none. Every value is",
+    "read by the AGENT and typed into a shell, which is why a wrong one is",
+    "expensive: a wrong teardown command leaves servers running through a",
+    "reboot, and a wrong reattach command is handed to a user who then cannot",
+    "get back in.",
+    "",
+    "No credential appears here. JSON has no comments, so every _comment key",
+    "is documentation; keep or delete them in your config.json."
+  ],
+  "service": {
+    "_comment": "The agent's own service unit and the two commands around it. 'unit' is what a reboot restarts, and it is the reason a reboot picks up new MCP servers, PATH changes and config edits at all - naming the wrong unit makes the whole point of the skill false without anything failing. 'reattach_command' is what the USER runs after boot to get back to the session; it is spoken to a person, so a wrong value is discovered by them and not by you. 'reboot_command' is the wrapper that actually reboots; point it at a wrapper rather than a bare `reboot` so the authorization for it lives in one auditable place. This file is install-wide while 'unit' and 'reattach_command' are per agent, so write both with the token <agent> where the agent's name goes: it is not a placeholder to fill in here, and the agent reading the value puts its own name in its place. The values below are the fleet's unit and attach command; on macOS 'unit' is the session job's launchd label, com.agent-fleet.session.<agent> (host.json launchd_prefix); 'reboot_command' reboots the whole machine and names no agent.",
+    "unit": "claude-agent-<agent>.service",
+    "reattach_command": "claude-attach <agent>",
+    "reboot_command": "your-restart-command"
+  },
+  "stack": {
+    "_comment": "Bringing the project's local servers down. 'teardown_command' is the SCOPED one: it stops the servers belonging to the checkout it is run in, by PID file, and is what any non-rebooting caller should use. 'stray_process_patterns' are `pkill -f` patterns for what the scoped teardown misses; they match by command line across the WHOLE MACHINE, so they take out every other worktree's stack and any other session's in-flight run. SKILL.md step 1 states why that is acceptable here and nowhere else. Keep this list as short as the servers you actually run: each extra pattern widens a blast radius that is already machine-wide. An install with no dev stack sets 'teardown_command' to an empty string and 'stray_process_patterns' to an empty list, and step 1 skips both.",
+    "teardown_command": "./your-dev-script.sh down",
+    "stray_process_patterns": ["your-bundler start", "your-emulator-suite", "your-test-runner"]
+  },
+  "handoff": {
+    "_comment": "The one-shot note the wind-down writes for the next session to read and delete. A relative path resolves against the session's working directory (the directory the service unit starts it in); an absolute or ~ path is used as written. When that location is inside a repository the file MUST be gitignored there: it is session state, not documentation, and a committed one is read by every other checkout as if it were about them. Add it to .gitignore before the first run.",
+    "file": ".restart-handoff.md"
+  }
+}

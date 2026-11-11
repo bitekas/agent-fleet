@@ -1,0 +1,66 @@
+{
+  "_comment": [
+    "TEMPLATE. Copy it to config.json in this skill's install context (the",
+    "directory `fleet where notion-workspace` prints) and replace every",
+    "placeholder. A relative path in it resolves against that directory.",
+    "",
+    "Everything workspace- and identity-specific this skill needs. SKILL.md names",
+    "none of it: it refers to the keys below, so the same mechanics serve any",
+    "Notion workspace.",
+    "",
+    "This file holds ids and the PATH to each credential, never a credential. A",
+    "leaked config is then embarrassing rather than exploitable.",
+    "",
+    "WHAT IS DELIBERATELY NOT HERE, and why, because the next person will want to",
+    "add it back: the API root (https://api.notion.com) and the pinned API version",
+    "(Notion-Version: 2022-06-28). Both are identical for every install, which",
+    "makes them MECHANISM, and mechanism lives in SKILL.md. There is also no",
+    "script in this skill to point at a mock server, so a key for either would",
+    "have exactly one correct value while teaching an adopter that it needs a",
+    "decision. A sibling skill does carry an api_base key; it has a script whose",
+    "tests can redirect it, and this one does not.",
+    "",
+    "There is likewise no key for a target page id. Every recipe takes $PAGE_ID",
+    "per call, because there is no such thing as THE page this skill writes to.",
+    "The one page id that appears anywhere in this skill is the worked example",
+    "behind the upload verification, and it lives in CONTEXT.md as provenance:",
+    "nothing reads it, and an adopter has no value to put there.",
+    "",
+    "Every key below is REQUIRED and installation/check refuses to report OK",
+    "without it, except the two marked optional. Nothing here carries a silent",
+    "default: a guessed identity value points an agent at the wrong workspace,",
+    "which is the one failure in this skill that looks exactly like success.",
+    "",
+    "JSON has no comments, so every _comment key here is documentation. Leave",
+    "them in your config.json or delete them; nothing reads them."
+  ],
+  "workspace": {
+    "_comment": "Which Notion workspace this config is FOR. Both values come from one call: notion-fetch with id \"self\" (the MCP path) or GET /v1/users/me (the token path), which returns bot.workspace_name and bot.workspace_id. installation/check --online compares them against the live token, because nothing else keeps this file and the key file in step and the mismatch is otherwise silent.",
+    "name": "Acme Inc",
+    "id": "00000000-1111-2222-3333-444444444444"
+  },
+  "mcp": {
+    "_comment": "The hosted MCP connector: who it authenticates as, and the name the client records it under. acts_as is a PERSON, not a bot, so everything the MCP writes is attributed to that person in Notion's UI. Get name/email/user_id from notion-fetch {\"id\":\"self\"}. connector_name is what your MCP client calls the connection (installation/check looks for it in the client's own record); an install running a self-hosted Notion MCP server instead names that server here.",
+    "connector_name": "example.ai Notion",
+    "acts_as": {
+      "name": "Jane Doe",
+      "email": "jane.doe@example.com",
+      "user_id": "00000000-1111-2222-3333-555555555555"
+    }
+  },
+  "bot": {
+    "_comment": "The integration's own identity: what the TOKEN path writes as. name and user_id are the `name` and `id` of GET /v1/users/me. owner_user_id is bot.owner.user.id from the same response, i.e. the Notion user who owns the integration. It is commonly the same uuid as mcp.acts_as.user_id, and that is worth recording rather than deduping: where they match, the two access paths' audit trails trace back to one person, and where they do not, an automation write is attributable to someone other than the connector's user.",
+    "name": "acme-agent",
+    "user_id": "00000000-1111-2222-3333-666666666666",
+    "owner_user_id": "00000000-1111-2222-3333-555555555555"
+  },
+  "token": {
+    "_comment": "Path to the file holding the integration token. The token itself never appears here, in CONTEXT.md, or anywhere else in this skill: this is a path and only a path. Create the file mode 600, containing the token and nothing else (Notion's current format is an `ntn_` prefix and 50 characters, measured 2026-09-03). Obtain it from the integration's own settings page in Notion, or from the OAuth exchange SKILL.md documents. installation/check expands ${VAR:-default}, $VAR / ${VAR} and a leading ~, so an absolute path, ~/store/key and ${FLEET_SECRETS_DIR:-$HOME/.fleet-secrets}/key are all legal. Keep it OUTSIDE any checkout: a path inside one is a different file in every worktree, so the credential is missing from all but one of them. `installation/check --token-path` is the one resolver, and SKILL.md's recipes read the path from it rather than embedding one.",
+    "path": "${FLEET_SECRETS_DIR:-$HOME/.fleet-secrets}/your-notion-integration.key"
+  },
+  "oauth": {
+    "_comment": "Only needed to RE-AUTHORIZE the integration. credentials_path names a JSON file carrying clientId / clientSecret / code, mode 600, obtained from the integration's settings page; set it to null if this install keeps them elsewhere, and check will say so instead of failing. redirect_uri is the exact value registered with the integration: OPTIONAL only in the sense that check tolerates null, because an exchange attempted without it FAILS AND REVOKES THE CODE, so a null here means the next re-authorization has to stop and ask whoever configured the integration. Write the real value in as soon as you learn it; do not guess one.",
+    "credentials_path": "${FLEET_SECRETS_DIR:-$HOME/.fleet-secrets}/your-notion-oauth.json",
+    "redirect_uri": "https://example.com/oauth/notion/callback"
+  }
+}

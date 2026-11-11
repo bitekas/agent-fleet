@@ -1,0 +1,11 @@
+# Rendered by fleet install from systemd/agent-daemons-refresh.timer at <tag>. Edit the template, not this file.
+[Unit]
+Description=Every 5 minutes: agent-daemons.py refresh
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

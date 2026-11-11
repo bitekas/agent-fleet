@@ -1,0 +1,1926 @@
+#!/usr/bin/env python3
+"""[" -f "${BASH_SOURCE:-$0}" ] || { echo "a Python script: run it with python3" >&2; exit 126; }; exec python3 "${BASH_SOURCE:-$0}" "$@" || exit # sh/bash: hand off to python3 before reading the docstring
+fleet - the agent fleet's host command.
+
+  fleet install --agents-root <dir> [--units none|refresh|all] [--label-prefix <prefix>]
+                [--part all|checkout|agents]
+  fleet link <agent> [--from <dir>]
+  fleet link --config-dir <dir> --install <install root> [--from <dir>]
+  fleet unlink <agent> | --config-dir <dir>
+  fleet pin-daemons <agent> --from <dir> | --clear
+  fleet upgrade <tag> [--rollback] [--reviewed-outside] [--ack-leak <sha>[,<sha>...]]
+  fleet status [<agent>...]
+  fleet where <skill> [<file>]
+  fleet settings [<dotted.key>]
+  fleet check-all [<agent>]
+  fleet leak-scan --staged | --range <a>..<b> | --history | --tree <dir>
+  fleet adopt <project dir>
+  fleet session-check [--project <dir>]
+  fleet identities [--add <email>]
+
+Exit codes, every subcommand: 0 ok; 1 drift or finding; 2 usage error or
+refused, and then NOTHING CHANGED; 3 environment fault. A mutating subcommand
+prints one line per thing it changed, or `nothing changed`; a repeat is a
+success, so install, link, unlink, pin-daemons and upgrade are safe to run twice.
+
+A FLEET TREE is a directory holding both bin/fleet and lib/fleetlib/: the host
+checkout (host.json `fleet_checkout`), or any clone or worktree. A link is the
+fleet's when its target lies inside one.
+
+Seams (each names the program a call goes through; tests inject fakes here):
+  FLEET_SYSTEMCTL  systemctl            FLEET_GH   gh          FLEET_NPM  npm
+  FLEET_LAUNCHCTL  launchctl (macOS)    FLEET_PROC  the /proc root `status` reads
+fleetlib's own: FLEET_HOST_CONFIG (host.json), FLEET_CONTEXT_ROOT (install root),
+FLEET_SERVICE_BACKEND (systemd or launchd; default by platform). Every service
+manager call and process read goes through fleetlib.services.
+
+LOAD-BEARING PROPERTIES - each is here because removing it opens a hole:
+
+  * REFUSE BEFORE THE FIRST WRITE. Every subcommand computes its whole plan and
+    checks every refusal before it changes anything, so exit 2 really means
+    nothing changed. A check made halfway through would leave a half-linked
+    agent behind a message that says "refused".
+
+  * REPLACE A PATH, NEVER WRITE THROUGH IT. host.json, rendered units and
+    drop-ins are written to a temp file in the destination directory and
+    os.replace'd over the path; links are made the same way. A unit path can
+    be a symlink into another tree (a hand install links its unit files from
+    wherever they were written), and open(path, 'w') follows the link and
+    overwrites THAT tree's file instead of replacing the link.
+
+  * DISABLE BEFORE, ENABLE AFTER, AND NEVER START, STOP OR RESTART. Before a
+    unit file is replaced, `install` disables the unit and every enabled
+    instance of it (which removes the .wants/ links naming the old file and
+    stops nothing); after daemon-reload it enables the same set, so the new
+    links name the rendered file. Without the disable, the .wants/ links keep
+    pointing into the old tree; with a restart, an install would bounce every
+    agent's daemons. The one exception is `enable --now` of a timer it just
+    rendered. (`pin-daemons` restarts the units it pins: that is its job.)
+    Under launchd there are no links: `install` replaces the plists and
+    nothing else, launchd reading a job's plist at its next bootstrap. The one
+    exception is the refresh job, bootstrapped when it is not loaded and booted
+    out and in again when its plist changed.
+
+  * A PINNED PLIST IS NEVER RE-RENDERED BY INSTALL. Under launchd a pin lives in
+    the job's plist itself (marked `fleet-pin:`), not in a drop-in beside it, so
+    an install that rendered over it would unpin the agent silently. `install`
+    keeps it and says so; `pin-daemons <agent> --clear` re-renders it.
+
+  * LINK AND UNLINK TOUCH ONLY FLEET LINKS. Every agent's .claude/skills/
+    already holds the harness's `synced/` directory, and may hold anything
+    else; an entry that is not a symlink into a fleet tree is never removed
+    and never replaced - `link` refuses instead.
+
+  * WHO OWNS THE CHECKOUT INSTALLS IT, AND ONLY THAT USER UPGRADES IT. With an
+    administrator, the administrator owns the fleet checkout, outside the
+    agents root, and the agents user only reads it: a user that could change
+    one file in it, or rename it away from a directory above it, could run its
+    own code under every agent's supervision. So `install --part checkout`
+    (hooks, sub-packages, read-only mode) and `upgrade` refuse anyone but the
+    checkout's owner, and `install --part agents` (host settings, claims,
+    links, gitleaks, units) refuses the owner and refuses a checkout the
+    running user can change (fleetlib.paths.tree_changeable, the rule
+    install-agent-fleet's verify-privileges.py FAILs by). `--part all` is one
+    user doing both, and requires that it own the checkout. On macOS the same
+    split holds: the agents user is a standard account that logs in
+    automatically, and the administrator owns the checkout and installs the
+    agents' LaunchDaemons.
+
+  * NOTHING THIS COMMAND RUNS WRITES INTO THE CHECKOUT. Python is told not to
+    write bytecode (PYTHONDONTWRITEBYTECODE, inherited by every subprocess, and
+    in every rendered unit and plist): a __pycache__ written by the agents user
+    into a checkout it may not change is either refused or, where it can write,
+    a file of its own inside the code it runs. bin/checkout-writes.test.py runs
+    the commands against a writable copy and finds nothing new in it.
+
+  * UPGRADE RUNS THE CURRENT CHECKOUT'S CODE, NEVER THE TARGET'S, until every
+    precondition has passed. The leak backstop is the host checkout's own
+    leak_gate.py at the tag it is on now; nothing from the target range is
+    executed before the checkout, so a commit nobody reviewed cannot run on
+    this host by being inspected.
+
+  * THE IDENTITIES UPGRADE TRUSTS ARE THE CHECKOUT OWNER'S FILE, NEVER A
+    MANIFEST. An install manifest is the agents user's to edit, so an identity
+    read from it would let the party the outside-work refusal guards against
+    switch it off. `upgrade` trusts only identities.json beside its user's host
+    settings, written by `install --part checkout|all` from the installs'
+    upstream.identity when there is none yet, and by `fleet identities --add`;
+    a manifest identity the file lacks is ignored and named. With no file, the
+    one-user form (the same user owns the checkout and the agents root, where
+    nothing could keep the agents from editing either) trusts the manifests as
+    it always has; any other form is refused, naming the file. A contributing
+    host (below) that ends up trusting no identity is refused, naming
+    `fleet identities --add`: every commit would be outside work.
+
+  * OUTSIDE WORK IS A CONTRIBUTING HOST'S CHECK. The refusal exists for a host
+    whose agents commit to the fleet and authenticate to GitHub as its owner:
+    there, a commit not made by the install's own identity is someone else's
+    work and needs the owner's review. A host is contributing when a local
+    install declares `upstream` OR the identities file names anyone. Without
+    the first term the check is skipped on a contributing host that never
+    wrote the file; without the second, an agent switches the check off by
+    deleting `upstream` from its manifest (the agents user's to edit), which
+    the checkout owner's file outranks. A host that is neither trusts the
+    release tag and the checks above and below it (annotated, published on
+    origin, on origin/main, CI green, the leak backstop) and skips the step
+    with one printed line. Applying the check there refuses every release:
+    release commits carry the maintainers' identity, which is in no
+    non-contributing host's file.
+
+  * OUTSIDE WORK IS READ FROM THE COMMITS, AUTHOR AND COMMITTER BOTH. On a
+    contributing host `upgrade` requires each commit's author AND committer
+    e-mail in the range to be a trusted identity (above). The author alone is text the
+    outsider writes, and the maintainers' address is public in every commit.
+    A merge made in the GitHub web interface (merge, rebase or squash) is
+    committed by GitHub, and a contributor's own commit keeps the contributor
+    as committer, so both need --reviewed-outside. What this cannot see: a
+    commit whose author and committer are both forged, pushed directly; only
+    commit signing would. It does not list, poll or read pull requests:
+    agents never look at pull requests; the repository owner reviews them in
+    the GitHub web interface.
+
+  * THE TAG MUST BE ONE ORIGIN PUBLISHES. `upgrade` requires
+    `git ls-remote --tags origin` to list the same tag object as the host
+    checkout's ref. Every development worktree shares the host checkout's
+    refs, so any of them can tag an origin/main commit locally, and without
+    the check that tag drives an upgrade to a release nobody published.
+
+  * CHMOD SKIPS SYMLINKS. os.chmod follows a link, so making a tracked
+    symlink read-only would change its TARGET's mode, possibly outside the tree.
+
+  * A SUB-PACKAGE IS INSTALLED WHEN ITS STAMP DOES NOT MATCH ITS LOCKFILE.
+    node_modules/.fleet-lock.sha256 records the sha256 of the package-lock.json
+    `npm ci` last succeeded on. That one rule gives `install` its repeat that
+    changes nothing and `upgrade` its "npm ci where the lockfile changed".
+
+  * SESSION-CHECK EXITS 0 AND SPEAKS ON STDOUT ONLY. It runs as a project's
+    SessionStart hook, and Claude Code adds such a hook's stdout to the
+    session's context while it shows a non-zero exit's stderr to the person at
+    most, never to the model. A check that failed with a traceback would leave
+    the session as silent as a fleet that is present. So every fault, its own
+    included, becomes the generic notice on stdout, and the exit is 0.
+
+  * THE ADOPTED HOOK NEEDS NO FLEET TO SPEAK. The command `adopt` writes is
+    plain sh that reads the host settings' fleet_checkout with sed and runs that
+    checkout's session-check; with no checkout it prints the missing-fleet
+    notice itself. The fleet's code cannot report the fleet's absence, and the
+    hook is in the project's committed settings precisely for the host that
+    has no fleet. It carries no install's path or name, so every install's
+    settings hold the same bytes, and its SESSION_MARK comment is how `adopt`
+    and `status` recognise it.
+"""
+import argparse
+import functools
+import hashlib
+import json
+import os
+import plistlib
+import pwd
+import re
+import shlex
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+FLEET_ROOT = Path(os.path.realpath(__file__)).parents[1]  # realpath: run through ~/.local/bin/fleet
+# Importing fleetlib from a WRITABLE tree (a fresh clone before `install`, a
+# worktree) would write lib/fleetlib/__pycache__/ into it, so even a refusal
+# would change the tree. The read-only host checkout never gets one anyway.
+sys.dont_write_bytecode = True
+os.environ["PYTHONDONTWRITEBYTECODE"] = "1"   # every Python this command starts (NOTHING ... WRITES)
+sys.path.insert(0, str(FLEET_ROOT / "lib"))
+try:
+    import fleetlib
+    from fleetlib import manifest, paths, services
+except ImportError as _exc:
+    print(f"fleet: cannot import fleetlib from {FLEET_ROOT / 'lib'}: {_exc}", file=sys.stderr)
+    sys.exit(3)
+
+OK, DRIFT, REFUSED, FAULT = 0, 1, 2, 3
+MANIFEST = Path(".claude") / "fleet.json"
+SKILLS = Path(".claude") / "skills"
+STAMP = ".fleet-lock.sha256"
+DROPIN = "50-fleet.conf"
+PIN_MARK = "fleet-pin:"                    # in a launchd job plist pin-daemons wrote
+MIN_PYTHON = (3, 11)                       # the units' interpreter on a launchd host
+# Folders macOS privacy protection (TCC) keeps a launchd job from reading,
+# relative to the home directory: an agents root inside one fails silently.
+TCC_DIRS = ("Desktop", "Documents", "Downloads", "Pictures", "Movies", "Music",
+            os.path.join("Library", "Mobile Documents"))
+# The checks fleet CI runs (.github/workflows/ci.yml jobs); a tag's commit needs
+# all of them successful before `upgrade` moves the host to it. fleet.test.py
+# pins this tuple to ci.yml's job ids.
+CI_CHECKS = ("test", "gates", "leak", "commit-hygiene")
+TAG_RE = re.compile(r"v(\d+)\.(\d+)\.(\d+)")
+GIT_LOCATORS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
+                "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES")
+# The stall watchdog's config variable and its file under the agent home, as the
+# skill's unit template (installation/agent-stall-watchdog.service.example) sets
+# them; it is no job of agent-daemons.py, so the job table does not carry it.
+# check-all uses the path only when the agent has no watchdog unit naming one.
+# fleet.test.py reds when the template's line moves.
+WATCHDOG_CONFIG = ("STALL_WATCHDOG_CONFIG", "config/stall-watchdog.json")
+WATCHDOG_SKILL = "stall-watchdog"
+SETTINGS_JSON = Path(".claude") / "settings.json"
+# An install's agent charters, <install root>/.claude/agents/<agent>.md: where
+# adding-an-agent writes them and the agent unit's session reads them. No
+# manifest key: nothing that writes or reads a charter takes another directory.
+CHARTERS = Path(".claude") / "agents"
+# A numbered step of a fleet SKILL.md is a `## 4.` or `### 4.` heading; `### 4.1`
+# is a sub-heading of step 4, never a step 4 of its own.
+STEP_HEADING = re.compile(r"^#{2,6}[ \t]+(\d+)\.(?=[ \t]|$)", re.M)
+# A charter's pointer at a skill's step: `/agent-revive` step 5, /agent-health's
+# step 9, `/x` steps 5 and 6. The gap is \s+, not a space: charters are
+# hard-wrapped, and a pointer split across a line break ("`/agent-revive` step"
+# / "5") is as common as one on a line, and invisible to a line-by-line reader.
+STEP_POINTER = re.compile(r"(?<![\w./-])/([a-z0-9][a-z0-9-]*)`?(?:['\u2019]s)?\s+[Ss]teps?\s+"
+                          r"(\d+(?:\s*(?:,|and|or|to|-)\s*\d+)*)")
+IDENTITIES = "identities.json"   # beside the host settings: THE IDENTITIES UPGRADE TRUSTS
+EMAIL = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
+TEMPLATE = Path("templates") / "fleet.example.json"
+# The SessionStart hook `adopt` merges into a project's .claude/settings.json
+# ("THE ADOPTED HOOK NEEDS NO FLEET TO SPEAK" above). One line of sh, which
+# Claude Code runs as `sh -c` with the session's environment. No matcher, so it
+# runs on every session start: startup, resume, clear, compact and fork. The
+# fallback reads the manifest's fleet.repo with sed and says "its repository"
+# when it cannot; `|| echo` covers a checkout whose bin/fleet cannot run its
+# session-check (no python3, or a tag that predates the subcommand).
+# `exit 0` keeps a failing sed from turning into a hook error the model never sees.
+SESSION_MARK = "agent-fleet:session-check"
+SESSION_HOOK_COMMAND = (
+    r"""f=$(sed -n 's/.*"fleet_checkout" *: *"\([^"]*\)".*/\1/p' "${FLEET_HOST_CONFIG:-$HOME/.config/agent-fleet/host.json}" 2>/dev/null); """
+    r"""if [ -n "$f" ] && [ -x "$f/bin/fleet" ]; then "$f/bin/fleet" session-check || echo "agent-fleet: $f/bin/fleet session-check failed; upgrade that checkout to this repository's fleet.min_tag, or run the command in a shell to see why."; """
+    r"""else r=$(sed -n 's/.*"repo" *: *"\([^"]*\)".*/\1/p' "${CLAUDE_PROJECT_DIR:-.}/.claude/fleet.json" 2>/dev/null); """
+    r"""printf '%s\n' "agent-fleet: the agent-fleet repository is missing; it is an integral part of this repository's workflow." """
+    r""""To install it, open Claude Code and say: Install agent-fleet from ${r:-its repository} following its SETUP.md" """
+    r""""An agent reports this to the person who runs the host and does not install, upgrade or link the fleet itself."; fi; """
+    f"exit 0 # {SESSION_MARK}")
+SESSION_HOOK = {"type": "command", "command": SESSION_HOOK_COMMAND, "timeout": 10}
+INTEGRAL = "the agent-fleet repository is an integral part of this repository's workflow"
+REPORT_LINE = ("An agent reports this to the person who runs the host and does not install, "
+               "upgrade or link the fleet itself.")
+NOTICE_NAMES = 3  # missing skill names a notice lists before "and N more"
+
+
+class Exit(Exception):
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+
+
+def refuse(message):
+    raise Exit(REFUSED, message)
+
+
+def fault(message):
+    raise Exit(FAULT, message)
+
+
+_changes = []
+
+
+def changed(line):
+    """Print one line for one thing changed, as it happens (a fault later still
+    shows what had already changed)."""
+    _changes.append(line)
+    print(line, flush=True)
+
+
+# ------------------------------------------------------------------ processes
+
+def program(name):
+    return os.environ.get(f"FLEET_{name.upper()}") or name
+
+
+def run(argv, cwd=None, env=None, timeout=900, what=None):
+    """Run a command; a missing program or a non-zero exit is a FAULT naming it."""
+    try:
+        p = subprocess.run([str(a) for a in argv], cwd=cwd, env=env, capture_output=True,
+                           text=True, stdin=subprocess.DEVNULL, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        fault(f"{what or argv[0]} could not run: {type(exc).__name__}: {exc}")
+    if p.returncode:
+        tail = (p.stderr.strip() or p.stdout.strip()).splitlines()[-3:]
+        fault(f"{what or ' '.join(map(str, argv[:3]))} failed (exit {p.returncode}): " + " | ".join(tail))
+    return p.stdout
+
+
+def git_env():
+    return {k: v for k, v in os.environ.items() if k not in GIT_LOCATORS}
+
+
+@functools.cache
+def trusted_trees():
+    """The fleet checkouts git may read although another user owns them: the one
+    this command runs from, and the one the host settings name. Git refuses a
+    repository another user owns unless safe.directory names it, and with an
+    administrator the agents user reads the administrator's checkout."""
+    trees = {os.path.realpath(FLEET_ROOT)}
+    try:
+        trees.add(os.path.realpath(os.path.expanduser(paths.host()["fleet_checkout"])))
+    except fleetlib.FleetError:
+        pass
+    return trees
+
+
+def git(tree, *args, check=True):
+    real = os.path.realpath(tree)
+    safe = ["-c", f"safe.directory={real}"] if real in trusted_trees() else []
+    argv = ["git", *safe, "-C", str(tree), *args]
+    if check:
+        return run(argv, env=git_env(), what=f"git {args[0]} in {tree}").strip()
+    return subprocess.run(argv, env=git_env(), capture_output=True, text=True,
+                          stdin=subprocess.DEVNULL)
+
+
+# ------------------------------------------------------------------ files
+
+def write_replace(path, data, mode=0o644):
+    """Write `data` to a temp file beside `path` and os.replace it over `path`:
+    a symlink at `path` is replaced, never written through."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".fleet-tmp")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data if isinstance(data, bytes) else data.encode())
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.lexists(tmp):
+            os.unlink(tmp)
+        raise
+
+
+def link_replace(path, target):
+    """Make `path` a symlink to `target` in one rename."""
+    path = Path(path)
+    tmp = path.parent / f".{path.name}.fleet-tmp-{os.getpid()}"
+    if os.path.lexists(tmp):
+        os.unlink(tmp)
+    os.symlink(str(target), tmp)
+    os.replace(tmp, path)
+
+
+def same_bytes(path, data):
+    p = Path(path)
+    if p.is_symlink() or not p.is_file():
+        return False
+    return p.read_bytes() == data
+
+
+def sha256_file(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+# ------------------------------------------------------------------ fleet trees
+
+def is_fleet_tree(d):
+    return (Path(d) / "bin" / "fleet").is_file() and (Path(d) / "lib" / "fleetlib").is_dir()
+
+
+def fleet_tree_of(path):
+    """The fleet tree a path lies inside, or None."""
+    p = Path(os.path.realpath(path))
+    for d in (p, *p.parents):
+        if is_fleet_tree(d):
+            return d
+    return None
+
+
+def link_target(entry):
+    return os.path.join(os.path.dirname(entry), os.readlink(entry))
+
+
+def is_fleet_link(entry):
+    return os.path.islink(entry) and fleet_tree_of(link_target(entry)) is not None
+
+
+def a_fleet_tree(arg, flag):
+    d = Path(os.path.realpath(os.path.expanduser(arg)))
+    if not is_fleet_tree(d):
+        refuse(f"{flag} {arg}: not a fleet tree (no bin/fleet and lib/fleetlib/ there)")
+    return d
+
+
+def ls_files(tree):
+    return [n for n in git(tree, "ls-files", "-z").split("\0") if n]
+
+
+def tracked(tree):
+    """Every tracked path of `tree` that exists, and every directory holding one
+    (the tree's root included)."""
+    files, dirs = [], {Path(tree)}
+    for n in ls_files(tree):
+        p = Path(tree) / n
+        if os.path.lexists(p):
+            files.append(p)
+        for parent in Path(n).parents:
+            dirs.add(Path(tree) / parent)
+    return files, sorted(d for d in dirs if os.path.isdir(d))
+
+
+def writable(tree):
+    files, dirs = tracked(tree)
+    out = []
+    for p in [*files, *dirs]:
+        st = os.lstat(p)
+        if not stat.S_ISLNK(st.st_mode) and st.st_mode & 0o222:
+            out.append(p)
+    return out
+
+
+def set_mode(tree, write):
+    """Lift (`write`: u+w) or remove (a-w) the write bits of every tracked file
+    and directory; symlinks are skipped (chmod would follow them). Returns how
+    many paths changed."""
+    files, dirs = tracked(tree)
+    n = 0
+    for p in [*files, *dirs]:
+        st = os.lstat(p)
+        if stat.S_ISLNK(st.st_mode):
+            continue
+        mode = stat.S_IMODE(st.st_mode)
+        new = mode | 0o200 if write else mode & ~0o222
+        if new != mode:
+            os.chmod(p, new)
+            n += 1
+    return n
+
+
+def porcelain(tree):
+    return [ln for ln in git(tree, "status", "--porcelain").splitlines() if ln]
+
+
+def tag_of(tree, exact):
+    args = ["describe", "--tags", "--match", "v[0-9]*"] + (["--exact-match"] if exact else ["--abbrev=0"])
+    p = git(tree, *args, "HEAD", check=False)
+    return p.stdout.strip() if p.returncode == 0 and p.stdout.strip() else None
+
+
+def version(tag):
+    m = TAG_RE.fullmatch(tag or "")
+    return tuple(map(int, m.groups())) if m else None
+
+
+def min_tag(m, whose):
+    floor = m["fleet"]["min_tag"]
+    if version(floor) is None:
+        fault(f"{whose}: fleet.min_tag {floor!r} is not vMAJOR.MINOR.PATCH")
+    return floor
+
+
+# ------------------------------------------------------------------ installs
+
+def host():
+    """host.json, with its two tree paths taken through realpath (link targets
+    and /proc command lines are compared against them)."""
+    h = dict(paths.host())
+    for k in ("agents_root", "fleet_checkout"):
+        h[k] = os.path.realpath(os.path.expanduser(h[k]))
+    return h
+
+
+def agent_home(agents_root, agent):
+    if not paths.AGENT_NAME.fullmatch(agent or ""):
+        refuse(f"not an agent name: {agent!r}")
+    home = Path(agents_root) / agent
+    if not home.is_dir():
+        refuse(f"no agent home {home}")
+    return home
+
+
+def raw_manifest(root):
+    """An install manifest as JSON, comments stripped, without the schema checks
+    (a field read from it does not need them); None when it does not parse."""
+    try:
+        return manifest.strip_comments(json.loads((Path(root) / MANIFEST).read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        return None
+
+
+def readable_installs(agents_root):
+    """local_installs() of what this user can read: an install it cannot is left
+    out (install's first identities file takes what is there to see)."""
+    try:
+        return local_installs(agents_root)
+    except OSError:
+        return []
+
+
+def local_installs(agents_root):
+    """(agent, install root) for every agent home with exactly one install manifest."""
+    out = []
+    root = Path(agents_root)
+    for home in sorted(root.iterdir()) if root.is_dir() else []:
+        if home.is_dir():
+            try:
+                out.append((home.name, paths.home_project(home)))
+            except fleetlib.EnvironmentFault:
+                continue
+    return out
+
+
+@functools.cache
+def daemon_table(tree):
+    """(interpreter, {job: entry}): the job table of `tree`'s own
+    systemd/agent-daemons.py (`jobs --json`), so the job list, unit and log names
+    and the interpreter have one home. Run with -B (no __pycache__ in the tree)
+    and without the test-only FLEET_TRANSPORTS_DIR, so the table is the tree's."""
+    script = Path(tree) / "systemd" / "agent-daemons.py"
+    env = {k: v for k, v in os.environ.items() if k != "FLEET_TRANSPORTS_DIR"}
+    out = run([sys.executable, "-B", script, "jobs", "--json"], env=env, timeout=120,
+              what=f"{script} jobs --json")
+    try:
+        table = json.loads(out)
+        return table["python"], dict(table["jobs"])
+    except (ValueError, KeyError, TypeError):
+        fault(f"{script} jobs --json printed no job table")
+
+
+def daemon_status(tree, agent):
+    """{job: row} from `tree`'s systemd/agent-daemons.py `status <agent> --json`,
+    whose `log_replaced` says whether a running job writes to a replaced log; None
+    when it gives no reading. Its exit 1 (a job down or deaf) still prints the
+    JSON: the output is the reading, the exit code is not."""
+    script = Path(tree) / "systemd" / "agent-daemons.py"
+    env = {k: v for k, v in os.environ.items() if k != "FLEET_TRANSPORTS_DIR"}
+    try:
+        p = subprocess.run([sys.executable, "-B", str(script), "status", agent, "--json"], env=env,
+                           capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=120)
+        return dict(json.loads(p.stdout)["jobs"])
+    except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError):
+        return None
+
+
+def daemon_jobs(tree, enabled):
+    """(job, entry) for the scheduler and each working transport of `tree` that
+    the install enables."""
+    return [(job, j) for job, j in daemon_table(tree)[1].items()
+            if j["transport"] is None or j["transport"] in enabled]
+
+
+def identities_path():
+    """The identities `upgrade` trusts: a file beside this user's host settings."""
+    return paths.host_config_path().parent / IDENTITIES
+
+
+def read_identities():
+    """The trusted e-mail addresses, or None when there is no file."""
+    path = identities_path()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as exc:
+        fault(f"{path} cannot be read as a JSON list of e-mail addresses ({exc})")
+    if not isinstance(data, list) or not all(isinstance(e, str) and EMAIL.fullmatch(e) for e in data):
+        fault(f"{path} is not a JSON list of e-mail addresses")
+    return data
+
+
+def manifest_identities(installs):
+    """{e-mail: [agent, ...]} of the installs' upstream.identity."""
+    out = {}
+    for agent, m in installs:
+        email = (m.get("upstream") or {}).get("identity", {}).get("email")
+        if isinstance(email, str) and email:
+            out.setdefault(email, []).append(agent)
+    return out
+
+
+def write_identities(emails):
+    write_replace(identities_path(), json.dumps(sorted(set(emails)), indent=2) + "\n")
+
+
+def checkout_owner_only(tree, what):
+    owner, me = os.stat(tree).st_uid, os.geteuid()
+    if owner != me:
+        refuse(f"{what} runs as the fleet checkout's owner, {user_name(owner)}; you are {user_name(me)}")
+
+
+def user_name(uid):
+    try:
+        return pwd.getpwuid(uid).pw_name
+    except KeyError:
+        return str(uid)
+
+
+def python_version(python):
+    """(major, minor) of the interpreter at `python`, or None when it does not run."""
+    try:
+        p = subprocess.run([python, "-c", "import sys; print('%d %d' % sys.version_info[:2])"],
+                           capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=60)
+        return tuple(map(int, p.stdout.split())) if p.returncode == 0 else None
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return None
+
+
+def python_refusal(python, whose):
+    """Why `python` cannot run a launchd job, or None."""
+    v = python_version(python)
+    if v is None or v < MIN_PYTHON:
+        return (f"{whose} interpreter {python} is {'%d.%d' % v if v else 'not there'}; the fleet's jobs need "
+                f"Python {'%d.%d' % MIN_PYTHON} or newer: brew install python, or set FLEET_PYTHON to one")
+    return None
+
+
+# ------------------------------------------------------------------ link / unlink
+
+def link_context(a):
+    """(config dir, install root) for the agent form or the --config-dir form."""
+    if a.agent:
+        if a.config_dir or a.install:
+            refuse("give an agent, or --config-dir with --install, not both")
+        home = agent_home(host()["agents_root"], a.agent)
+        return home / ".claude", paths.home_project(home)
+    if not (a.config_dir and a.install):
+        refuse("give an agent, or --config-dir <dir> with --install <install root>")
+    root = Path(os.path.realpath(os.path.expanduser(a.install)))
+    if not (root / MANIFEST).is_file():
+        refuse(f"--install {a.install}: no {MANIFEST} there")
+    return Path(os.path.expanduser(a.config_dir)), root
+
+
+def cmd_link(a):
+    config_dir, root = link_context(a)
+    src = a_fleet_tree(a.from_, "--from") if a.from_ else Path(host()["fleet_checkout"])
+    if not is_fleet_tree(src):
+        fault(f"the host checkout {src} is not a fleet tree")
+    # manifest.load enforces 6.1 against the LINK TARGET's transport registry, among
+    # it: `skills` holds chat-transport and each enabled transport's skill. A
+    # ManifestError is exit 2, and nothing has been written yet.
+    m = manifest.load(root, skills_dir=src / SKILLS)
+    floor, have = min_tag(m, "the install"), tag_of(src, exact=False)
+    if version(have) is None or version(have) < version(floor):
+        refuse(f"{src} is at {have or 'no release tag'}, older than the install's min_tag {floor}")
+    skills_dir = config_dir / "skills"
+    if os.path.lexists(skills_dir) and not skills_dir.is_dir():
+        refuse(f"{skills_dir} exists and is not a directory")
+    plan = []
+    for name in m["skills"]:
+        target = src / SKILLS / name
+        if not (target / "SKILL.md").is_file():
+            refuse(f"skill {name}: no SKILL.md in {target}")
+        entry = skills_dir / name
+        if os.path.lexists(entry):
+            if not is_fleet_link(entry):
+                refuse(f"{entry} exists and is not a symlink into a fleet tree; move it away first")
+            if os.readlink(entry) == str(target):
+                continue
+            plan.append(("retargeted", entry, target))
+        else:
+            plan.append(("linked", entry, target))
+    created = not skills_dir.is_dir()
+    if created:
+        skills_dir.mkdir(parents=True)
+        changed(f"created {skills_dir}")
+    for verb, entry, target in plan:
+        link_replace(entry, target)
+        changed(f"{verb} {entry} -> {target}")
+    if created:
+        print(f"NOTICE: {skills_dir} did not exist. A session already running on {config_dir} "
+              "loads these skills only after `/reload-skills` or a restart.")
+    return OK
+
+
+def cmd_unlink(a):
+    if a.agent:
+        if a.config_dir:
+            refuse("give an agent or --config-dir, not both")
+        config_dir = agent_home(host()["agents_root"], a.agent) / ".claude"
+    elif a.config_dir:
+        config_dir = Path(os.path.expanduser(a.config_dir))
+    else:
+        refuse("give an agent or --config-dir <dir>")
+    skills_dir = config_dir / "skills"
+    entries = sorted(skills_dir.iterdir()) if skills_dir.is_dir() else []
+    for entry in [e for e in entries if is_fleet_link(e)]:
+        target = os.readlink(entry)
+        os.unlink(entry)
+        changed(f"unlinked {entry} (was -> {target})")
+    return OK
+
+
+# ------------------------------------------------------------------ pin-daemons
+
+def dropin_text(src, agent, python, log, script):
+    return (f"# Written by `fleet pin-daemons {agent} --from {src}`: this instance runs that\n"
+            f"# fleet tree's code. `fleet pin-daemons {agent} --clear` removes this file.\n"
+            "[Service]\n"
+            "ExecStartPre=\n"
+            f"ExecStartPre={python} {src}/systemd/agent-daemons.py rotate {log}\n"
+            "ExecStart=\n"
+            f"ExecStart={python} -u {script}\n")
+
+
+def cmd_pin_daemons(a):
+    agents_root = host()["agents_root"]
+    home = agent_home(agents_root, a.agent)
+    if services.backend() == "launchd":
+        return pin_plists(a, home)
+    udir = services.unit_dir()
+    if a.clear:
+        pins = sorted(udir.glob(f"agent-*@{a.agent}.service.d/{DROPIN}"))
+        units = []
+        for p in pins:
+            os.unlink(p)
+            changed(f"removed {p}")
+            if not any(p.parent.iterdir()):
+                p.parent.rmdir()
+            units.append(p.parent.name[:-len(".d")])
+    else:
+        src = a_fleet_tree(a.from_, "--from")
+        m = manifest.load(paths.home_project(home), skills_dir=src / SKILLS)
+        if not (src / "systemd" / "agent-daemons.py").is_file():
+            refuse(f"--from {src}: no systemd/agent-daemons.py")
+        python = daemon_table(src)[0]
+        jobs = daemon_jobs(src, m["transports"]["enabled"])
+        for _, j in jobs:
+            if not Path(j["script"]).is_file():
+                refuse(f"--from {src}: no {os.path.relpath(j['script'], src)}")
+        plan = []
+        for job, j in jobs:
+            unit = services.unit("job", a.agent, job)
+            log = f"{agents_root}/{a.agent}/{j['log']}"
+            text = dropin_text(src, a.agent, python, log, j["script"]).encode()
+            dest = udir / f"{unit}.d" / DROPIN
+            if not same_bytes(dest, text):
+                plan.append((unit, dest, text))
+        units = []
+        for unit, dest, text in plan:
+            write_replace(dest, text)
+            changed(f"wrote {dest}")
+            units.append(unit)
+    if units:
+        services.reload()
+        changed("systemctl --user daemon-reload")
+        services.restart(*units)
+        changed(f"systemctl --user restart {' '.join(units)}")
+    return OK
+
+
+def is_pinned(path):
+    try:
+        return PIN_MARK in Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+
+
+def pinned_plist(current, src, agent, python, script):
+    """The job plist `current` with the daemon the exec shim starts taken from
+    `src`: its interpreter and script after the shim's `--`, everything else
+    (the shim, the environment, the log) kept, and a fleet-pin comment."""
+    d = plistlib.loads(current)
+    argv = [str(x) for x in d.get("ProgramArguments", [])]
+    if "--" not in argv:
+        fault("a job plist that does not start the exec shim cannot be pinned; re-render it "
+              "(fleet install --units all)")
+    d["ProgramArguments"] = argv[:argv.index("--") + 1] + [python, "-u", script]
+    decl, _, rest = plistlib.dumps(d).decode().partition("\n")
+    # An XML comment ends at a double hyphen, so none may appear in it: a path
+    # holding one is written with the two hyphens apart, and the result is parsed
+    # before anything is written.
+    note = (f"{PIN_MARK} {src}. The clear option of fleet pin-daemons {agent} re-renders this "
+            "file from the host checkout.").replace("--", "- -")
+    data = f"{decl}\n<!-- {note} -->\n{rest}".encode()
+    try:
+        plistlib.loads(data)
+    except Exception as exc:  # plistlib raises ExpatError, InvalidFileException or ValueError
+        fault(f"the pinned plist for {agent} does not parse ({exc}); nothing was written")
+    return data
+
+
+def pin_plists(a, home):
+    """pin-daemons under launchd: the pin is in each job plist, and the restart is
+    a bootout and a bootstrap, which reads the plist as written."""
+    udir, hc = services.unit_dir(), Path(host()["fleet_checkout"])
+    if a.clear:
+        m = manifest.load(paths.home_project(home), skills_dir=hc / SKILLS)
+        labels = [services.unit("job", a.agent, job) for job, _ in daemon_jobs(hc, m["transports"]["enabled"])]
+        pins = [(label, udir / services.unit_file(label)) for label in labels
+                if is_pinned(udir / services.unit_file(label))]
+        rendered = render(hc, "all") if pins else {}
+        for label, path in pins:
+            if path.name not in rendered:
+                fault(f"{hc} rendered no {path.name} to put back")
+        for label, path in pins:
+            write_replace(path, rendered[path.name])
+            changed(f"rendered {path} from {hc} (unpinned)")
+        units = [label for label, _ in pins]
+    else:
+        src = a_fleet_tree(a.from_, "--from")
+        m = manifest.load(paths.home_project(home), skills_dir=src / SKILLS)
+        if not (src / "systemd" / "agent-daemons.py").is_file():
+            refuse(f"--from {src}: no systemd/agent-daemons.py")
+        python = daemon_table(src)[0]
+        why = python_refusal(python, f"--from {src}: its")
+        if why:
+            refuse(why)
+        jobs = daemon_jobs(src, m["transports"]["enabled"])
+        for _, j in jobs:
+            if not Path(j["script"]).is_file():
+                refuse(f"--from {src}: no {os.path.relpath(j['script'], src)}")
+        plan = []
+        for job, j in jobs:
+            label = services.unit("job", a.agent, job)
+            path = udir / services.unit_file(label)
+            if not path.is_file():
+                print(f"skipped {label}: not installed (agent-daemons.py --install {a.agent})")
+                continue
+            data = pinned_plist(path.read_bytes(), src, a.agent, python, j["script"])
+            if not same_bytes(path, data):
+                plan.append((label, path, data))
+        for label, path, data in plan:
+            write_replace(path, data)
+            changed(f"wrote {path}")
+        units = [label for label, _, _ in plan]
+    if units:
+        services.restart(*units)
+        changed(f"restarted {' '.join(units)} (launchctl bootout, then bootstrap)")
+    return OK
+
+
+# ------------------------------------------------------------------ install
+
+def subpackages(tree):
+    return sorted({(Path(tree) / n).parent for n in ls_files(tree)
+                   if Path(n).name == "package-lock.json" and "node_modules" not in Path(n).parts})
+
+
+def npm_due(sub):
+    try:
+        have = (sub / "node_modules" / STAMP).read_text().strip()
+    except OSError:
+        have = None
+    return have != sha256_file(sub / "package-lock.json")
+
+
+def npm_install(tree, sub):
+    """`npm ci`, then the browser install a Playwright sub-package documents
+    (its README: browsers under <sub-package>/browsers), then the stamp."""
+    npm = program("npm")
+    os.chmod(sub, stat.S_IMODE(os.stat(sub).st_mode) | 0o200)  # node_modules/ and browsers/ go here
+    run([npm, "ci"], cwd=sub, what=f"npm ci in {sub}")
+    if (sub / "node_modules" / "playwright").is_dir():
+        env = {**os.environ, "PLAYWRIGHT_BROWSERS_PATH": str(sub / "browsers")}
+        run([npm, "exec", "--yes", "--", "playwright", "install", "chromium"], cwd=sub, env=env,
+            what=f"playwright install chromium in {sub}")
+    (sub / "node_modules" / STAMP).write_text(sha256_file(sub / "package-lock.json") + "\n")
+    changed(f"npm ci: {Path(sub).relative_to(tree)}")
+
+
+def ensure_gitleaks(tree):
+    """The pinned gitleaks in ~/.local/bin, through the commit gate's own
+    installer (the version in gitleaks.version, sha256-checked, a no-op when it
+    is already there), so one procedure serves this host, CI and contributors.
+    A change is reported when the binary's bytes changed."""
+    script = Path(tree) / "tools" / "leak-gate" / "install-gitleaks.sh"
+    if not script.is_file():
+        fault(f"{script} is missing")
+    dest = Path.home() / ".local" / "bin"
+    exe = dest / "gitleaks"
+    before = sha256_file(exe) if exe.is_file() else None
+    run(["bash", script, dest], what="install-gitleaks.sh")
+    if (sha256_file(exe) if exe.is_file() else None) != before:
+        changed(f"installed gitleaks at {exe} ({(script.parent / 'gitleaks.version').read_text().split()[0]})")
+
+
+def render(tree, units, candidate=None):
+    """Rendered unit files (name -> bytes), from systemd/agent-daemons.py
+    render-units, reading and naming the host settings in place. With
+    `candidate` (install, which renders before it writes anything) the render
+    reads the host settings being written from `candidate` and names in every
+    unit the file they are written to, paths.host_config_path(): the candidate
+    is a temporary file, gone when install returns, and a unit naming it starts
+    its daemon against no host settings."""
+    script = Path(tree) / "systemd" / "agent-daemons.py"
+    if not script.is_file():
+        fault(f"{script} is missing; units cannot be rendered")
+    with tempfile.TemporaryDirectory(prefix="fleet-render-") as out:
+        argv, env = [sys.executable, script, "render-units", "--units", units, "--out", out], dict(os.environ)
+        if candidate is not None:
+            argv += ["--host-config", os.path.abspath(paths.host_config_path())]
+            env["FLEET_HOST_CONFIG"] = str(candidate)
+        run(argv, env=env, what="render-units")
+        files = {p.name: p.read_bytes() for p in sorted(Path(out).iterdir()) if p.is_file()}
+    if not files:
+        fault("render-units wrote no unit file")
+    return files
+
+
+def host_text(agents_root, tree, claims, prefix):
+    """host.json as install writes it. The optional settings (paths.HOST_OPTIONAL)
+    are kept from the host settings already there, so a repeat install without
+    --label-prefix does not rename every launchd job; --label-prefix sets one."""
+    data = {"schema": 1, "agents_root": str(agents_root), "fleet_checkout": str(tree), "claims_dir": str(claims)}
+    try:
+        old = json.loads(paths.host_config_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        old = {}
+    for key in paths.HOST_OPTIONAL:
+        if isinstance(old, dict) and key in old:
+            data[key] = old[key]
+    if prefix is not None:
+        data["launchd_prefix"] = prefix
+    if os.environ.get("FLEET_PYTHON"):
+        # Every render reads it from here, so FLEET_PYTHON is needed once.
+        data["python"] = os.environ["FLEET_PYTHON"]
+    return json.dumps(data, indent=2) + "\n"
+
+
+def launchd_refusal(tree, agents_root):
+    """Why this macOS host cannot run the fleet's launchd jobs, or None."""
+    if not services.domain_exists():
+        return (f"there is no launchd domain {services.domain()}: no user is logged in. Turn on automatic "
+                "login for this user (System Settings, Users & Groups) so the agents' jobs have a session "
+                "after a reboot, then log in once")
+    home = Path(os.path.realpath(Path.home()))
+    for d in TCC_DIRS:
+        protected = home / d
+        if agents_root == protected or protected in agents_root.parents:
+            return (f"the agents root {agents_root} is inside {protected}, which macOS privacy protection "
+                    "keeps a launchd job from reading; put it elsewhere, for example ~/agents")
+    return python_refusal(daemon_table(tree)[0], "the jobs'")
+
+
+def cmd_install(a):
+    tree = FLEET_ROOT
+    gd = git(tree, "rev-parse", "--absolute-git-dir")
+    common = os.path.realpath(os.path.join(tree, git(tree, "rev-parse", "--git-common-dir")))
+    if os.path.realpath(gd) != common:
+        refuse(f"{tree} is a linked worktree; install from the clone itself, because units and "
+               "links would name a tree that disappears with the worktree")
+    owner, me = os.stat(tree).st_uid, os.geteuid()
+    checkout_part, agents_part = a.part in ("all", "checkout"), a.part in ("all", "agents")
+    if checkout_part and owner != me:
+        refuse(f"the fleet checkout {tree} belongs to {user_name(owner)}, not to you ({user_name(me)}): "
+               + ("its part runs as that user" if a.part == "checkout" else
+                  f"one user installs both parts only when it owns the checkout; {user_name(owner)} runs "
+                  "--part checkout, then the agents user --part agents"))
+    if a.part == "agents":
+        if owner == me:
+            refuse(f"the fleet checkout {tree} is yours ({user_name(me)}): --part agents is the agents user's "
+                   "part for a checkout an administrator owns; one user installs both with --part all")
+        why = paths.tree_changeable(tree)
+        if why:
+            refuse(f"you ({user_name(me)}) {why}: the agents user must be able to change nothing in the fleet "
+                   "checkout or above it; the administrator keeps it outside the agents root, its own and "
+                   "read-only (fleet install --part checkout)")
+        pending = ([f"npm ci in {sub.relative_to(tree)}" for sub in subpackages(tree) if npm_due(sub)]
+                   + (["core.hooksPath"] if git(tree, "config", "--get", "core.hooksPath", check=False)
+                      .stdout.strip() != ".githooks" else [])
+                   + ([f"{len(writable(tree))} writable path(s)"] if writable(tree) else []))
+        if pending:
+            refuse(f"the checkout's part is not done ({', '.join(pending)}): {user_name(owner)} runs "
+                   f"fleet install --part checkout first")
+    agents_root = Path(os.path.realpath(os.path.expanduser(a.agents_root)))
+    if agents_part and not agents_root.is_dir():
+        refuse(f"--agents-root {a.agents_root}: not a directory")
+    # The claims directory is created here, at the path host.json records, and
+    # nowhere else: claim.py never creates one, so a mis-pointed claims_dir fails
+    # loudly instead of opening a second claim space. One already there is used
+    # as it is or refused, never replaced.
+    claims = agents_root / "claims"
+    make_claims = agents_part and not os.path.lexists(claims)
+    if agents_part and not make_claims and (claims.is_symlink() or not claims.is_dir()
+                            or stat.S_IMODE(os.stat(claims).st_mode) != 0o700):
+        refuse(f"{claims} is there and is not a real directory of mode 700; make it one (chmod 700 {claims}), "
+               "or move it away and `fleet install` creates it")
+    local_bin = Path.home() / ".local" / "bin"
+    links = [(local_bin / n, tree / "bin" / n) for n in ("fleet", "claude-attach")
+             if agents_part and (tree / "bin" / n).is_file()]
+    for path, _ in links:
+        if os.path.lexists(path) and not path.is_symlink():
+            refuse(f"{path} exists and is not a symlink; move it away first")
+    if a.label_prefix is not None and not paths.HOST_OPTIONAL["launchd_prefix"][1].fullmatch(a.label_prefix):
+        refuse(f"--label-prefix {a.label_prefix}: not a reverse-DNS prefix like com.agent-fleet")
+    fp = os.environ.get("FLEET_PYTHON")
+    if fp and not paths.HOST_OPTIONAL["python"][1].fullmatch(fp):
+        refuse(f"FLEET_PYTHON={fp}: not an absolute path to an interpreter")
+    # The identities upgrade trusts, written once, at the first install, from the
+    # installs readable now (THE IDENTITIES UPGRADE TRUSTS); never merged again.
+    new_identities = None
+    if checkout_part and read_identities() is None:
+        new_identities = sorted(manifest_identities(
+            [(agent, raw) for agent, raw in ((agent, raw_manifest(root)) for agent, root in readable_installs(agents_root))
+             if raw is not None]))
+    hc = paths.host_config_path()
+    text = host_text(agents_root, tree, claims, a.label_prefix)
+    if agents_part and services.backend() == "launchd":
+        why = launchd_refusal(tree, agents_root)
+        if why:
+            refuse(why)
+    rendered = {}
+    if agents_part and a.units != "none":
+        with tempfile.TemporaryDirectory(prefix="fleet-host-") as scratch:
+            candidate = Path(scratch) / "host.json"
+            candidate.write_text(text)
+            rendered = render(tree, a.units, candidate)
+
+    # Every refusal is behind us; from here on, each step prints what it changed.
+    if make_claims:
+        os.mkdir(claims, 0o700)
+        os.chmod(claims, 0o700)  # the umask can strip bits from mkdir's mode
+        changed(f"created {claims} (mode 700)")
+    if not same_bytes(hc, text.encode()):
+        write_replace(hc, text)
+        changed(f"wrote {hc}")
+    if new_identities is not None:
+        write_identities(new_identities)
+        changed(f"wrote {identities_path()}, the identities fleet upgrade trusts: "
+                f"{', '.join(new_identities) or 'none yet'} (fleet identities --add <email> adds one)")
+    if checkout_part:
+        if git(tree, "config", "--get", "core.hooksPath", check=False).stdout.strip() != ".githooks":
+            git(tree, "config", "core.hooksPath", ".githooks")
+            changed(f"set core.hooksPath=.githooks on {tree}")
+        for sub in subpackages(tree):
+            if npm_due(sub):
+                npm_install(tree, sub)
+        n = set_mode(tree, write=False)
+        if n:
+            changed(f"removed the write bits of {n} tracked path(s) in {tree}")
+    if agents_part:
+        ensure_gitleaks(tree)
+    for path, target in links:
+        if not (path.is_symlink() and os.readlink(path) == str(target)):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            link_replace(path, target)
+            changed(f"linked {path} -> {target}")
+    if rendered:
+        apply_units(rendered)
+    return OK
+
+
+def apply_units(rendered):
+    if services.backend() == "launchd":
+        return apply_plists(rendered)
+    udir = services.unit_dir()
+    todo = [name for name, data in rendered.items() if not same_bytes(udir / name, data)]
+    if not todo:
+        return
+    enabled = sorted(set().union(*(services.enabled(n) for n in todo)))
+    if enabled:
+        services.disable(*enabled)
+        changed(f"systemctl --user disable {' '.join(enabled)}")
+    for name in todo:
+        dest = udir / name
+        was = f" (replaced a symlink to {os.readlink(dest)})" if dest.is_symlink() else ""
+        write_replace(dest, rendered[name])
+        changed(f"rendered {dest}{was}")
+    services.reload()
+    changed("systemctl --user daemon-reload")
+    timers = [n for n in todo if n.endswith(".timer")]
+    again = [n for n in enabled if n not in timers]
+    if again:
+        services.enable(*again)
+        changed(f"systemctl --user enable {' '.join(again)}")
+    for t in timers:
+        services.enable(t, now=True)
+        changed(f"systemctl --user enable --now {t}")
+
+
+def apply_plists(rendered):
+    """Under launchd: replace the plists that changed (never a pinned one), then
+    make the refresh job loaded and current (A PINNED PLIST IS NEVER RE-RENDERED
+    BY INSTALL; DISABLE BEFORE, ENABLE AFTER, launchd form)."""
+    udir, refresh = services.unit_dir(), services.unit("refresh")
+    refresh_changed = False
+    for name, data in rendered.items():
+        dest = udir / name
+        if same_bytes(dest, data):
+            continue
+        if is_pinned(dest):
+            print(f"kept {dest}: pinned (fleet pin-daemons <agent> --clear re-renders it)")
+            continue
+        was = f" (replaced a symlink to {os.readlink(dest)})" if dest.is_symlink() else ""
+        write_replace(dest, data)
+        changed(f"rendered {dest}{was}")
+        refresh_changed |= name == services.unit_file(refresh)
+    loaded = services.status(refresh)["load"] == "loaded"
+    if loaded and refresh_changed:
+        services.restart(refresh)
+        changed(f"restarted {refresh} (launchctl bootout, then bootstrap)")
+    elif not loaded and (udir / services.unit_file(refresh)).is_file():
+        (Path.home() / ".local" / "state" / "agent-fleet").mkdir(parents=True, exist_ok=True)
+        services.enable(refresh, now=True)
+        changed(f"bootstrapped {refresh}")
+
+
+# ------------------------------------------------------------------ upgrade
+
+def github_repo(url):
+    m = re.fullmatch(r"(?:git@github\.com:|ssh://git@github\.com/|https://github\.com/)"
+                     r"([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?", url or "")
+    return f"{m.group(1)}/{m.group(2)}" if m else None
+
+
+def ci_refusal(repo, sha):
+    """None when every CI check of `sha` succeeded, else why not."""
+    out = run([program("gh"), "api", f"repos/{repo}/commits/{sha}/check-runs?per_page=100"],
+              timeout=120, what="gh api check-runs")
+    try:
+        runs = json.loads(out)["check_runs"]
+    except (ValueError, KeyError, TypeError):
+        fault(f"gh api check-runs for {sha[:12]} did not answer a check-run list")
+    latest = {}
+    for r in runs:
+        if r.get("name") in CI_CHECKS and r.get("id", 0) >= latest.get(r["name"], {}).get("id", -1):
+            latest[r["name"]] = r
+    bad = [f"{n}: {latest[n].get('status')}/{latest[n].get('conclusion')}" if n in latest else f"{n}: missing"
+           for n in CI_CHECKS
+           if n not in latest or (latest[n].get("status"), latest[n].get("conclusion")) != ("completed", "success")]
+    return "; ".join(bad) or None
+
+
+def leak_findings(hc, rng):
+    """The leak backstop over `rng`, with the host checkout's CURRENT leak gate.
+    Returns the finding lines; exit 3 when the gate cannot judge."""
+    gate = Path(hc) / "tools" / "leak-gate" / "leak_gate.py"
+    if not gate.is_file():
+        fault(f"{gate} is missing; the leak backstop cannot run")
+    p = subprocess.run([sys.executable, str(gate), "--range", rng], cwd=hc, env=git_env(),
+                       capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=900)
+    for line in (p.stdout + p.stderr).splitlines():
+        print(f"  {line}")
+    if p.returncode == 0:
+        return []
+    found = [ln for ln in p.stdout.splitlines() if ln.strip() and not ln.startswith("leak-gate:")]
+    if p.returncode != 1 or not found:
+        # exit 1 with no finding line is a crash (Python's exit for an uncaught
+        # exception), and an empty list would pass the range as clean
+        fault(f"the leak gate gave no verdict (exit {p.returncode}, {len(found)} finding line(s)); "
+              "nothing changed")
+    return found
+
+
+def cmd_upgrade(a):
+    h = host()
+    hc, agents_root = Path(h["fleet_checkout"]), h["agents_root"]
+    if not is_fleet_tree(hc):
+        fault(f"the host checkout {hc} is not a fleet tree")
+    checkout_owner_only(hc, "fleet upgrade")
+    me = os.geteuid()
+    # Every install's manifest is read below; one this user cannot read would be
+    # skipped in silence, and its min_tag floor with it.
+    try:
+        homes = sorted(Path(agents_root).iterdir())
+    except FileNotFoundError:
+        homes = []
+    except OSError as exc:
+        fault(f"the agents root {agents_root} cannot be read by {user_name(me)} ({exc.strerror}), so the installs' "
+              "min_tag and upstream identity cannot be read; nothing changed")
+    hidden = [str(d) for d in homes if d.is_dir() and str(d) != os.path.realpath(os.path.expanduser(h["claims_dir"]))
+              and not os.access(d, os.R_OK | os.X_OK)]
+    if hidden:
+        fault(f"{len(hidden)} director(ies) under the agents root cannot be read by {user_name(me)} (first: "
+              f"{hidden[0]}), so an install there would be skipped; nothing changed")
+    dirty, loose = porcelain(hc), writable(hc)
+    if dirty:
+        refuse(f"the host checkout is not clean ({len(dirty)} path(s), first: {dirty[0].strip()})")
+    if loose:
+        refuse(f"the host checkout's read-only mode is broken ({len(loose)} writable path(s), first: {loose[0]})")
+    if not TAG_RE.fullmatch(a.tag):
+        refuse(f"{a.tag} is not a release tag vMAJOR.MINOR.PATCH")
+    acks = [s for arg in a.ack_leak for s in arg.split(",") if s]
+    git(hc, "fetch", "--tags", "origin")
+    kind = git(hc, "cat-file", "-t", f"refs/tags/{a.tag}", check=False)
+    if kind.returncode:
+        refuse(f"no tag {a.tag} in the host checkout after fetching origin")
+    if kind.stdout.strip() != "tag":
+        refuse(f"{a.tag} is not an annotated tag")
+    tag_obj = git(hc, "rev-parse", f"refs/tags/{a.tag}")
+    published = [ln.split("\t") for ln in git(hc, "ls-remote", "--tags", "origin", f"refs/tags/{a.tag}").splitlines()]
+    if [tag_obj, f"refs/tags/{a.tag}"] not in published:
+        refuse(f"{a.tag} is not published on origin (git ls-remote --tags origin lists no tag object "
+               f"{tag_obj[:12]}); a tag in the host checkout alone is no release")
+    acked = []
+    for s in acks:
+        p = git(hc, "rev-parse", "--verify", "-q", f"{s}^{{commit}}", check=False)
+        if p.returncode:
+            refuse(f"--ack-leak {s}: not a commit in the host checkout")
+        acked.append(p.stdout.strip())
+    sha = git(hc, "rev-parse", f"refs/tags/{a.tag}^{{commit}}")
+    cur = git(hc, "rev-parse", "HEAD")
+    cur_tag = tag_of(hc, exact=True) or tag_of(hc, exact=False)
+    if sha == cur:
+        print(f"the host checkout is already at {a.tag}")
+        return OK
+    if git(hc, "merge-base", "--is-ancestor", sha, "refs/remotes/origin/main", check=False).returncode:
+        refuse(f"{a.tag} is not reachable from origin/main")
+    if version(cur_tag) and version(a.tag) < version(cur_tag) and not a.rollback:
+        refuse(f"{a.tag} is older than the current {cur_tag}; pass --rollback to go back")
+    installs = []
+    for agent, root in local_installs(agents_root):
+        installs.append((agent, manifest.load(root, skills_dir=hc / SKILLS)))
+    claimed = manifest_identities(installs)
+    trusted = read_identities()
+    # OUTSIDE WORK IS A CONTRIBUTING HOST'S CHECK (docstring).
+    contributing = any("upstream" in m for _, m in installs) or bool(trusted)
+    if not contributing:
+        print(f"NOTE: outside-work check skipped: no local install declares upstream and {identities_path()} "
+              "lists no identity, so this host's agents do not commit to the fleet and it trusts the release "
+              "tag (annotated, published on origin, on origin/main, CI green, the leak backstop)")
+    elif trusted is None:
+        one_user = not os.path.exists(agents_root) or os.stat(agents_root).st_uid == me
+        if not one_user:
+            refuse(f"no {identities_path()}, the identities this upgrade trusts for outside work (the installs' "
+                   "manifests are the agents user's to edit); write it with fleet identities --add <email>, or "
+                   "fleet install --part checkout")
+        trusted = sorted(claimed)
+        print(f"NOTE: no {identities_path()}; one user owns the checkout and the agents root, so the installs' "
+              f"upstream identities are trusted: {', '.join(trusted) or 'none'}")
+    else:
+        for email, agents in sorted(claimed.items()):
+            if email not in trusted:
+                print(f"WARNING: ignored {email}, the upstream identity in the install manifest of "
+                      f"{', '.join(agents)}: {identities_path()} does not list it")
+    if contributing and not trusted:
+        refuse(f"a local install declares upstream, so its agents commit to the fleet, and this upgrade trusts no "
+               f"identity for outside work (none in {identities_path()}); add the one they commit with: "
+               "fleet identities --add <email>")
+    floors = [(min_tag(m, agent), agent) for agent, m in installs]
+    for floor, agent in floors:
+        if version(a.tag) < version(floor):
+            refuse(f"{a.tag} is older than {agent}'s install min_tag {floor}")
+    repos = sorted({github_repo(m["fleet"]["repo"]) for _, m in installs} - {None})
+    if len(repos) > 1:
+        fault(f"the local installs name different fleet repositories: {', '.join(repos)}")
+    repo = repos[0] if repos else github_repo(git(hc, "config", "--get", "remote.origin.url"))
+    if not repo:
+        fault("no GitHub <owner>/<repo> in the install manifests' fleet.repo or the checkout's origin URL")
+    why = ci_refusal(repo, sha)
+    if why:
+        refuse(f"CI has not succeeded on {a.tag} ({sha[:12]}): {why}")
+    findings = leak_findings(hc, f"{cur}..refs/tags/{a.tag}")
+    open_findings = [f for f in findings
+                     if not any(full.startswith(f.split(":", 1)[0]) for full in acked)
+                     or not re.fullmatch(r"[0-9a-f]{7,40}", f.split(":", 1)[0])]
+    if open_findings:
+        refuse(f"the leak backstop found {len(open_findings)} finding(s) in {cur[:12]}..{a.tag} "
+               "in commits not named by --ack-leak; report them to the repository owner")
+    emails = set(trusted or ())
+    outside = [ln for ln in git(hc, "log", "--format=%H %ae %ce", f"{cur}..{sha}").splitlines()
+               if contributing and not set(ln.split(" ")[1:]) <= emails]
+    if outside and not a.reviewed_outside:
+        refuse(f"{len(outside)} commit(s) in the range are not authored and committed by a local install's "
+               f"upstream identity as this upgrade trusts them (first: {outside[0]}, as <sha> <author> "
+               f"<committer>); pass --reviewed-outside only on the repository owner's go for {a.tag}")
+
+    # Every precondition passed: apply.
+    set_mode(hc, write=True)
+    try:
+        git(hc, "-c", "advice.detachedHead=false", "checkout", "--quiet", "--detach", f"refs/tags/{a.tag}")
+        changed(f"checked out {a.tag} in {hc} (was {cur_tag or cur[:12]})")
+        for sub in subpackages(hc):
+            if npm_due(sub):
+                npm_install(hc, sub)
+    finally:
+        set_mode(hc, write=False)
+    changed(f"restored the read-only mode of {hc}")
+    by = os.environ.get("CLAUDE_CONFIG_DIR")
+    by = Path(by).parent.name if by and Path(by).parent.parent == Path(agents_root) else os.environ.get("USER", "?")
+    extra = "".join([" rollback" if a.rollback else "", " reviewed-outside" if outside else "",
+                     f" ack-leak={','.join(acked)}" if acked else ""])
+    log = Path.home() / ".local" / "state" / "agent-fleet" / "upgrades.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    with open(log, "a", encoding="utf-8") as f:
+        f.write(f"{stamp} {cur_tag or cur[:12]} -> {a.tag} by {by}{extra}\n")
+    changed(f"logged the upgrade in {log}")
+    print(git(hc, "log", "--oneline", f"{cur}..{sha}"))
+    return OK
+
+
+# ------------------------------------------------------------------ status
+
+def proc_script(pid):
+    """The script a daemon process runs, from its command line, absolute when
+    its working directory can be read."""
+    argv = services.proc_argv(pid)
+    if not argv:
+        return None
+    rest = argv[1:] if not argv[0].endswith(".py") else argv
+    script = next((x for x in rest if not x.startswith("-")), None)
+    cwd = services.proc_cwd(pid)
+    if script and not os.path.isabs(script) and cwd:
+        script = os.path.join(cwd, script)
+    return script
+
+
+def inside(path, tree):
+    return bool(path) and os.path.realpath(path).startswith(str(tree) + os.sep)
+
+
+def cmd_status(a):
+    h = host()
+    hc, agents_root = Path(h["fleet_checkout"]), Path(h["agents_root"])
+    drift = []
+
+    def row(good, text):
+        print(("ok     " if good else "DRIFT  ") + text)
+        if not good:
+            drift.append(text)
+
+    agents = a.agents or [agent for agent, _ in local_installs(agents_root)]
+    homes = [agent_home(agents_root, agent) for agent in agents]
+    tag = tag_of(hc, exact=True)
+    row(tag is not None, f"host checkout {hc} at {tag or 'no release tag'}")
+    dirty, loose = porcelain(hc), writable(hc)
+    row(not dirty, "host checkout clean" if not dirty else f"host checkout has {len(dirty)} changed path(s)")
+    row(not loose, "host checkout read-only" if not loose else f"host checkout has {len(loose)} writable tracked path(s)")
+    hooks = git(hc, "config", "--get", "core.hooksPath", check=False).stdout.strip()
+    row(hooks == ".githooks", f"host checkout core.hooksPath={hooks or '<unset>'}")
+    for good, text in refresh_rows(expected=bool(agents)):
+        row(good, text)
+    host_v = version(tag or tag_of(hc, exact=False))
+    for agent, home in zip(agents, homes):
+        try:
+            root = paths.home_project(home)
+        except fleetlib.EnvironmentFault as exc:
+            row(False, f"{agent}: {exc}")
+            continue
+        try:
+            m = manifest.load(root, skills_dir=hc / SKILLS)
+        except fleetlib.FleetError as exc:
+            row(False, f"{agent}: install manifest: {exc}")
+            continue
+        sp = root / SETTINGS_JSON
+        try:
+            hooked, why = has_session_hook(read_settings(sp)), f"{sp} has no agent-fleet SessionStart hook"
+        except Exit as exc:
+            hooked, why = False, str(exc)
+        row(hooked, f"{agent}: {root} carries the agent-fleet session check" if hooked
+            else f"{agent}: {why}; run `fleet adopt {root}`")
+        skills_dir = home / ".claude" / "skills"
+        for name in m["skills"]:
+            entry = skills_dir / name
+            if not os.path.lexists(entry):
+                row(False, f"{agent}: {name} is not linked")
+            elif not is_fleet_link(entry):
+                row(False, f"{agent}: {entry} is not a fleet link")
+            else:
+                tgt = os.path.realpath(entry)
+                row(tgt == str(hc / SKILLS / name), f"{agent}: {name} -> {tgt}")
+        extra = [e.name for e in (sorted(skills_dir.iterdir()) if skills_dir.is_dir() else [])
+                 if is_fleet_link(e) and e.name not in m["skills"]]
+        for name in extra:
+            row(False, f"{agent}: {name} is a fleet link the install manifest does not list")
+        for good, text in charter_rows(agent, root, hc / SKILLS):
+            row(good, text)
+        floor = min_tag(m, agent)
+        row(host_v is not None and host_v >= version(floor), f"{agent}: min_tag {floor}, host at {tag or 'no tag'}")
+        # A running daemon whose stdout or stderr is a replaced log (rewritten in
+        # place, moved) is heard by nobody: DRIFT. Where its descriptors cannot be
+        # read (another user's process) the runs row says so, never ok by silence.
+        heard = daemon_status(hc, agent) or {}
+        for job, _ in daemon_jobs(hc, m["transports"]["enabled"]):
+            unit = services.unit("job", agent, job)
+            pid = services.status(unit)["pid"]
+            if pid <= 0:
+                row(False, f"{agent}: {unit} is not running")
+                continue
+            script = proc_script(pid)
+            replaced = heard.get(job, {}).get("log_replaced")
+            unread = ("" if replaced is not None else
+                      "; its stdout and stderr were not read here, so a replaced log is not looked for")
+            row(inside(script, hc), f"{agent}: {unit} runs {script or '<unreadable command line>'}{unread}")
+            if isinstance(replaced, str):
+                # refresh, never a plain restart: refresh first appends to the log
+                # what the daemon wrote to the replaced file, and a restart loses it
+                # (agent-daemons.py's DEAF row names the same remedy).
+                row(False, f"{agent}: {unit} {replaced}; run refresh, which salvages what it wrote there and "
+                           f"restarts it ({daemon_table(hc)[0]} {hc / 'systemd' / 'agent-daemons.py'} refresh)")
+        wd = services.unit("watchdog", agent)
+        load = services.status(wd, "system")["load"]
+        if load != "loaded":
+            # Linked, and no watchdog unit loaded for the agent: not installed,
+            # as stall-watchdog's own check says of a session no unit watches.
+            linked = WATCHDOG_SKILL in m["skills"]
+            seen = "is not installed" if load == "not-found" else f"has LoadState={load or '<no answer>'}"
+            row(not linked, f"{agent}: {wd} {seen}, and the install links {WATCHDOG_SKILL}"
+                if linked else f"{agent}: no watchdog unit {wd} ({WATCHDOG_SKILL} is not linked)")
+        else:
+            argv = (services.definition(wd, "system") or {}).get("argv", [])
+            script = next((t for t in argv if t.endswith("watchdog.py")), None)
+            row(inside(script, hc), f"{agent}: {wd} runs {script or '<no watchdog.py in ExecStart>'}")
+        # The agent's own unit is a user unit (templates/claude-agent.service.example)
+        # or, in the template's system form, a system unit: both managers are read.
+        # Reading one alone misses a unit the other manager runs. Its boot message
+        # (the ExecStartPost handshake) names the follower the session arms, so a
+        # loaded unit that names none boots an agent that never reads its
+        # scheduler: DRIFT. That is also what a command read only up to its first
+        # `;` looks like (fleetlib.services, the module docstring), which is why
+        # this row must be able to go red. No unit loaded: nothing to check, said so.
+        unit = services.unit("session", agent)
+        defs = [d for d in (services.definition(unit, scope) for scope in ("system", "user")) if d]
+        named = sorted(set(re.findall(r"(/[^\s;'\"]*/agent-daemons\.py)",
+                                      " ".join(c for d in defs for c in d["commands"]))))
+        if not defs:
+            row(True, f"{agent}: no agent unit {unit} is loaded, so no follower path to check")
+        elif not named:
+            row(False, f"{agent}: {unit} names no follower path: its boot message arms no follower")
+        for p in named:
+            real = os.path.realpath(p)
+            row(real == str(hc / "systemd" / "agent-daemons.py"), f"{agent}: follower {p} -> {real}")
+    for good, text in share_rows(hc, homes):
+        row(good, text)
+    return DRIFT if drift else OK
+
+
+def refresh_rows(expected):
+    """The refresh job's rows: whether it is there to run (systemd: the timer
+    loaded and active, and the oneshot it fires loaded; launchd: the job
+    loaded), and how its LAST run ended (systemd: the oneshot's Result; launchd:
+    the job's last exit). A timer that fires every five minutes into a run that
+    fails is the state these rows exist for: nothing else in status shows it,
+    and while it lasts no daemon picks up an upgrade, a changed config or its
+    daily restart. `expected`: status reports agents, whose daemons need it.
+    A host with no agent to report and no refresh unit file gets no row and no
+    service manager call: an install with --units none (a personal computer, a
+    trial) is not drift, and a host may have no service manager at all."""
+    label = services.unit("refresh")
+    if not expected and not (services.unit_dir() / services.unit_file(label)).exists():
+        return []
+    fix = "re-run `fleet install` with --units refresh (or --units all)"
+
+    def absent(st):
+        return ("is not installed" if st["load"] == "not-found"
+                else f"has LoadState={st['load'] or '<no answer>'} {st['error']}".rstrip())
+    timer = label.endswith(".timer")   # systemd: a timer firing a oneshot; launchd: one job
+    s = services.status(label)
+    noun = "refresh timer" if timer else "refresh job"
+    if s["load"] != "loaded":
+        return [(False, f"{noun} {label} {absent(s)}: {fix}")]
+    rows = [(s["active"] == "active", f"{noun} {label} is {s['active'] or '<no answer>'}") if timer
+            else (True, f"{noun} {label} is loaded")]
+    job = label.removesuffix(".timer") + ".service" if timer else label
+    j = services.status(job) if timer else s
+    if j["load"] != "loaded":
+        rows.append((False, f"refresh job {job} {absent(j)}: {fix}"))
+    elif j["result"] == "success":
+        # Also what both managers report for a job that has not run yet.
+        rows.append((True, f"refresh job {job}: last result success"))
+    else:
+        rows.append((False, f"refresh job {job}: last run failed ({j['result'] or '<no answer>'}, "
+                            f"{last_end(job, j['result'])}); see {services.hint('log', job)}"))
+    return rows
+
+
+def last_end(name, result):
+    """How a user unit's last run ended, as the service manager reports it:
+    'exit code <n>' or, for result `signal`, 'signal <n>'; '?' where it says
+    nothing (fleetlib.services.last_exit)."""
+    word = "signal" if result == "signal" else "exit code"
+    return f"{word} {services.last_exit(name)['code'] or '?'}"
+
+
+def charter_rows(agent, root, skills_dir):
+    """The rows for every `/<skill> step N` pointer in the install's charters
+    (<root>/.claude/agents/*.md) that names a fleet skill, one with a SKILL.md
+    under `skills_dir` (the host checkout's, which the agents link): DRIFT for
+    each step that skill's SKILL.md does not number (STEP_HEADING), naming the
+    charter, its line and the steps the skill has; otherwise one ok row that
+    says how many pointers it checked, so "nothing found" is visible as such. A
+    fleet upgrade that renumbers a skill strands every charter pointer past the
+    change with nothing else to say so. A pointer at a skill the host checkout
+    does not carry is the install's own skill's, and not read here; one at a
+    fleet skill that numbers no steps is DRIFT."""
+    d = Path(root) / CHARTERS
+    charters = sorted(p for p in d.glob("*.md") if p.is_file()) if d.is_dir() else []
+    bad, checked, steps = [], 0, {}
+    for c in charters:
+        try:
+            text = c.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            bad.append(f"{agent}: charter {c} cannot be read ({exc.strerror}), so its step pointers are unchecked")
+            continue
+        for m in STEP_POINTER.finditer(text):
+            name = m.group(1)
+            if name not in steps:
+                sk = Path(skills_dir) / name / "SKILL.md"
+                steps[name] = ({int(n) for n in STEP_HEADING.findall(sk.read_text(encoding="utf-8",
+                                                                                   errors="replace"))}
+                               if sk.is_file() else None)
+            if steps[name] is None:
+                continue
+            line = text.count("\n", 0, m.start()) + 1
+            for n in map(int, re.findall(r"\d+", m.group(2))):
+                checked += 1
+                if n not in steps[name]:
+                    have = ", ".join(map(str, sorted(steps[name]))) or "none"
+                    bad.append(f"{agent}: charter {c.name}:{line} points at /{name} step {n}, which "
+                               f"{name}'s SKILL.md does not number (its steps: {have})")
+    if bad:
+        return [(False, text) for text in bad]
+    return [(True, f"{agent}: {checked} step pointer(s) at fleet skills in {len(charters)} charter(s) "
+                   f"under {d}, each a numbered step of its skill")]
+
+
+def share_rows(hc, homes):
+    """One row per shared account lease, so agents sharing an account is never
+    silent: ok while the pool has fewer accounts than agents (sharing allowed),
+    DRIFT when the share stands although every agent could hold its own. The
+    picker owns the rule (agent-health's pool_pick.py --shares); a fleet tree
+    without it, or an install whose agent-revive config names no pool, has no row."""
+    picker = hc / SKILLS / "agent-health" / "pool_pick.py"
+    configs = []
+    for home in homes:
+        try:
+            configs.append(paths.home_project(home) / SKILLS / "agent-revive" / "config.json")
+        except fleetlib.EnvironmentFault:
+            continue
+    cfg = next((c for c in configs if c.is_file()), None)
+    if not picker.is_file() or cfg is None:
+        return []
+    r = subprocess.run([sys.executable, str(picker), "--shares", "--json", "--config", str(cfg)],
+                       capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=120)
+    try:
+        return [(s["allowed"], f"account pool: {s['line']}") for s in json.loads(r.stdout)["shares"]]
+    except (ValueError, KeyError, TypeError):
+        return [(False, f"account pool: pool_pick.py --shares gave no answer (exit {r.returncode}): "
+                        f"{r.stderr.strip()[-200:]}")]
+
+
+# ------------------------------------------------------------------ adopt / session-check
+
+def read_settings(path):
+    """A project's parsed .claude/settings.json, or None when it is absent.
+    Refused (exit 2) when it is not a JSON object whose hooks.SessionStart,
+    where present, is a list: a hook cannot be merged into it without guessing."""
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    try:
+        data = json.loads(text)
+    except ValueError as exc:
+        refuse(f"{path} is not valid JSON ({exc}); fix it by hand first")
+    hooks = data.get("hooks", {}) if isinstance(data, dict) else None
+    if not isinstance(hooks, dict) or not isinstance(hooks.get("SessionStart", []), list):
+        refuse(f"{path} is not a settings object with a hooks.SessionStart list; fix it by hand first")
+    return data
+
+
+def has_session_hook(data):
+    """Whether parsed settings carry a SessionStart hook with the fleet's marker."""
+    return any(isinstance(h, dict) and SESSION_MARK in str(h.get("command", ""))
+               for g in (data or {}).get("hooks", {}).get("SessionStart", []) if isinstance(g, dict)
+               for h in (g.get("hooks") or []))
+
+
+def cmd_adopt(a):
+    root = Path(os.path.realpath(os.path.expanduser(a.project)))
+    if not root.is_dir():
+        refuse(f"{a.project}: not a directory")
+    man, sp, template = root / MANIFEST, root / SETTINGS_JSON, FLEET_ROOT / TEMPLATE
+    data = read_settings(sp)
+    new_manifest = not os.path.lexists(man)
+    if new_manifest and not template.is_file():
+        fault(f"{template} is missing")
+
+    # Every refusal is behind us.
+    if new_manifest:
+        write_replace(man, template.read_bytes())
+        changed(f"wrote {man} from {template}: replace every <...> value, then check it with `fleet settings`")
+    else:
+        print(f"kept {man}: adopt never overwrites an install manifest")
+    if not has_session_hook(data):
+        merged = {} if data is None else data
+        merged.setdefault("hooks", {}).setdefault("SessionStart", []).append({"hooks": [dict(SESSION_HOOK)]})
+        mode = 0o644 if data is None else stat.S_IMODE(os.stat(sp).st_mode)
+        write_replace(sp, json.dumps(merged, indent=2, ensure_ascii=False) + "\n", mode)
+        changed(f"created {sp} with the agent-fleet SessionStart hook" if data is None
+                else f"added the agent-fleet SessionStart hook to {sp}")
+    return OK
+
+
+def session_root(arg):
+    """The project a session runs in. Its start is the first of --project,
+    $CLAUDE_PROJECT_DIR and the working directory; the root is the start when
+    it holds the install manifest, else the start's git top level when that
+    does, else None."""
+    start = Path(os.path.realpath(os.path.expanduser(arg or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd())))
+    for d in (start, paths._git_top(start)):
+        if d is not None and (d / MANIFEST).is_file():
+            return d
+    return None
+
+
+def notice(first, *rest):
+    return "\n".join([f"agent-fleet: {first}", *rest, REPORT_LINE])
+
+
+def generic_notice(root, detail):
+    try:
+        repo = json.loads((root / MANIFEST).read_text(encoding="utf-8"))["fleet"]["repo"]
+    except Exception:
+        repo = None
+    where = repo if isinstance(repo, str) and repo else "the agent-fleet repository"
+    return notice(f"the session check could not complete ({detail}); {INTEGRAL}, see SETUP.md in {where}.")
+
+
+def absent_notice(repo, floor, why, checkout=None, agents_root=None):
+    dest = checkout or "<agents-root>/fleet"
+    return notice(
+        f"the agent-fleet repository is missing ({why}); it is an integral part of this repository's workflow.",
+        f"To install it, open Claude Code and say: Install agent-fleet from {repo} following its SETUP.md",
+        f"Or in a shell: git clone {repo} {dest} && git -C {dest} checkout --detach {floor} && "
+        f"{dest}/bin/fleet install --agents-root {agents_root or '<agents-root>'}, "
+        "then fleet link <agent> for each agent.")
+
+
+def session_notice(root):
+    """The notice for the install at `root`, or None when the fleet is present.
+
+    The manifest's fleet block is read before the full load: manifest.load
+    checks the transports against the registry of a fleet tree, and with no
+    tree, or one older than min_tag, that check would answer a schema error in
+    place of the absent fleet or the upgrade it is really about."""
+    path = root / MANIFEST
+    try:
+        fleet = manifest.strip_comments(json.loads(path.read_text(encoding="utf-8")))["fleet"]
+        repo, floor = fleet["repo"], fleet["min_tag"]
+    except (ValueError, KeyError, TypeError):
+        repo = floor = None
+    if not isinstance(repo, str) or not repo or version(floor) is None:
+        raise ValueError(f"{path} carries no usable fleet.repo and fleet.min_tag; `fleet settings` names what is wrong")
+    try:
+        h = paths.host()
+    except fleetlib.FleetError as exc:
+        hc = paths.host_config_path()
+        return absent_notice(repo, floor, str(exc) if os.path.lexists(hc) else f"no host settings at {hc}")
+    checkout = Path(os.path.realpath(os.path.expanduser(h["fleet_checkout"])))
+    agents_root = Path(os.path.realpath(os.path.expanduser(h["agents_root"])))
+    if not is_fleet_tree(checkout):
+        return absent_notice(repo, floor, f"the host settings name the checkout {checkout}, which is not a fleet tree",
+                             checkout, agents_root)
+    have = tag_of(checkout, exact=False)
+    if version(have) is None or version(have) < version(floor):
+        return notice(f"the agent-fleet checkout {checkout} is at {have or 'no release tag'}, below this "
+                      f"repository's fleet.min_tag {floor}; {INTEGRAL}.", f"To fix it: fleet upgrade {floor}")
+    m = manifest.load(root, skills_dir=checkout / SKILLS)
+    config_dir = Path(os.path.expanduser(os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude"))
+    missing = [n for n in m["skills"] if not (is_fleet_link(config_dir / "skills" / n)
+                                              and (Path(os.path.realpath(config_dir / "skills" / n)) / "SKILL.md").is_file())]
+    if not missing:
+        return None
+    names = ", ".join(missing[:NOTICE_NAMES]) + (f" and {len(missing) - NOTICE_NAMES} more"
+                                                 if len(missing) > NOTICE_NAMES else "")
+    cfg = Path(os.path.realpath(config_dir))
+    fix = (f"fleet link {cfg.parent.name}" if cfg.name == ".claude" and cfg.parent.parent == agents_root
+           else f"fleet link --config-dir {config_dir} --install {root}")
+    return notice(f"{len(missing)} agent-fleet skill(s) this repository needs are not linked for the config dir "
+                  f"{config_dir}: {names}; {INTEGRAL}.", f"To fix it: {fix}")
+
+
+def cmd_session_check(a):
+    try:
+        root = session_root(a.project)
+    except Exception:  # no project can be told, so no manifest either: say nothing
+        return OK
+    if root is None:
+        return OK
+    try:
+        text = session_notice(root)
+    except Exception as exc:  # SESSION-CHECK EXITS 0 AND SPEAKS ON STDOUT ONLY
+        text = generic_notice(root, str(exc) or type(exc).__name__)
+    if text:
+        print(text)
+    return OK
+
+
+def cmd_identities(a):
+    """List, or with --add extend, the identities fleet upgrade trusts. The
+    checkout's owner only: it is that user's upgrade that trusts them."""
+    host_tree = Path(host()["fleet_checkout"])
+    checkout_owner_only(host_tree, "fleet identities")
+    have = read_identities() or []
+    if a.add:
+        if not EMAIL.fullmatch(a.add):
+            refuse(f"--add {a.add}: not an e-mail address")
+        if a.add not in have:
+            write_identities(have + [a.add])
+            changed(f"added {a.add} to {identities_path()}")
+            have = have + [a.add]
+    for email in sorted(have):
+        print(email)
+    return OK
+
+
+# ------------------------------------------------------------------ resolvers
+
+def cmd_where(a):
+    p = paths.skill_context(a.skill)
+    if a.file:
+        if os.path.isabs(a.file) or ".." in Path(a.file).parts:
+            refuse(f"{a.file}: give a path relative to the skill's install context")
+        p = p / a.file
+    print(p)
+    return OK
+
+
+def cmd_settings(a):
+    root = paths.install_root()
+    m = manifest.load(root)
+    manifest.check_paths(m, root)   # a convention or deny list naming no file is refused here only
+    value = manifest.settings(m)
+    for part in (a.key.split(".") if a.key else []):
+        if isinstance(value, dict) and part in value:
+            value = value[part]
+        elif isinstance(value, list) and part.isdigit() and int(part) < len(value):
+            value = value[int(part)]
+        else:
+            refuse(f"no setting {a.key}")
+    print(value if isinstance(value, str) else json.dumps(value, indent=2))
+    return OK
+
+
+def interpreter(check):
+    first = Path(check).read_text(errors="replace").split("\n", 1)[0]
+    return [*shlex.split(first[2:]), str(check)] if first.startswith("#!") else [sys.executable, str(check)]
+
+
+def watchdog_config(agent, home):
+    """The config the agent's watchdog unit names in its Environment=, else the
+    unit template's <home>/<WATCHDOG_CONFIG path>. The skill lets an install put
+    the config anywhere, so a unit, when there is one, is the authority."""
+    var, rel = WATCHDOG_CONFIG
+    try:
+        env = (services.definition(services.unit("watchdog", agent), "system") or {}).get("env", {})
+    except fleetlib.EnvironmentFault:  # no service manager here: the template's path
+        env = {}
+    return env.get(var) or str(home / rel)
+
+
+def agent_daemon_env(env, agent, enabled):
+    """Point `env`'s daemon config variables at the agent's own files, the paths
+    its units set: each daemon job's `config_env` (this tree's job table) is
+    <home>/<config> when the install enables the job and removed when it does
+    not, and the stall watchdog's is watchdog_config(). <home> is the agents
+    root AS WRITTEN in host.json, never its realpath: the units are rendered
+    from it as written, and the watchdog check keys its install record by the
+    config path string. Set whether or not the file exists, so a check names
+    the file the agent lacks. Left as inherited, a check for agent X reads the
+    CALLER's own config: an agent session exports its scheduler's, and X's row
+    then reports on the caller."""
+    home = Path(os.path.expanduser(paths.host()["agents_root"]).rstrip("/")) / agent
+    on = {job for job, _ in daemon_jobs(FLEET_ROOT, enabled)}
+    for job, j in daemon_table(FLEET_ROOT)[1].items():
+        env.pop(j["config_env"], None)
+        if job in on:
+            env[j["config_env"]] = str(home / j["config"])
+    env[WATCHDOG_CONFIG[0]] = watchdog_config(agent, home)
+
+
+def cmd_check_all(a):
+    env = dict(os.environ)
+    if a.agent:
+        home = agent_home(host()["agents_root"], a.agent)
+        root = paths.home_project(home)
+        env["CLAUDE_CONFIG_DIR"] = str(home / ".claude")
+    else:
+        # The caller's own install: its environment is that install's.
+        home, root = None, paths.install_root()
+    env["FLEET_CONTEXT_ROOT"] = str(root)
+    m = manifest.load(root)
+    if home:
+        agent_daemon_env(env, a.agent, m["transports"]["enabled"])
+    rows, bad = [], 0
+    for name in m["skills"]:
+        entry = home / ".claude" / "skills" / name if home else None
+        skill_dir = Path(os.path.realpath(entry)) if entry and is_fleet_link(entry) else FLEET_ROOT / SKILLS / name
+        check = skill_dir / "installation" / "check"
+        if not check.is_file():
+            rows.append((name, "-", "no check", ""))
+            continue
+        try:
+            p = subprocess.run(interpreter(check), cwd=root, env=env, capture_output=True, text=True,
+                               stdin=subprocess.DEVNULL, timeout=300)
+            rc, text = p.returncode, (p.stdout + "\n" + p.stderr)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            rc, text = -1, f"{type(exc).__name__}: {exc}"
+        state = {0: "installed", 1: "stale", 2: "not installed"}.get(rc, "error")
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        # Whole: a check's last line is its verdict, and one cut short can end
+        # in the head of a caveat (a bare "NOT" on an OK row).
+        rows.append((name, str(rc), state, lines[-1] if lines else ""))
+        bad += rc != 0
+    w = max(len(r[0]) for r in rows) if rows else 5
+    print(f"{'SKILL':<{w}}  EXIT  {'STATE':<13}  LAST LINE")
+    for name, rc, state, line in rows:
+        print(f"{name:<{w}}  {rc:<4}  {state:<13}  {line}")
+    return DRIFT if bad else OK
+
+
+def cmd_leak_scan(a):
+    host()  # a fleet host only: off one, the gate would skip the deny half and still say "clean"
+    gate = FLEET_ROOT / "tools" / "leak-gate" / "leak_gate.py"
+    if not gate.is_file():
+        fault(f"{gate} is missing")
+    scope = (["--staged"] if a.staged else ["--range", a.range] if a.range
+             else ["--history"] if a.history else ["--tree", a.tree])
+    return subprocess.run([sys.executable, str(gate), *scope], stdin=subprocess.DEVNULL).returncode
+
+
+# ------------------------------------------------------------------ main
+
+def parser():
+    ap = argparse.ArgumentParser(prog="fleet", description="The agent fleet's host command.")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("install", help="install the fleet on this host from this clone")
+    p.add_argument("--agents-root", required=True)
+    p.add_argument("--units", choices=("none", "refresh", "all"), default="none",
+                   help="user units to render (default none)")
+    p.add_argument("--label-prefix", help="macOS: the prefix of every launchd label the fleet installs "
+                                         "(host.json launchd_prefix; default com.agent-fleet)")
+    p.add_argument("--part", choices=("all", "checkout", "agents"), default="all",
+                   help="checkout: the checkout owner's part (hooks, sub-packages, read-only mode); "
+                        "agents: the agents user's part (host settings, claims, links, gitleaks, units); "
+                        "all (default): one user does both")
+    p.set_defaults(fn=cmd_install, mutates=True)
+    p = sub.add_parser("link", help="link an agent's (or a config dir's) skills to a fleet tree")
+    p.add_argument("agent", nargs="?")
+    p.add_argument("--config-dir")
+    p.add_argument("--install")
+    p.add_argument("--from", dest="from_")
+    p.set_defaults(fn=cmd_link, mutates=True)
+    p = sub.add_parser("unlink", help="remove an agent's fleet skill links")
+    p.add_argument("agent", nargs="?")
+    p.add_argument("--config-dir")
+    p.set_defaults(fn=cmd_unlink, mutates=True)
+    p = sub.add_parser("pin-daemons", help="pin, or unpin, an agent's daemons to a fleet tree")
+    p.add_argument("agent")
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("--from", dest="from_")
+    g.add_argument("--clear", action="store_true")
+    p.set_defaults(fn=cmd_pin_daemons, mutates=True)
+    p = sub.add_parser("upgrade", help="move the host checkout to a release tag")
+    p.add_argument("tag")
+    p.add_argument("--rollback", action="store_true")
+    p.add_argument("--reviewed-outside", action="store_true")
+    p.add_argument("--ack-leak", action="append", default=[], metavar="SHA[,SHA...]")
+    p.set_defaults(fn=cmd_upgrade, mutates=True)
+    p = sub.add_parser("status", help="report drift of the host checkout and each agent")
+    p.add_argument("agents", nargs="*")
+    p.set_defaults(fn=cmd_status, mutates=False)
+    p = sub.add_parser("identities", help="list, or add to, the identities fleet upgrade trusts "
+                                          "(the checkout owner's file)")
+    p.add_argument("--add", metavar="EMAIL")
+    p.set_defaults(fn=cmd_identities, mutates=False)
+    p = sub.add_parser("where", help="print a path in a skill's install context")
+    p.add_argument("skill")
+    p.add_argument("file", nargs="?")
+    p.set_defaults(fn=cmd_where, mutates=False)
+    p = sub.add_parser("settings", help="print the install's resolved settings")
+    p.add_argument("key", nargs="?")
+    p.set_defaults(fn=cmd_settings, mutates=False)
+    p = sub.add_parser("check-all", help="run every linked skill's installation/check")
+    p.add_argument("agent", nargs="?")
+    p.set_defaults(fn=cmd_check_all, mutates=False)
+    p = sub.add_parser("leak-scan", help="run the leak check with this host's deny list, "
+                                         "in the working directory's repository")
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("--staged", action="store_true")
+    g.add_argument("--range")
+    g.add_argument("--history", action="store_true")
+    g.add_argument("--tree")
+    p.set_defaults(fn=cmd_leak_scan, mutates=False)
+    p = sub.add_parser("adopt", help="make a project an install: its manifest, and the session check "
+                                     "in its .claude/settings.json")
+    p.add_argument("project")
+    p.set_defaults(fn=cmd_adopt, mutates=True)
+    p = sub.add_parser("session-check", help="the SessionStart hook: one notice when the fleet is missing, "
+                                             "older than min_tag or not linked; nothing otherwise")
+    p.add_argument("--project")
+    p.set_defaults(fn=cmd_session_check, mutates=False)
+    return ap
+
+
+def main(argv=None):
+    a = parser().parse_args(argv)
+    try:
+        code = a.fn(a)
+    except Exit as exc:
+        if exc.code == REFUSED:
+            print(f"fleet {a.cmd}: refused, nothing changed: {exc}", file=sys.stderr)
+        else:
+            print(f"fleet {a.cmd}: {exc}", file=sys.stderr)
+        return exc.code
+    except fleetlib.FleetError as exc:
+        tail = ", nothing changed" if exc.exit_code == REFUSED else ""
+        print(f"fleet {a.cmd}: {exc}{tail}", file=sys.stderr)
+        return exc.exit_code
+    except OSError as exc:  # an environment fault, never a drift verdict (exit 1)
+        print(f"fleet {a.cmd}: {exc}", file=sys.stderr)
+        return FAULT
+    if a.mutates and code == OK and not _changes:
+        print("nothing changed")
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main())

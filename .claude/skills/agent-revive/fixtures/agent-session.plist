@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- A synthetic macOS agent job in the shape of templates/claude-agent.plist.example, for tmux_triage.test.sh. The boot message carries a double quote, an ampersand and a less-than sign: legal on macOS, where it is typed literally. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.agent-fleet-test.session.testagent</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/python3</string>
+    <string>/tmp/fleet-fixture/agents/fleet/systemd/agent-session.py</string>
+    <string>--agent</string>
+    <string>testagent</string>
+    <string>--env-file</string>
+    <string>@AUTH_FILE@</string>
+    <string>--boot</string>
+    <string>You are Testagent, just restarted: arm "both" followers &amp; check &lt;status&gt;.</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>CLAUDE_CONFIG_DIR</key>
+    <string>/nonexistent-fixture-home/testagent/.claude-from-plist</string>
+    <key>FLEET_AGENT_AUTH</key>
+    <string>token</string>
+    <key>TMUX_TMPDIR</key>
+    <string>/tmp/fleet-fixture/agents/run/claude-tmux-testagent</string>
+  </dict>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+</dict>
+</plist>

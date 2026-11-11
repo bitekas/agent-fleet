@@ -1,0 +1,39 @@
+# Rendered by fleet install from systemd/agent-watch@.service.in at <tag>. Edit the template, not this file.
+[Unit]
+Description=Slack watcher (watch.py) of agent %i
+Documentation=file://<fleet>/systemd/README.md
+# Never give up. A unit that hit a start limit stays dead with nothing to say so,
+# which is the silence this unit exists to end; RestartSteps below is the brake.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=<agents-root>/%i/product
+# Set HERE, in the unit, not in a wrapper: the owner guard reads CLAUDE_CONFIG_DIR,
+# and the agents verify a daemon by reading it out of /proc/<pid>/environ.
+Environment=CLAUDE_CONFIG_DIR=<agents-root>/%i/.claude
+Environment=SLACK_WATCH_CONFIG=<agents-root>/%i/config/slack-watch.json
+Environment=PYTHONUNBUFFERED=1
+# Per-agent tunables (SLACK_WATCH_POLL_SECS ...). Optional. A value here overrides the
+# Environment= lines above, so it holds tunables only, never the two paths.
+EnvironmentFile=-<agents-root>/%i/config/slack-watch.env
+ExecStartPre=/usr/bin/python3 <fleet>/systemd/agent-daemons.py rotate <agents-root>/%i/state/daemons/slack-watch.log
+ExecStart=/usr/bin/python3 -u <fleet>/.claude/skills/slack-communication/watch.py
+# The session reads this log through `agent-daemons.py follow`, never the journal.
+# The directory must exist before the first start (--install creates it).
+StandardOutput=append:<agents-root>/%i/state/daemons/slack-watch.log
+StandardError=append:<agents-root>/%i/state/daemons/slack-watch.log
+Restart=always
+# ⚠️ Exit 0 is the GUARD refusal (not the owner, or another watcher holds the
+# lock), and the one exit that must NOT be retried: retrying it is a loop that
+# changes nothing. The unit stays inactive and the follower raises DAEMON-ALERT.
+RestartPreventExitStatus=0
+# A crash restarts after 10 s, backing off to 5 min over five restarts, so a
+# crash loop is slow and visible (NRestarts climbs; the follower alerts on it).
+RestartSec=10s
+RestartSteps=5
+RestartMaxDelaySec=5min
+TimeoutStopSec=15s
+
+[Install]
+WantedBy=default.target

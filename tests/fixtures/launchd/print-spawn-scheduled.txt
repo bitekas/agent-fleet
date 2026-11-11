@@ -1,0 +1,32 @@
+#fixture `launchctl print` of a KeepAlive LaunchAgent in launchd's throttle: it exited 1
+#fixture at once and launchd holds the next start for ThrottleInterval. state, pid,
+#fixture runs and last exit code were sampled every second on macOS 27.0.1 (the macOS
+#fixture runbook, facts-a): `state = spawn scheduled`, no `pid` line, `last exit code
+#fixture = 1`, runs 1 until the respawn. The other lines follow print-guard-exit.txt.
+#fixture The top level only (the runbook printed no nested block); the label,
+#fixture paths and any pid are synthetic. The tests drop these #fixture lines.
+gui/501/com.agent-fleet-test.sched.ada = {
+	active count = 0
+	path = /tmp/fleet-fixture/home/Library/LaunchAgents/com.agent-fleet-test.sched.ada.plist
+	type = LaunchAgent
+	state = spawn scheduled
+	program = /opt/homebrew/bin/python3
+	working directory = /tmp/fleet-fixture/agents/ada/product
+	stdout path = /tmp/fleet-fixture/agents/ada/state/daemons/sched.log
+	stderr path = /tmp/fleet-fixture/agents/ada/state/daemons/sched.log
+	domain = gui/501 [100015]
+	asid = 100015
+	minimum runtime = 10
+	exit timeout = 15
+	runs = 1
+	last exit code = 1
+	spawn type = background (5)
+	jetsam priority = 40
+	jetsam memory limit (active) = (unlimited)
+	jetsam memory limit (inactive) = (unlimited)
+	jetsamproperties category = daemon
+	jetsam thread limit = 32
+	cpumon = default
+	sanitizer flags = 0x0
+	properties = runatload | inferred program
+}

@@ -1,0 +1,15 @@
+{
+  "_comment": "FIXTURE - a synthetic install's config for slack-communication, for tests that resolve the skill's install context. Shaped like config.example.json; every value is invented, and no id here trips the public leak patterns.",
+  "workspace": { "domain": "example.slack.com", "team_id": "T0EXMPL" },
+  "bot": { "user_id": "U0BOTA", "handle": "ada-bot", "display_name": "Ada" },
+  "token": { "path": "/tmp/fleet-fixture/secrets/slack-bot.token" },
+  "owner": { "claude_config_dir": "/tmp/fleet-fixture/agents/ada/.claude" },
+  "state": { "dir": "/tmp/fleet-fixture/agents/ada/state/watch", "prefix": "ada-slack-watch" },
+  "poll": { "poll_secs": 30, "sweep_secs": 300, "sweep_budget": 3 },
+  "known_users": {
+    "_comment": "UID -> display label.",
+    "U0ADA": "Ada",
+    "U0GRACE": "Grace",
+    "U0ALAN": "Alan"
+  }
+}

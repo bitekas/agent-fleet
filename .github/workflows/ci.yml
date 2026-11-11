@@ -1,0 +1,204 @@
+# Fleet CI. Four jobs on every push (all branches and v* tags), every pull
+# request from a branch of this repository, and a manual dispatch:
+#   test            every fleet test (tests/run-all.sh: discovery, census, run)
+#   gates           the structural gates (tests/gates/run.sh)
+#   leak            public leak patterns, allow list and gitleaks over the
+#                   pushed or proposed range; never the private deny list,
+#                   which never leaves the hosts that hold it
+#   commit-hygiene  no commit message in the range carries an AI-attribution
+#                   line (tools/commit-hygiene/ai-attribution.sh check-range)
+#
+# Where it runs: the repository owner's self-hosted Linux runner, labels
+# [self-hosted, Linux, ARM64, agent-fleet-linux]. What that runner carries and
+# how it behaves is the runner contract in CONTRIBUTING.md section 9; the test
+# job's first step checks it. Its tool cache is /opt/hostedtoolcache, the prefix
+# setup-python's Linux builds are compiled for: no step here may set
+# RUNNER_TOOL_CACHE or AGENT_TOOLSDIRECTORY, or setup-python fails.
+#
+# Security shape, each part load-bearing (tests/gates/gates.py workflow-safety
+# pins the first two):
+#   * Every job carries the fork gate
+#       if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+#     A self-hosted runner is the owner's machine, and a job without this line
+#     runs a fork's code there the moment its pull request is opened. The
+#     triggers are push, pull_request and workflow_dispatch only: any other
+#     event an outsider can raise would pass the gate's first clause.
+#   * permissions: contents: read for the whole workflow and none per job, so
+#     every job's token is read-only. This workflow uses no secret.
+#   * Every third-party action is pinned by full commit SHA (the tag is the
+#     trailing comment); a moved tag cannot change what runs here.
+#   * persist-credentials: false - no job pushes, so none keeps a token in
+#     the clone's git config.
+#   * Event values reach a shell only through env:, never through ${{ }} inside
+#     a run: line, so a branch name or pull-request field cannot inject a
+#     command.
+#   * The range both history checks scan comes from tools/ci/range.sh: on the
+#     first push of main (event before = all zeros) and on a dispatched run of
+#     main it is the whole history, never an empty range.
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    # bash -eo pipefail: the implicit default shell has no pipefail
+    shell: bash
+
+jobs:
+  test:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # The runner is Ubuntu 26.04 for x11vnc 0.9.17, the first with more than 5 mouse
+    # buttons: share.test.mjs proves side buttons 6-8 cannot reach X, and on 0.9.16
+    # its control cannot deliver them at all, so the test (correctly) issues no verdict.
+    runs-on: [self-hosted, Linux, ARM64, agent-fleet-linux]
+    timeout-minutes: 20
+    steps:
+      - name: Runner contract (CONTRIBUTING.md section 9)
+        # A job runs without sudo, so what the tests need from the system is on the
+        # runner or nowhere. Each command here is one a test, the checkout or the
+        # gitleaks installer runs: xvfb-run and the Xvfb and xauth it starts
+        # (profiles.test.mjs, share.test.mjs), x11vnc, websockify, xinput, xprop,
+        # xwd, ImageMagick's convert and stdbuf (share.test.mjs), tmux
+        # (tmux_triage.test.sh, watchdog_live.test.py, agent-session.test.py),
+        # systemd-analyze (units.test.py), git (a checkout without it has no .git),
+        # curl (install-gitleaks.sh). Without one, its tests exit NO VERDICT, which
+        # run-all.sh counts as a failure; this step names the command instead.
+        run: |
+          missing=""
+          for c in git curl xvfb-run Xvfb xauth x11vnc websockify xinput xprop xwd convert stdbuf tmux systemd-analyze; do
+            command -v "$c" >/dev/null 2>&1 || missing="$missing $c"
+          done
+          for c in $missing; do
+            echo "::error::the Linux runner has no '$c' on PATH: see the runner contract, CONTRIBUTING.md section 9"
+          done
+          [ -z "$missing" ] || exit 1
+          echo "runner contract: every command the tests need is on PATH"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.14"
+      - name: A Python environment of this job's own
+        # setup-python's interpreter lives in the runner's tool cache, which outlives
+        # the job: a package installed into it would still be there for the next
+        # job, so a dependency dropped from a requirements file would keep passing.
+        # A venv under RUNNER_TEMP holds this job's packages and nothing else.
+        # --clear empties it first: the runner's own emptying of RUNNER_TEMP stops
+        # at an entry it cannot delete, so an earlier job's venv can still be there.
+        run: |
+          python3 -m venv --clear "$RUNNER_TEMP/venv"
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+      - name: Python dependencies of the skills' tests
+        # PyJWT[crypto], declared once in google-spreadsheet's requirements: without it
+        # gsheets.test.py signs nothing and exits 2 (INCONCLUSIVE), a failure here.
+        run: python3 -m pip install -r .claude/skills/google-spreadsheet/installation/requirements.txt
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          package-manager-cache: false
+      - name: Install gitleaks (pinned, checksum-verified)
+        # Into a directory made for this job: the runner's emptying of RUNNER_TEMP
+        # stops at an entry it cannot delete, so a fixed path could hold a binary
+        # an earlier job left, which the installer would accept on its version alone.
+        run: |
+          bin="$(mktemp -d "$RUNNER_TEMP/gitleaks.XXXXXX")"
+          bash tools/leak-gate/install-gitleaks.sh "$bin"
+          echo "$bin" >> "$GITHUB_PATH"
+      - name: npm ci in each sub-package
+        run: |
+          [ -d .claude/skills ] || { echo "no .claude/skills: no sub-package"; exit 0; }
+          find .claude/skills -name node_modules -prune -o -name package-lock.json -print0 |
+            while IFS= read -r -d "" lock; do
+              echo "npm ci in ${lock%/package-lock.json}"
+              npm ci --prefix "${lock%/package-lock.json}"
+            done
+      - name: Chromium for the sign-in driver tests
+        # agent-revive's profiles.test.mjs and share.test.mjs drive a real Chromium
+        # under Xvfb. It downloads into the workspace, which the runner empties after
+        # the job. The system libraries it needs are on the runner (the contract);
+        # one a future Chromium needs is named by `playwright install`'s host
+        # validation warning and fails Chromium's launch. timeout-minutes: a
+        # download too slow fails HERE, naming this step, with the test step's
+        # ~6 minutes still inside the job's 20.
+        timeout-minutes: 8
+        run: |
+          cd .claude/skills/agent-revive/signin_driver
+          PLAYWRIGHT_BROWSERS_PATH="$PWD/browsers" npx playwright install chromium
+      - name: Run every test
+        run: bash tests/run-all.sh
+
+  gates:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Linux, ARM64, agent-fleet-linux]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.14"
+      - name: Run the structural gates
+        run: bash tests/gates/run.sh
+
+  leak:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Linux, ARM64, agent-fleet-linux]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.14"
+      - name: Install gitleaks (pinned, checksum-verified)
+        # Into a directory made for this job: the runner's emptying of RUNNER_TEMP
+        # stops at an entry it cannot delete, so a fixed path could hold a binary
+        # an earlier job left, which the installer would accept on its version alone.
+        run: |
+          bin="$(mktemp -d "$RUNNER_TEMP/gitleaks.XXXXXX")"
+          bash tools/leak-gate/install-gitleaks.sh "$bin"
+          echo "$bin" >> "$GITHUB_PATH"
+      - name: Leak check over the range
+        env:
+          CI_EVENT: ${{ github.event_name }}
+          CI_REF: ${{ github.ref }}
+          CI_BEFORE: ${{ github.event.before }}
+          CI_AFTER: ${{ github.sha }}
+          CI_PR_BASE: ${{ github.event.pull_request.base.sha }}
+          CI_PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          range="$(bash tools/ci/range.sh)"
+          python3 tools/leak-gate/leak_gate.py --ci --range "$range" --ref "$CI_REF"
+
+  commit-hygiene:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Linux, ARM64, agent-fleet-linux]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: No AI-attribution line in any commit message of the range
+        env:
+          CI_EVENT: ${{ github.event_name }}
+          CI_REF: ${{ github.ref }}
+          CI_BEFORE: ${{ github.event.before }}
+          CI_AFTER: ${{ github.sha }}
+          CI_PR_BASE: ${{ github.event.pull_request.base.sha }}
+          CI_PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          range="$(bash tools/ci/range.sh)"
+          bash tools/commit-hygiene/ai-attribution.sh check-range "$range"

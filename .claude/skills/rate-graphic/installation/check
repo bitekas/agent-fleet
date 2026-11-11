@@ -1,0 +1,278 @@
+#!/usr/bin/env python3
+"""[" -f "${BASH_SOURCE:-$0}" ] || { echo "a Python script: run it with python3" >&2; exit 126; }; exec python3 "${BASH_SOURCE:-$0}" "$@" || exit # sh/bash: hand off to python3 before reading the docstring
+Is this skill installed, and is it current?
+
+Prints ONE line and exits:
+
+    0  installed, current      -> proceed
+    1  installed, but stale, incomplete, or NOT FULLY MEASURED -> do not proceed
+    2  not installed           -> follow INSTRUCTION.md
+
+State 1 is the reason this exists. Absent is loud: gcloud is missing, or the key
+file is not there, and rate.mjs exits 2 at startup naming the config key it came
+from. Stale is silent: every command runs, the key resolves, the model answers,
+and the run is billed against an install nobody has revisited since the
+procedure changed.
+
+It verifies REAL ARTIFACTS, never a marker file: gcloud resolves on PATH,
+config.json parses and carries every key rate.mjs requires, the ratings log's
+parent directory exists, and the service-account key glob resolves to exactly
+one non-empty file with private permissions. A marker file can lie; those
+cannot.
+
+.install-state.json is a SPECIFIC file: it is committed like everything else, so
+it travels to machines that never ran the install. That is why it records the
+host it was written on and why this script checks it - without that, one pull
+would make every other machine read as "installed and current".
+
+--- THREE PROPERTIES OF THIS SCRIPT ARE LOAD-BEARING. Removing any of them
+--- leaves a check that still runs, still prints, and no longer measures what
+--- its name claims.
+
+(1) PATHS ARE RESOLVED THE WAY rate.mjs RESOLVES THEM, AND ONLY THAT WAY.
+    The config file is RATE_GRAPHIC_CONFIG, else config.json in this skill's
+    install context (fleetlib, the resolver behind the `fleet where` rate.mjs
+    asks). A configured path is expanded (${VAR:-default}, $VAR / ${VAR}, a
+    leading ~) and a relative one resolves against THE CONFIG FILE'S DIRECTORY
+    - never the caller's cwd and never a repo root. That is rate.mjs's own
+    `configPath()` convention. Do NOT add a "helpful" fallback that also looks
+    somewhere else (the main checkout when this is a worktree, the skill
+    directory): rate.mjs looks in exactly one place, and a check that finds a
+    key rate.mjs cannot find reports a working install that does not work - a
+    false green, which is the one outcome worse than no check.
+
+(2) THE SECRET-READ LEG IS OPT-IN, AND ITS DEFAULT IS "NOT MEASURED", NOT
+    "PASSED". Read access to the secret is granted in a cloud console, has no
+    on-disk artifact, and can only be established by a network call. So this
+    script does not make that call unless RATE_GRAPHIC_CHECK_SECRET=1 is set,
+    and WITHOUT it the script exits 1 saying which leg went unmeasured. Exiting
+    0 with a note would be the marker-file lie wearing a different hat: 0 means
+    proceed, and nothing that has not been measured may say proceed.
+
+(3) EXIT 0 IS EMITTED FROM EXACTLY ONE PLACE, AND ONLY AFTER THE PROBE HAS
+    ACTUALLY RUN AND RETURNED A SECRET. "Passed" and "never ran" are different
+    outcomes and this script never collapses them: every not-measured path
+    leaves through NO VERDICT with code 1. If you add a leg, add it the same
+    way - a leg that can be skipped must be able to say it was skipped.
+
+Environment, for driving this script without perturbing a live install:
+    RATE_GRAPHIC_CONFIG          the config file to check (the same variable
+                                 rate.mjs reads, so the two cannot disagree)
+    RATE_GRAPHIC_INSTALL_STATE   the state file to compare against
+    RATE_GRAPHIC_CHECK_SECRET=1  opt in to the network leg
+With both file overrides set, no install context is consulted.
+Neither override can launder a fake install: the artifacts above are verified
+independently of both, so a hand-written state file with the right version and
+host still fails the moment the key file is absent.
+"""
+import glob
+import json
+import os
+import re
+import shutil
+import socket
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+# realpath, never abspath: reached through a personal skill link, abspath is the
+# link's path under an agent's config dir, and the fleet tree is not above it.
+HERE = os.path.dirname(os.path.realpath(__file__))
+SKILL = os.path.dirname(HERE)
+sys.path.insert(0, str(Path(SKILL).parents[2] / "lib"))
+from fleetlib import FleetError, paths  # noqa: E402
+
+CONFIG, STATE = None, None
+
+# Every key rate.mjs reads with no default. Kept here as a list rather than
+# discovered, so a key added to the script without being added to the install
+# procedure shows up as a divergence rather than as a run that fails at startup.
+REQUIRED_KEYS = (
+    "ratings_log.path",
+    "credentials.service_account_key_path",
+    "secret.name",
+    "secret.project",
+)
+
+
+def out(code, msg):
+    print(msg)
+    sys.exit(code)
+
+
+def specific_files():
+    """(config, state): each env override, else the file in this skill's
+    install context, which is resolved only when an override is missing."""
+    config = os.environ.get("RATE_GRAPHIC_CONFIG")
+    state = os.environ.get("RATE_GRAPHIC_INSTALL_STATE")
+    if not (config and state):
+        try:
+            ctx = paths.skill_context("rate-graphic")
+        except FleetError as e:
+            out(2, f"NOT INSTALLED: this skill's install context is not resolvable ({e})")
+        config = config or str(ctx / "config.json")
+        state = state or str(ctx / "installation" / ".install-state.json")
+    return os.path.abspath(config), state
+
+
+def declared_version():
+    """The version SKILL.md declares. Absent means the skill predates the
+    convention, which is itself a reason to re-install rather than to guess."""
+    with open(os.path.join(SKILL, "SKILL.md"), encoding="utf-8") as f:
+        head = f.read(4096)
+    m = re.search(r"^version:\s*(\d+)\s*$", head, re.M)
+    return int(m.group(1)) if m else 0
+
+
+def dotted(cfg, key):
+    node = cfg
+    for part in key.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return None
+        node = node[part]
+    return node
+
+
+def config_path(p):
+    """A configured path as rate.mjs's `configPath()` resolves it: expanded by
+    fleetlib (shell `:-` semantics, nesting included), then a relative result
+    against the config file's directory. See load-bearing property (1).
+
+    An unset variable with NO default stays the literal `$NAME`, so the glob
+    matches nothing and the message below prints the unexpanded pattern, naming
+    the variable nobody set. Substituting '' would point at a different,
+    possibly existing file, and a check that validates the wrong credential and
+    passes is worse than one that reds.
+    """
+    return str(paths.resolve_config_path(p, CONFIG))
+
+
+def main():
+    global CONFIG, STATE
+    CONFIG, STATE = specific_files()
+    want = declared_version()
+
+    if not os.path.exists(CONFIG):
+        out(2, f"NOT INSTALLED: no config at {CONFIG}. Run: `install -m 644 "
+               f"{os.path.join(SKILL, 'config.example.json')} {CONFIG}`, then fill it in.")
+    try:
+        with open(CONFIG, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception as e:  # noqa: BLE001
+        out(2, f"NOT INSTALLED: {CONFIG} does not parse ({type(e).__name__}: {e})")
+
+    for key in REQUIRED_KEYS:
+        if dotted(cfg, key) is None:
+            out(2, f"NOT INSTALLED: {CONFIG} is missing required key '{key}' "
+                   f"(rate.mjs exits 2 at startup naming this same key)")
+
+    if not shutil.which("gcloud"):
+        out(2, "NOT INSTALLED: gcloud is not on PATH (see installation/INSTRUCTION.md)")
+
+    # The ratings log. rate.mjs checks the PARENT DIRECTORY before any model
+    # call and refuses to create it, so this checks exactly that and no more:
+    # the log file itself is absent until the first run, and an absent log is
+    # not an absent install.
+    log_path = config_path(dotted(cfg, "ratings_log.path"))
+    log_dir = os.path.dirname(log_path)
+    if not os.path.isdir(log_dir):
+        out(2, f"NOT INSTALLED: the ratings log's directory does not exist: {log_dir} "
+               f"(config key 'ratings_log.path' = {dotted(cfg, 'ratings_log.path')!r}, "
+               f"resolved against the config file's directory). rate.mjs refuses to create it.")
+
+    pattern = config_path(dotted(cfg, "credentials.service_account_key_path"))
+    matches = sorted(p for p in glob.glob(pattern) if os.path.isfile(p))
+    if not matches:
+        out(2, f"NOT INSTALLED: no service-account key matched {pattern} "
+               f"(config key 'credentials.service_account_key_path'). The key lives "
+               f"outside the skill tree, so a clone that has never been provisioned "
+               f"has none. A literal $NAME left in the pattern above means that "
+               f"variable is unset and nothing guessed a substitute.")
+    key_file = matches[0]
+    if len(matches) > 1:
+        # rate.mjs takes matches[0] and warns. That is a decision, and the wrong
+        # key authenticates as the wrong principal against the right API, so the
+        # install is not finished while the glob is ambiguous.
+        out(1, f"INCOMPLETE: {len(matches)} files match {pattern}; the glob must resolve "
+               f"to exactly one. rate.mjs would use {key_file} and only warn.")
+    if os.path.getsize(key_file) == 0:
+        out(2, f"NOT INSTALLED: service-account key is empty: {key_file}")
+    mode = os.stat(key_file).st_mode & 0o777
+    if mode & 0o077:
+        out(1, f"INCOMPLETE: service-account key {key_file} is mode {mode:03o}; it is a "
+               f"credential and must be {0o600:03o}. Run: chmod 600 {key_file}")
+
+    # Artifacts on disk are all present and correct. What can still be wrong is
+    # the recorded version, the host, and the one leg no artifact can answer.
+    if not os.path.exists(STATE):
+        out(1, f"STALE: installed, but no .install-state.json records which version "
+               f"(SKILL.md declares {want}). Re-run installation/INSTRUCTION.md.")
+    try:
+        with open(STATE, encoding="utf-8") as f:
+            state = json.load(f)
+        have = int(state.get("version", -1))
+    except Exception as e:  # noqa: BLE001
+        out(1, f"STALE: {STATE} unreadable ({type(e).__name__}: {e})")
+
+    host = state.get("host")
+    if host and host != socket.gethostname():
+        out(1, f"STALE: last installed on {host}, not on this machine "
+               f"({socket.gethostname()}). The state file travels with the repo; the "
+               f"install does not. Re-run installation/INSTRUCTION.md.")
+
+    if have < want:
+        out(1, f"STALE: installed version {have}, SKILL.md declares {want}. "
+               f"Re-run installation/INSTRUCTION.md.")
+    if have > want:
+        out(1, f"STALE: installed version {have} is NEWER than SKILL.md's {want}. "
+               f"The checkout is behind the install; pull before running.")
+
+    secret_name = dotted(cfg, "secret.name")
+    secret_project = dotted(cfg, "secret.project")
+
+    if os.environ.get("RATE_GRAPHIC_CHECK_SECRET") != "1":
+        # See load-bearing property (2). This is NO VERDICT, not a pass.
+        out(1, f"NO VERDICT: every on-disk artifact is installed and current (version "
+               f"{want}, key {key_file}), but the one leg with no artifact - read access "
+               f"to secret '{secret_name}' in project '{secret_project}' - was NOT "
+               f"measured, because measuring it needs the network. Re-run with "
+               f"RATE_GRAPHIC_CHECK_SECRET=1 to probe it, or confirm by hand: "
+               f"gcloud secrets versions access latest --secret={secret_name} "
+               f"--project={secret_project}. Until then this check does not know whether "
+               f"the skill works, and will not say that it does.")
+
+    # The probe. Mirrors resolveKey() in rate.mjs, including the ISOLATED
+    # CLOUDSDK_CONFIG: activating a service account in the shared config
+    # repoints the whole machine's gcloud auth, and only a manual restore puts it
+    # back. The secret's VALUE is never printed or stored.
+    sdk = tempfile.mkdtemp(prefix="rate-graphic-check-gcloud-")
+    env = dict(os.environ, CLOUDSDK_CONFIG=sdk)
+    try:
+        r = subprocess.run(
+            ["gcloud", "auth", "activate-service-account", f"--key-file={key_file}", "-q"],
+            env=env, capture_output=True, text=True)
+        if r.returncode != 0:
+            out(1, f"INCOMPLETE: the service-account key {key_file} could not be "
+                   f"activated: {r.stderr.strip()[:300]}")
+        r = subprocess.run(
+            ["gcloud", "secrets", "versions", "access", "latest",
+             f"--secret={secret_name}", f"--project={secret_project}"],
+            env=env, capture_output=True, text=True)
+        if r.returncode != 0:
+            out(1, f"INCOMPLETE: the service account cannot read secret '{secret_name}' "
+                   f"in project '{secret_project}': {r.stderr.strip()[:300]}")
+        if not r.stdout.strip():
+            out(1, f"INCOMPLETE: secret '{secret_name}' in project '{secret_project}' "
+                   f"resolved to an empty value.")
+    finally:
+        shutil.rmtree(sdk, ignore_errors=True)
+
+    # The only exit 0 in this file. See load-bearing property (3).
+    out(0, f"OK: installed and current (version {want}), key {key_file}, "
+           f"secret '{secret_name}' readable in '{secret_project}', "
+           f"ratings log {log_path}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,31 @@
+#fixture `launchctl print` of the same job after its GUARD refusal: it exited 0, and
+#fixture KeepAlive SuccessfulExit=false does not restart an exit 0. Captured on macOS
+#fixture 27.0.1 (the macOS runbook, phase p3, 20 s after the exit): not running, no
+#fixture `pid` line, `last exit code = 0`, runs 3.
+#fixture The top level only (the runbook printed no nested block); the label,
+#fixture paths and any pid are synthetic. The tests drop these #fixture lines.
+gui/501/com.agent-fleet-test.sched.ada = {
+	active count = 0
+	path = /tmp/fleet-fixture/home/Library/LaunchAgents/com.agent-fleet-test.sched.ada.plist
+	type = LaunchAgent
+	state = not running
+	program = /opt/homebrew/bin/python3
+	working directory = /tmp/fleet-fixture/agents/ada/product
+	stdout path = /tmp/fleet-fixture/agents/ada/state/daemons/sched.log
+	stderr path = /tmp/fleet-fixture/agents/ada/state/daemons/sched.log
+	domain = gui/501 [100015]
+	asid = 100015
+	minimum runtime = 10
+	exit timeout = 15
+	runs = 3
+	last exit code = 0
+	spawn type = background (5)
+	jetsam priority = 40
+	jetsam memory limit (active) = (unlimited)
+	jetsam memory limit (inactive) = (unlimited)
+	jetsamproperties category = daemon
+	jetsam thread limit = 32
+	cpumon = default
+	sanitizer flags = 0x0
+	properties = runatload | inferred program
+}

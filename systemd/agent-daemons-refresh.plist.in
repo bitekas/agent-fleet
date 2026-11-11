@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Every 5 minutes: agent-daemons.py refresh, which restarts an agent daemon whose
+  code or config changed, or that is a day old. The macOS form of
+  agent-daemons-refresh.service.in and its timer: StartInterval 300 is the
+  timer, and the first run comes 300 s after the job loads, as OnBootSec=5min.
+  Its output goes to the log beside the fleet's upgrades.log. No double hyphen
+  may appear in this comment: XML ends a comment there.
+  FLEET_HOST_CONFIG is the host settings file fleet install writes: launchd starts
+  a job with the user's real HOME, so without it a host whose host.json is not
+  at the default path would refresh nothing. refresh exits 3 with one line
+  when that file is missing.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>@LABEL@</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>@PYTHON@</string>
+    <string>@FLEET@/systemd/agent-daemons.py</string>
+    <string>refresh</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>@PATH@</string>
+    <key>FLEET_HOST_CONFIG</key>
+    <string>@HOST_CONFIG@</string>
+    <key>PYTHONDONTWRITEBYTECODE</key>
+    <string>1</string>
+  </dict>
+  <key>StartInterval</key>
+  <integer>300</integer>
+  <key>StandardOutPath</key>
+  <string>@REFRESH_LOG@</string>
+  <key>StandardErrorPath</key>
+  <string>@REFRESH_LOG@</string>
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>

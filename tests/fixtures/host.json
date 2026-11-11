@@ -1,0 +1,6 @@
+{
+  "schema": 1,
+  "agents_root": "/tmp/fleet-fixture/agents",
+  "fleet_checkout": "/tmp/fleet-fixture/agents/fleet",
+  "claims_dir": "/tmp/fleet-fixture/agents/claims"
+}

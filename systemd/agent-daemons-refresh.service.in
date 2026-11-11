@@ -1,0 +1,12 @@
+[Unit]
+Description=Restart an agent daemon whose code or config changed, or that is a day old
+Documentation=file://@FLEET@/systemd/README.md
+
+[Service]
+Type=oneshot
+# No bytecode: the fleet checkout is code the agents user may not write.
+Environment=PYTHONDONTWRITEBYTECODE=1
+# The host settings file fleet install writes (render-units --host-config):
+# refresh reads it first, and exits 3 with one line naming it when it is missing.
+Environment=FLEET_HOST_CONFIG=@HOST_CONFIG@
+ExecStart=@PYTHON@ @FLEET@/systemd/agent-daemons.py refresh

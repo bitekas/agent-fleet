@@ -1,0 +1,18 @@
+ ✻ Welcome back
+
+ Claude Code Status v2.1.267
+
+ Working Directory
+ • /tmp/example1/agents/example/repo
+
+ Account
+ • Login method: Claude Duo Account
+ • Organization: agent.example@example.com's Organization
+ • Email: agent.example@example.com
+
+ Model
+ • opus
+
+ Press Esc to close
+
+ ⏵⏵ bypass permissions on (shift+tab to cycle) · ? for shortcuts

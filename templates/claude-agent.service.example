@@ -1,0 +1,173 @@
+# TEMPLATE - the unit that runs ONE long-running agent: a Claude Code session
+# inside tmux, resumed across restarts, briefed by a boot message once it is
+# ready. One unit per agent, claude-agent-<agent-name>.service, in one of two
+# forms:
+#
+#   system form  /etc/systemd/system/, run by the system manager as
+#                User=<agents-user> and installed by the administrator, so the
+#                agents user can neither stop, disable nor edit it. Every install
+#                with an administrator uses it (SETUP.md, "The two users").
+#   user form    ~/.config/systemd/user/, run by the agents user's own manager
+#                (`systemctl --user`) and installed without sudo, for an install
+#                whose only user has no sudo; that user controls the unit.
+#
+# TWO FORMS, ONE FILE. A line that begins `#system: ` belongs to the system form
+# only, and one that begins `#user: ` to the user form only: the render keeps
+# one form's lines without the marker and deletes the other's (adding-an-agent
+# section 5 step 6, its `form=`). A line with no marker is in both. The marked
+# lines are the whole difference - User= and the boot target - because every
+# runtime path is written with %t (below).
+#
+# Lingering keeps the agents user's own manager running with nobody logged in, in
+# both forms: the daemons are that user's user units, and in the user form so is
+# this one. `loginctl show-user <agents-user> -p Linger` must say Linger=yes.
+# This is the systemd form, for Linux; a macOS host runs the same session from a
+# launchd job instead.
+#
+# Placeholders - replace every one. adding-an-agent section 5 step 6 fills them
+# with one sed line, proves none is left and verifies the result:
+#
+#   <agent-name>        the agent's lowercase name: its home directory, its
+#                       charter (.claude/agents/<agent-name>.md) and this unit
+#   <Agent-Name>        the name as people read it: letters, digits, spaces and
+#                       hyphens only, because it is typed inside the boot message
+#   <agents-root>       the directory holding every agent home (host.json agents_root)
+#   <fleet>             the host fleet checkout (host.json fleet_checkout)
+#   <project-dir>       the install checkout's directory name inside every agent home
+#   <watch-job>         the working chat transport's watch.job in its transport.json
+#                       (slack-watch for Slack)
+#   <watch-config-env>  the same file's watch.config_env (SLACK_WATCH_CONFIG for Slack)
+#   <uid>               the numeric id of the user every agent runs as (`id -u`)
+#   <agents-user>       that user's name (`id -un`): the system form's User=
+#   <auth-mode>         how the session signs in to Claude Code: token, api-key or
+#                       login (adding-an-agent section 3 step 4)
+#
+# %t IS WHAT MAKES ONE FILE SERVE BOTH FORMS. It is the service manager's runtime
+# directory: /run for the system's and /run/user/<uid> for the user's. The tmux
+# socket directory is therefore %t/claude-tmux-<agent-name> in both forms, and
+# what reaches the session from outside names the directory of the form it runs
+# in - /run/claude-tmux-<agent-name> for the system form,
+# /run/user/<uid>/claude-tmux-<agent-name> for the user form: the stall
+# watchdog's config and unit (adding-an-agent section 5 step 7 renders both)
+# and agent-revive's fleet.tmux.tmpdir.
+#
+# Before the first start: the agent's home, its empty config directory and its
+# one interactive sign-in exist (adding-an-agent section 3), its charter is on
+# the branch its checkout tracks, and its daemon user units are enabled. A
+# first-run dialog left for the unit is on screen when the boot message is typed,
+# and the session comes up unbriefed.
+#
+# CHANGING THIS UNIT NEVER RESTARTS THE SERVICE. Install the new file,
+# `systemctl daemon-reload` (`systemctl --user daemon-reload` for the user form),
+# and the new shape applies at the next restart. A restart kills the agent's
+# session and every subagent it is supervising.
+
+[Unit]
+Description=<Agent-Name> - a long-running Claude Code agent (own home, own session tree)
+# Ordering for the system form. The user's manager has no network-online.target,
+# so under it these two lines name nothing and order nothing; the pre-sleep below
+# is what gives the network time at boot in both forms.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=forking
+# Who runs the session in the system form. A user unit runs as the user whose
+# manager runs it, so the user form has no such line.
+#system: User=<agents-user>
+# The agent's OWN checkout of the install repository: the session starts here,
+# --continue resumes the conversation last held in this directory, and --agent
+# reads the charter from this checkout's .claude/agents/.
+WorkingDirectory=<agents-root>/<agent-name>/<project-dir>
+# The agent's OWN config directory: its sign-in, session tree and history. Never
+# a copy of another agent's: a copy shares that agent's per-install identifiers
+# and its rotating sign-in token, and both agents lose their sign-in.
+Environment=CLAUDE_CONFIG_DIR=<agents-root>/<agent-name>/.claude
+# How the session signs in, recorded where the skills that sign an agent in or
+# move it between accounts read per-agent facts: `token` (CLAUDE_CODE_OAUTH_TOKEN,
+# a long-lived token from `claude setup-token`) and `api-key` (ANTHROPIC_API_KEY)
+# take their credential from the file below; `login` keeps an interactive sign-in
+# in CLAUDE_CONFIG_DIR.
+Environment=FLEET_AGENT_AUTH=<auth-mode>
+# The credential for `token` and `api-key`: ONE KEY=value line, mode 600, in the
+# agent's personal secrets, empty for `login`. The file is required, without a
+# `-` prefix: a missing one fails the start naming the file, where an optional
+# one would start a token agent with no credential and leave it at a sign-in
+# screen.
+EnvironmentFile=<agents-root>/<agent-name>/secrets/personal/claude-auth.env
+# The daemons' configs, named to the session so a skill run from it (adding a
+# scheduled task, claiming a request) reads the same files the daemon units read.
+# Neither has a fallback that resolves: a missing line fails naming the file
+# instead of quietly using another agent's configuration.
+Environment=SCHED_CONFIG=<agents-root>/<agent-name>/config/scheduler.json
+Environment=<watch-config-env>=<agents-root>/<agent-name>/config/<watch-job>.json
+# No Python the session runs writes bytecode: the fleet checkout is the
+# administrator's and read-only to the agents, so a __pycache__ it tried to write
+# there would be refused or, where it could write, would be code the agents user
+# put into the tree that supervises it. The daemon units set the same.
+Environment=PYTHONDONTWRITEBYTECODE=1
+# tmux's socket directory. systemd creates it (RuntimeDirectory, relative to %t)
+# and removes it on stop; the stall watchdog and the revive skill reach the
+# session through it. The two lines name ONE directory only because both are
+# relative to %t: a literal path in one of them is a session nobody can reach.
+Environment=TMUX_TMPDIR=%t/claude-tmux-<agent-name>
+RuntimeDirectory=claude-tmux-<agent-name>
+#
+# THE PRE-SLEEP IS REQUIRED. With Restart=always it applies to every restart as
+# well as boot: a crashed session comes back after a minute, and a restart loop
+# cannot hammer `claude --update`.
+ExecStartPre=/bin/sleep 60
+#
+# THE TIMEOUT IS DERIVED, NOT CHOSEN. systemd's default start timeout is 90 s and
+# it covers ExecStartPre, ExecStart and ExecStartPost together. The worst case is
+# a session that never becomes ready: 60 s of pre-sleep, then the handshake below
+# polls 60 times at 3 s = 180 s before giving up, a floor of 240 s. Below that
+# floor systemd marks the start FAILED, Restart=always brings it back, and the
+# unit loops - every cycle re-running `claude --update` and wiping whatever the
+# pane showed, a sign-in URL a person was about to answer included. The loop
+# appears only on a start where a dialog or an expired sign-in is waiting, so a
+# too-short timeout looks fine on every healthy boot. Changing the pre-sleep, the
+# poll count or the poll interval re-derives it:
+# pre-sleep + (polls x interval) + margin. `systemd-analyze verify` only WARNS on
+# an unparseable value, so read the result with `systemctl --user show -p
+# TimeoutStartUSec`.
+TimeoutStartSec=300
+#
+# Resume or start fresh. --continue resumes the last conversation in
+# WorkingDirectory, so the agent keeps its context across a restart; the
+# `|| fresh` half is what makes the first boot after a wipe start at all.
+# --agent makes the session BE the agent: identity, authority and duties come
+# from its charter as the session's agent definition, not from a skill it may or
+# may not load. `bash -l` gives the session the user's login PATH, where `claude`
+# lives; the service manager's own PATH does not have it.
+ExecStart=/usr/bin/tmux new-session -d -s claude-<agent-name> "/bin/bash -lc 'claude --update; claude --dangerously-skip-permissions --name <agent-name> --agent <agent-name> --continue || claude --dangerously-skip-permissions --name <agent-name> --agent <agent-name>'"
+#
+# Wait for the READY status bar, then type the boot message. A fixed sleep after
+# the start is a race: on a slow start the message lands in a dialog and the
+# session comes up with no followers armed, which reads as a quiet day. The
+# marker is the status-bar text --dangerously-skip-permissions draws; a session
+# started without that flag needs a different marker here. If the bar never
+# comes, the journal gets the BOOT MESSAGE NOT SENT line and the start still
+# succeeds (exit 0), so the pane - with whatever dialog it shows - is kept.
+#
+# THE BOOT MESSAGE MAY NOT CONTAIN AN APOSTROPHE, A DOUBLE QUOTE, A DOLLAR SIGN,
+# A PERCENT SIGN, A BACKSLASH OR A BACKTICK. It is a double-quoted send-keys
+# argument inside a single-quoted bash script inside systemd's own quoting: an
+# apostrophe ends the script early, and the others are expanded by bash or by
+# systemd before tmux sees them. The one percent sign in the line is the %t of
+# T=, which systemd expands on purpose. `systemd-analyze verify` catches an ODD
+# number of apostrophes and passes an even number, whose script is then not the
+# one written, so check the message itself and read the loaded form back after
+# daemon-reload (`systemctl --user show claude-agent-<agent-name>.service -p
+# ExecStartPost --value`).
+ExecStartPost=/bin/bash -c 'T=%t/claude-tmux-<agent-name>; S=claude-<agent-name>:0; ok=; for i in $(seq 1 60); do p=$(TMUX_TMPDIR=$T tmux capture-pane -p -t $S 2>/dev/null); case "$p" in *"bypass permissions on"*) ok=1; break;; esac; sleep 3; done; if [ -z "$ok" ]; then echo "BOOT MESSAGE NOT SENT: claude-<agent-name> did not reach a ready status bar within 180s. The session is up but unbriefed - its followers are NOT armed. Check the pane for a start-up dialog: TMUX_TMPDIR=$T tmux capture-pane -p -t $S"; exit 0; fi; TMUX_TMPDIR=$T tmux send-keys -t $S "You are <Agent-Name>, started by your service; if you had an earlier conversation, it was resumed. On this first turn, before anything else, load the agent skill and read your charter, then arm your two log followers. Your scheduler and chat watcher run as the always-on user services agent-sched@<agent-name> and agent-<watch-job>@<agent-name> - do not start them yourself. Arm each under a persistent Monitor and re-arm it whenever its Monitor ends: python3 <fleet>/systemd/agent-daemons.py follow <agent-name> sched 2>&1 ; and python3 <fleet>/systemd/agent-daemons.py follow <agent-name> <watch-job> 2>&1 . Verify both services with XDG_RUNTIME_DIR=/run/user/<uid> systemctl --user is-active agent-sched@<agent-name> agent-<watch-job>@<agent-name> - an unread scheduler looks exactly like a day with nothing due. Then carry on with the duties your charter names."; sleep 1; TMUX_TMPDIR=$T tmux send-keys -t $S Enter'
+ExecStop=/usr/bin/tmux kill-session -t claude-<agent-name>
+# Relaunch even after a clean exit (somebody typing /exit into an attached pane).
+Restart=always
+RestartSec=2
+
+[Install]
+# The system manager reaches multi-user.target at boot; the user's manager starts
+# default.target once lingering is on.
+#system: WantedBy=multi-user.target
+#user: WantedBy=default.target

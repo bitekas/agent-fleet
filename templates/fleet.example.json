@@ -1,0 +1,129 @@
+{
+  "_comment": [
+    "The install manifest, <install root>/.claude/fleet.json (the root of the repository your",
+    "agents work in). `fleet adopt <install root>` writes it from the fleet's",
+    "templates/fleet.example.json when the repository has none, and never over an existing one.",
+    "Fill it in: replace every value that is a <placeholder> as a whole, and review the rest:",
+    "each is an example or a fleet default.",
+    "",
+    "JSON has no comments, so every key starting with _ is documentation the loader strips.",
+    "Check the result with `fleet settings`: it prints the manifest with the fleet defaults",
+    "applied, or names the key it refuses. A value still in the placeholder form (one <...>",
+    "with a space inside) is refused; a placeholder inside a doc path, such as <feature-slug>,",
+    "is filled in when it is read.",
+    "",
+    "schema: always 1 for this fleet version.",
+    "skills: the fleet skills `fleet link` links into each agent's .claude/skills/. It must",
+    "include chat-transport and the skill of every enabled transport (slack-communication for",
+    "slack). Remove a skill to stop linking it.",
+    "Required keys: schema, fleet, skills, transports. Every other key is optional; an absent",
+    "key takes the fleet default shown in CONVENTIONS.md."
+  ],
+  "schema": 1,
+  "fleet": {
+    "_comment": [
+      "repo: the fleet repository's clone URL. min_tag: the oldest fleet release this install",
+      "works with; `fleet link`, `fleet status` and `fleet upgrade` refuse an older host checkout."
+    ],
+    "repo": "<the fleet repository's clone URL>",
+    "min_tag": "v1.0.0"
+  },
+  "skills": [
+    "agent", "talking-to-humans", "self-compact", "scheduled-tasks", "restart",
+    "stall-watchdog", "slack-communication", "agent-revive", "agent-health",
+    "knowledge-base", "claude-skill", "web-hierarchy-server", "google-spreadsheet",
+    "notion-workspace", "rate-graphic", "chat-transport", "adding-an-agent",
+    "install-agent-fleet", "safe-box"
+  ],
+  "transports": {
+    "_comment": [
+      "enabled: the chat transports your agents use; each must be a WORKING transport of the fleet",
+      "(placeholders such as discord and telegram are refused). default: the transport an address",
+      "or a claim without one uses; it must be in enabled."
+    ],
+    "enabled": ["slack"],
+    "default": "slack"
+  },
+  "conventions": {
+    "_comment": [
+      "How your install does the development steps fleet skills refer to by key. A value is",
+      "{\"skill\": \"<name>\"} (load that skill) or {\"doc\": \"<repo-relative path>\"} (read that file;",
+      "<placeholders> allowed), either with an optional \"section\", or null. Absent or null means",
+      "your install has no such convention: the reading skill skips that step and says so.",
+      "A skill is the install's own .claude/skills/<name>/SKILL.md; `fleet settings` refuses a",
+      "skill or a doc path (placeholders aside) that names no file in the install.",
+      "people_notes is where your install records standing requests from people, such as a",
+      "person who wants every open question collected into one daily digest.",
+      "The keys and who reads them: CONVENTIONS.md."
+    ],
+    "definition_of_done": { "skill": "<your definition-of-done skill>" },
+    "feature_checklist": { "doc": "docs/checklists/<feature-slug>.md" },
+    "branch_naming": { "doc": "<your process doc, repo-relative>", "section": "Branch names" },
+    "workspace": null,
+    "release": null,
+    "environments": null,
+    "people_notes": null
+  },
+  "house_rules": {
+    "_comment": [
+      "The fleet's house rules, set to their fleet defaults here; change a value to change the rule.",
+      "questions_per_message: how many questions an agent may put to a person in one message.",
+      "state_the_fact: write the current state, not its history (true or false).",
+      "ascii_skill_prose: skill prose is plain ASCII (true or false).",
+      "Each rule and its default: CONVENTIONS.md."
+    ],
+    "questions_per_message": 1,
+    "blocker_chase": {
+      "_comment": [
+        "When an agent re-asks a person about an open blocker: every every_minutes (a divisor of",
+        "1440) on the given days (mon..sun), from start to end (24-hour HH:MM, start before end),",
+        "in the IANA time zone tz."
+      ],
+      "every_minutes": 60,
+      "tz": "UTC",
+      "days": ["mon", "tue", "wed", "thu", "fri"],
+      "start": "09:00",
+      "end": "18:00"
+    },
+    "state_the_fact": true,
+    "times": {
+      "_comment": [
+        "cities: the clocks a reported time is rendered in, in this order. name is what the reader",
+        "sees; tz is an IANA time zone. Replace the example cities with your readers' cities."
+      ],
+      "cities": [
+        { "name": "Berlin", "tz": "Europe/Berlin" },
+        { "name": "Tokyo", "tz": "Asia/Tokyo" }
+      ]
+    },
+    "ascii_skill_prose": true
+  },
+  "secrets": {
+    "_comment": [
+      "Where credential files live. The order: $FLEET_SECRETS_DIR, else the environment variable",
+      "named by legacy_env (set it when your machines already export another variable for this",
+      "directory; null when they do not), else default_dir. Paths may use ~, $VAR and",
+      "${VAR:-default}."
+    ],
+    "legacy_env": null,
+    "default_dir": "~/.fleet-secrets"
+  },
+  "upstream": {
+    "_comment": [
+      "Only for an install whose agents contribute to the fleet repository.",
+      "identity: the public name and e-mail every fleet commit is made with.",
+      "deny_list: the private list of values the commit gate refuses (path relative to the",
+      "install root), or null to state the install has no private values. `fleet settings`",
+      "refuses a path with no file there.",
+      "outside_pr_reviewer: the person who reviews and merges pull requests from outside",
+      "contributors; agents never review them."
+    ],
+    "identity": {
+      "_comment": "Use an address you are happy to publish, such as a GitHub no-reply address.",
+      "name": "<Your Name>",
+      "email": "<your public e-mail address>"
+    },
+    "deny_list": ".claude/fleet/leak-deny.txt",
+    "outside_pr_reviewer": "<the person who reviews outside pull requests>"
+  }
+}

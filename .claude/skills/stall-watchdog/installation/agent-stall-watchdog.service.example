@@ -1,0 +1,110 @@
+# Stall watchdog for ONE unattended agent session. Placeholders:
+#
+#   <agent>      the watched session's agent name
+#   <user>       the user that owns the session and its tmux socket
+#   <checkout>   THAT agent's own project checkout - the working directory only
+#   <fleet>      the host fleet checkout, which ExecStart runs watchdog.py from
+#   <agents-root> the directory holding every agent home
+#   <state dir>  state.dir from the config, created before enabling
+#   <tmux-dir>   the watched session's tmux socket directory, tmux.tmpdir in the
+#                config: the session unit's %t/claude-tmux-<agent>, under /run for
+#                a system session unit and under the user's runtime directory in
+#                /run/user for a user one. This unit is a system unit either way,
+#                so it names the literal directory.
+#
+# NOT INSTALLED BY DEFAULT. The procedure, and what each value has to agree with,
+# is SKILL.md steps 4 to 6:
+#   sudo install -m 0644 <this file, rendered> \
+#        /etc/systemd/system/claude-agent-<agent>-stall-watchdog.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now claude-agent-<agent>-stall-watchdog
+#
+# Name the unit after the unit it watches, not after the skill: the pair is then
+# adjacent in `systemctl list-units` and an operator reading one finds the other.
+#
+# ⚠️ THIS MUST BE A SEPARATE UNIT, NOT A MONITOR INSIDE THE SESSION IT WATCHES.
+# The agent's own unit has Restart=always, which covers the agent process DYING. It
+# does not cover the agent HANGING - a process blocked on an unanswered prompt is
+# alive, healthy by every measure systemd has, and stuck forever. That is precisely
+# the failure this watchdog exists for, so it cannot share a fate with the thing it
+# is watching.
+#
+# ⚠️ Deliberately does NOT set CLAUDE_CONFIG_DIR: this is a supervisor, not an agent.
+# The config leaves owner.claude_config_dir null, so the flock is the single-instance
+# guard. Setting it here would make the guard reject the daemon and exit 0 quietly.
+
+[Unit]
+Description=Stall watchdog - answers an unanswerable prompt in the <agent> session
+# Wants, not Requires: if the agent session is down there is nothing to watch, but
+# the watchdog should stay up and be ready for when it returns.
+Wants=claude-agent-<agent>.service
+After=claude-agent-<agent>.service
+
+[Service]
+Type=simple
+User=<user>
+# THAT agent's own checkout is the working directory; the code runs from the host
+# fleet checkout (ExecStart below), which moves only by `fleet upgrade`, never because
+# somebody pulled a branch. watchdog.py re-executes itself when its own file changes,
+# so an upgrade reaches this root-owned unit with no edit and no restart.
+WorkingDirectory=<checkout>
+# ⚠️ Must equal tmux.tmpdir in the config, and the TMUX_TMPDIR the session was
+# created with. A mismatch reports as "no server running", which reads like a missing
+# session rather than a configuration error.
+Environment=TMUX_TMPDIR=<tmux-dir>
+# The ONE place this deployment names the config. There is no fallback that resolves,
+# so a unit that forgets this line dies naming the missing file instead of arming
+# against a template.
+# ⚠️ WHERE AN ADMINISTRATOR INSTALLS THIS UNIT FOR A SEPARATE AGENTS USER, THE CONFIG
+# IS ROOT'S, NOT THE AGENT'S: adding-an-agent's system form rewrites this line to
+# /etc/agent-fleet/stall-watchdog/<agent>.json, root-owned, mode 644. The path below,
+# in the agent's own home, is one its user can edit - stall_secs raised to a day, or
+# a pattern that never matches - and a watchdog its subject can reconfigure is one it
+# can switch off. install-agent-fleet's verify-privileges.py FAILs that path when an
+# administrator exists.
+Environment=STALL_WATCHDOG_CONFIG=<agents-root>/<agent>/config/stall-watchdog.json
+ExecStart=/usr/bin/python3 <fleet>/.claude/skills/stall-watchdog/watchdog.py
+Restart=always
+RestartSec=10
+
+# The watchdog reads a terminal and sends two keystrokes. It needs nothing else.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+# ⚠️ ProtectSystem=strict makes the entire hierarchy read-only apart from /dev, /proc
+# and /sys, so anything this process writes needs a ReadWritePaths entry. THE TWO
+# ENTRIES BELOW DO NOT HAVE THE SAME STANDING, and a reader who assumes they do will
+# draw the wrong conclusion from either one:
+#
+#   - THE STATE DIR IS LOAD-BEARING, MEASURED. It holds the stall cursor and the
+#     single-instance lock. Removing this entry and running the daemon under
+#     otherwise-identical hardening: the state write is blocked and no state file is
+#     ever produced - which is also the signature of a watchdog that is capturing
+#     nothing, so it does not read as a sandbox problem. Measured 2026-09-04 on
+#     systemd 259, Linux 7.0.0.
+#
+#   - THE TMUX DIR IS DEFENCE IN DEPTH, NOT A REQUIREMENT. Connecting to a unix
+#     socket does not need write permission on a read-only mount: measured
+#     2026-09-04 on systemd 259, Linux 7.0.0, /run IS read-only under this hardening
+#     (a touch in it is refused), and `tmux capture-pane` through it SUCCEEDS,
+#     with and without this entry. A read-only MOUNT does not block connect(); the
+#     socket's own mode bits (srw-rw---- and owned by the same user) are what decide.
+#     It is kept because it costs nothing, because a tmux or kernel that does need to
+#     write in that directory would fail silently and blindly, and because dropping a
+#     cheap defence on one machine's measurement is the wrong direction for a file
+#     other deployments copy. ⚠️ DO NOT cite it as the fix for a blind watchdog
+#     without re-measuring on that platform first.
+#
+# ⚠️ NEITHER TAKES A `-` PREFIX, AND THAT IS THE RECOVERY PATH, NOT AN OVERSIGHT.
+# The agent unit owns the tmux runtime directory (RuntimeDirectory=), so while the
+# agent is stopped that directory does not exist and this unit fails at start with
+# status 226/NAMESPACE - and Restart=always retries every RestartSec until the agent
+# comes back, at which point it starts correctly. With a `-` prefix it would instead
+# start into a read-only namespace, capture nothing for ever, and show as active.
+# Create the state dir by hand before enabling; that one never reappears on its own.
+ReadWritePaths=<state dir>
+ReadWritePaths=<tmux-dir>
+PrivateTmp=false
+
+[Install]
+WantedBy=multi-user.target

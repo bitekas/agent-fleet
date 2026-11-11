@@ -1,0 +1,15 @@
+# Public leak patterns, one per line: <class><TAB><python regex>. Read by leak_gate.py,
+# matched against NFKC-normalized text with zero-width characters removed.
+# A line that trips a pattern by design goes in allow.txt, never here as an exception.
+# email excludes, beyond its listed domains, git@<host> (the SSH transport user of every forge) and
+# noreply@github.com (the committer of a commit made in the GitHub web interface).
+slack-id	\b[UWBCDGT]0[A-Z0-9]{7,10}\b
+slack-token	xox[abprs]-
+home-path	/home/[a-z][a-z0-9_-]*/
+home-path	/Users/[A-Za-z][^/]*/
+email	(?i)(?<![a-z0-9._%+-])(?!git@)(?!noreply@github\.com(?![a-z0-9-]|\.[a-z0-9]))[a-z0-9._%+-]+@(?!(?:[a-z0-9-]+\.)*(?:example\.(?:com|org|net)|users\.noreply\.github\.com|anthropic\.com)(?![a-z0-9-]|\.[a-z0-9]))[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}
+tailscale-name	(?i)\.ts\.net\b
+gcp-service-account	(?i)iam\.gserviceaccount\.com
+figma-url	(?i)figma\.com/(file|design)/[A-Za-z0-9]{10,}
+google-doc-url	(?i)docs\.google\.com/[a-z]+/d/[A-Za-z0-9_-]{20,}
+notion-url	(?i)notion\.so/[^\s]*[0-9a-f]{32}

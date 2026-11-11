@@ -1,0 +1,19 @@
+
+  Running 1 shell command…
+  ⎿  $ mkdir -p /tmp/wdtest && touch /tmp/wdtest/a.txt /tmp/wdtest/b.txt; TMP=/tmp/wdtest; rm -f $TMP/*.txt; echo "variable-path delete returned: exit=$?"; ls
+     /tmp/wdtest/ 2>&1 | wc -l
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Bash command
+
+   mkdir -p /tmp/wdtest && touch /tmp/wdtest/a.txt /tmp/wdtest/b.txt; TMP=/tmp/wdtest; rm -f $TMP/*.txt; echo "variable-path delete returned: exit=$?"; ls
+   /tmp/wdtest/ 2>&1 | wc -l
+   Test the exact original variable-path form
+
+ Dangerous rm operation on possibly-empty variable path: $TMP/*.txt
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. No
+
+ Esc to cancel · Tab to amend · ctrl+e to explain

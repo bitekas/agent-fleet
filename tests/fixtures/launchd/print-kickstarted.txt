@@ -1,0 +1,43 @@
+#fixture `launchctl print` of the same job after `launchctl kickstart`, the start the
+#fixture follower's GUARD alert names. Not printed by the runbook: this is
+#fixture print-respawned-signal.txt's layout with the values the follower read at that
+#fixture point on macOS 27.0.1 (active/running, result=success, and runs one more than
+#fixture print-guard-exit.txt's 3: launchd counts the manual start as a run).
+#fixture The top level only (the runbook printed no nested block); the label,
+#fixture paths and any pid are synthetic. The tests drop these #fixture lines.
+gui/501/com.agent-fleet-test.sched.ada = {
+	active count = 1
+	path = /tmp/fleet-fixture/home/Library/LaunchAgents/com.agent-fleet-test.sched.ada.plist
+	type = LaunchAgent
+	state = running
+	program = /opt/homebrew/bin/python3
+	working directory = /tmp/fleet-fixture/agents/ada/product
+	stdout path = /tmp/fleet-fixture/agents/ada/state/daemons/sched.log
+	stderr path = /tmp/fleet-fixture/agents/ada/state/daemons/sched.log
+	domain = gui/501 [100015]
+	asid = 100015
+	minimum runtime = 10
+	exit timeout = 15
+	runs = 4
+	pid = 2290
+	immediate reason = semaphore
+	forks = 0
+	execs = 4
+	initialized = 1
+	trampolined = 1
+	started suspended = 0
+	proxy started suspended = 0
+	checked allocations = 0 (queried = 1)
+	checked allocations reason = no host
+	checked allocations flags = 0x0
+	last exit code = 0
+	spawn type = background (5)
+	jetsam priority = 40
+	jetsam memory limit (active) = (unlimited)
+	jetsam memory limit (inactive) = (unlimited)
+	jetsamproperties category = daemon
+	jetsam thread limit = 32
+	cpumon = default
+	sanitizer flags = 0x0
+	properties = runatload | inferred program
+}

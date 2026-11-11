@@ -1,0 +1,11 @@
+[
+  {"username": "a@example.com", "password": "fixture-pw-a-not-real", "home_agent": "alpha"},
+  {"username": "b@example.com", "password": "fixture-pw-b-not-real", "home_agent": "alpha"},
+  {"username": "c@example.com", "password": "fixture-pw-c-not-real", "home_agent": "alpha"},
+  {"username": "d@example.com", "password": "fixture-pw-d-not-real", "home_agent": "beta"},
+  {"username": "e@example.com", "password": "fixture-pw-e-not-real", "home_agent": "beta"},
+  {"username": "f@example.com", "password": "fixture-pw-f-not-real", "home_agent": "beta"},
+  {"username": "g@example.com", "password": "fixture-pw-g-not-real", "home_agent": "gamma"},
+  {"username": "h@example.com", "password": "fixture-pw-h-not-real", "home_agent": "gamma"},
+  {"username": "j@example.com", "password": "fixture-pw-j-not-real", "home_agent": "gamma"}
+]

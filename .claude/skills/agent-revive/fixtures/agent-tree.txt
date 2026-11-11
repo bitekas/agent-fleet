@@ -1,0 +1,4 @@
+ ⏺ Delegating the sweep to two subagents.
+
+ ├ ◯ architect (+1)  Appending status line ...  1h 54m 50s · ↓ 670.0k tokens
+ ❯ └ ◯ software-engineer  Reading SKILL.md  12m 03s · ↓ 210.0k tokens

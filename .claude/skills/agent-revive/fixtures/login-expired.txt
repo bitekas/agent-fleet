@@ -1,0 +1,52 @@
+✻ Churned for 2m 45s · done 6:53 AM · 2 monitors still running
+
+● Monitor event: SCHED due [tsk_20261022T0651Z_cdcaca] run=1564 "ada-02 one-off re-check 07:06Z (weekly near floor)" origin=session by=…
+
+● Bash(cd /tmp/example/agents/healer/acme-checkout;
+      S=/tmp/claude-1000/-tmp-example-agents-healer-acme-checkout/3262f3f4-c70a-4eb2-b639-75a81116d594/scratchpad; date -…)
+  ⎿  07:06:05
+      ada-02: client attached - reading, size handed back right after
+      resized ada-02 from height 19
+     … +21 lines (ctrl+o to expand)
+  ⎿  (timeout 2m)
+
+● Login expired · Please run /login
+
+✻ Brewed for 13s · done 7:06 AM · 1 monitor still running
+
+● Monitor event: SLACK #general-ops reply in thread 1792635339.217629 [ts 1792652817.449289] UEXAMPLE001 [bot]: <@UEXAMPLE002> could yo…
+
+● Login expired · Please run /login
+
+✻ Worked for 0s · done 7:07 AM
+
+● Monitor event: SLACK #general-ops reply in thread 1792635339.217629 [ts 1792652928.104289] Hopper [bot] (UEXAMPLE002): <@UEXAMPLE001>…
+
+● Login expired · Please run /login
+
+✻ Cooked for 0s · done 7:08 AM
+
+● Remote Control disconnected — OAuth token unavailable — run /login to restore Remote Control
+
+● Monitor event: SCHED due [tsk_20260924T1540Z_d27102] run=1565 "agent-health sweep" origin=session by="Turing" missed=0 - why: An agen…
+
+● Login expired · Please run /login
+
+✻ Cogitated for 0s · done 7:20 AM
+
+● Monitor event: [Monitor expired after 30m with 3 events delivered. Re-arm it if you still need the watch.] · healer scheduler (agent-…
+
+● Login expired · Please run /login
+
+✻ Cogitated for 0s · done 7:22 AM
+
+● Monitor event: [Monitor expired after 30m with 6 events delivered. Re-arm it if you still need the watch.] · healer Slack watcher (ag…
+
+● Login expired · Please run /login
+
+✻ Churned for 0s · done 7:22 AM
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────── acme-corp-agent-healer ─
+❯
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle)

@@ -1,0 +1,140 @@
+{
+  "_doc": [
+    "Identity pools for the web hierarchy viewer. Name + avatar are a DISPLAY LABEL",
+    "assigned by the viewer - nothing is stored anywhere and no agent knows its own",
+    "name. format.mjs assigns names[i] by spawn order within an agentType, recomputed",
+    "from the transcripts on every refresh, so the mapping is deterministic and stable",
+    "across server restarts. 30 names per role: a session would need 30 concurrent",
+    "agents of one role before the pool cycles and a repeat takes a ² suffix.",
+    "",
+    "This file is a COMMON artifact: invented display names and generic robot art,",
+    "no real person's data anywhere. An adopter takes it as-is or replaces it whole;",
+    "format.mjs reads it unless config.json's identities.file names another roster.",
+    "",
+    "avatar    = the role's silhouette, worn by every name without a portrait.",
+    "portraits = optional bespoke art for a name. Most names have none, so most",
+    "            agents wear the role silhouette - the avatar always identifies",
+    "            the ROLE, the name always identifies the AGENT. Art paths resolve",
+    "            against this file's directory.",
+    "names     = ordered; position i is assigned to the i-th agent of that role.",
+    "            Order is load-bearing: never reorder or insert mid-list, or every",
+    "            past session's graph silently renames. Append only.",
+    "",
+    "Types absent from this file render with no name and no avatar from THIS roster",
+    "(that includes the synthetic root session, which is the human",
+    "operator's, not an agent - the root block is instead labelled with its fleet",
+    "member by format.mjs's fleetName(), which reads config.json's fleet.by_config_dir",
+    "for the running CLAUDE_CONFIG_DIR, not this file).",
+    "",
+    "Art: generic robot illustrations. A role's silhouette is one of the",
+    "ephemeral-*.png family (a blank face); a portrait is a bespoke robot. Every",
+    "name is unique across ALL roles, so a name alone identifies an agent."
+  ],
+
+  "orchestrator": {
+    "avatar": "avatars/ephemeral-generic.png",
+    "portraits": { "Atlas": "avatars/atlas.png", "Nexus": "avatars/nexus.png" },
+    "names": [
+      "Atlas", "Nexus", "Vertex", "Cadence", "Marshal", "Beacon", "Pivot", "Axis",
+      "Keystone", "Convoy", "Helm", "Rally", "Tempo", "Anchor", "Summit", "Bridge",
+      "Relay", "Compass", "Vantage", "Concord", "Meridian", "Cornice", "Fulcrum",
+      "Lodestar", "Praxis", "Quorum", "Sextant", "Tiller", "Vanguard", "Zenith"
+    ]
+  },
+
+  "architect": {
+    "avatar": "avatars/ephemeral-architect.png",
+    "portraits": { "Daedal": "avatars/daedal.png", "Vitru": "avatars/vitru.png" },
+    "names": [
+      "Daedal", "Vitru", "Span", "Truss", "Lintel", "Corbel", "Gantry", "Trestle",
+      "Bastion", "Plinth", "Arcade", "Buttress", "Camber", "Dovetail", "Frieze",
+      "Girder", "Joist", "Mansard", "Newel", "Ogive", "Pylon", "Quoin", "Rafter",
+      "Soffit", "Transom", "Vault", "Cupola", "Trellis", "Chord", "Datum"
+    ]
+  },
+
+  "software-engineer": {
+    "avatar": "avatars/ephemeral-swe.png",
+    "portraits": {
+      "Vex": "avatars/vex.png", "Cipher": "avatars/cipher.png",
+      "Rhea": "avatars/rhea.png", "Onyx": "avatars/onyx.png"
+    },
+    "names": [
+      "Vex", "Cipher", "Rhea", "Onyx", "Forge", "Quill", "Lathe", "Anvil",
+      "Tinker", "Solder", "Chisel", "Ratchet", "Sprocket", "Torque", "Gasket",
+      "Piston", "Flint", "Kernel", "Lambda", "Mutex", "Nibble", "Opcode",
+      "Parity", "Quanta", "Regex", "Syntax", "Thunk", "Unroll", "Widget", "Yield"
+    ]
+  },
+
+  "qa-engineer": {
+    "avatar": "avatars/ephemeral-qa.png",
+    "portraits": { "Vigil": "avatars/vigil.png", "Probe": "avatars/probe.png" },
+    "names": [
+      "Vigil", "Probe", "Assay", "Litmus", "Caliper", "Gauge", "Plumb", "Sieve",
+      "Tally", "Verdict", "Crucible", "Sentry", "Tripwire", "Bench", "Harness",
+      "Oracle", "Fixture", "Stub", "Mock", "Audit", "Ledger", "Tolerance",
+      "Micron", "Vernier", "Titrate", "Yardstick", "Rubric", "Baseline",
+      "Checkpoint", "Assert"
+    ]
+  },
+
+  "pentest-engineer": {
+    "avatar": "avatars/ephemeral-pentest.png",
+    "portraits": { "Spectre": "avatars/spectre.png", "Breaker": "avatars/breaker.png" },
+    "names": [
+      "Spectre", "Breaker", "Wraith", "Cleave", "Havoc", "Siege", "Raider",
+      "Prowler", "Venom", "Snare", "Ambush", "Bandit", "Crowbar", "Duress",
+      "Exploit", "Feint", "Gambit", "Hazard", "Intrude", "Jimmy", "Kraken",
+      "Lurker", "Marauder", "Nettle", "Onslaught", "Payload", "Quarry",
+      "Ransack", "Sabotage", "Trespass"
+    ]
+  },
+
+  "ui-ux-designer": {
+    "avatar": "avatars/ephemeral-ux.png",
+    "portraits": { "Iris": "avatars/iris.png", "Lumen": "avatars/lumen.png" },
+    "names": [
+      "Iris", "Lumen", "Halo", "Tint", "Chroma", "Pastel", "Vellum", "Aura",
+      "Gloss", "Hue", "Kerning", "Leading", "Margin", "Opacity", "Palette",
+      "Quire", "Raster", "Serif", "Texture", "Umbra", "Vignette", "Weft",
+      "Bezel", "Cadmium", "Dither", "Emboss", "Filigree", "Gouache", "Indigo",
+      "Ligature"
+    ]
+  },
+
+  "architectural-summary-producer": {
+    "avatar": "avatars/ephemeral-summary.png",
+    "portraits": { "Prism": "avatars/prism.png", "Facet": "avatars/facet.png" },
+    "names": [
+      "Prism", "Facet", "Etch", "Vector", "Contour", "Schema", "Cartouche",
+      "Legend", "Isoline", "Graticule", "Azimuth", "Bearing", "Chart", "Delta",
+      "Elevation", "Frame", "Grid", "Hatch", "Inset", "Keyline", "Lattice",
+      "Mosaic", "Node", "Outline", "Plot", "Quadrant", "Relief", "Section",
+      "Topo", "Wireframe"
+    ]
+  },
+
+  "Explore": {
+    "avatar": "avatars/ephemeral-generic.png",
+    "portraits": {},
+    "names": [
+      "Scout", "Ranger", "Pathfinder", "Forager", "Wander", "Roam", "Quest",
+      "Seek", "Sifter", "Prospect", "Trawl", "Dowser", "Tracker", "Beagle",
+      "Ferret", "Sleuth", "Rover", "Sonar", "Radar", "Lantern", "Torch",
+      "Spelunk", "Delve", "Burrow", "Comb", "Rummage", "Scour", "Survey",
+      "Recon", "Vista"
+    ]
+  },
+
+  "general-purpose": {
+    "avatar": "avatars/ephemeral-generic.png",
+    "portraits": {},
+    "names": [
+      "Echo", "Drift", "Ember", "Nomad", "Wisp", "Cinder", "Vapor", "Nimbus",
+      "Zephyr", "Gale", "Mist", "Haze", "Frost", "Dune", "Tide", "Current",
+      "Eddy", "Ripple", "Surge", "Flux", "Pulse", "Beat", "Whim", "Errand",
+      "Sundry", "Medley", "Tangent", "Vagrant", "Amble", "Yonder"
+    ]
+  }
+}

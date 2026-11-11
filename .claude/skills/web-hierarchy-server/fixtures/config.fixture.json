@@ -1,0 +1,27 @@
+{
+  "_comment": [
+    "FIXTURE CONFIG - read only by serve.test.mjs, format.test.mjs and",
+    "installation/check's render leg, never by a real run. Named config.fixture.json",
+    "and not config.json because a config.json anywhere in a skill directory is an",
+    "install's SPECIFIC file, which the fleet's layout gate refuses.",
+    "",
+    "Every value here is synthetic. 'transcripts.config_dir' is a placeholder that",
+    "is never used: the test copies fixtures/config-dir/ into a temporary",
+    "<tmp>/<agent>/.claude and passes it as CLAUDE_CONFIG_DIR, which wins over this",
+    "key - so the test measures the same precedence a real run has.",
+    "",
+    "'identities' is absent on purpose: absent means the roster shipped beside",
+    "format.mjs, which is the default every install starts from.",
+    "",
+    "'fleet.by_config_dir' is keyed 'fixture-agent' because the test copies the",
+    "tree to <tmp>/fixture-agent/.claude, whose BASENAME is '.claude'. That is the",
+    "case fleetKey() exists for, and it is the case under test: keyed by basename",
+    "the label would not resolve at all here."
+  ],
+  "server": { "host": "127.0.0.1", "cap_kb": 16, "preferred_ip_prefix": "" },
+  "transcripts": { "config_dir": "/nonexistent/fixture/placeholder/.claude", "projects_subdir": "projects" },
+  "packages": { "repo_root": "/nonexistent/fixture/repo", "dir_pattern": null },
+  "labels": { "root_owner": "fixture-owner" },
+  "fleet": { "by_config_dir": { "fixture-agent": "fixture-agent-label" } },
+  "servers": { "fixture.service": { "config_dir": "/nonexistent/fixture/placeholder/.claude", "port": 65535 } }
+}

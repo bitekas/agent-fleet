@@ -1,0 +1,13 @@
+# Signing the JWT-bearer assertion. PyJWT alone imports fine and then raises
+# `NotImplementedError: Algorithm 'RS256' could not be found` at the first
+# signature, which is why the cryptography extra is named explicitly rather than
+# left to a transitive install: the failure is a runtime one, inside the first
+# real call, and looks nothing like a missing package.
+#
+# Every package is pinned exactly, its dependencies included, so an install - and
+# the fleet's CI, which installs from this file - gets the same signing stack each
+# time. To move: bump these four together and re-run gsheets.test.py.
+PyJWT[crypto]==2.15.1
+cryptography==50.0.2
+cffi==2.1.1
+pycparser==3.12

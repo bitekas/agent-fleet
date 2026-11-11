@@ -1,0 +1,15 @@
+{
+  "name": "agent-revive-signin-driver",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Long-lived interactive browser the reviving AGENT drives, one command at a time, to complete a Claude Code OAuth sign-in. It is the hands; the agent is the driver.",
+  "scripts": {
+    "test": "node redaction.test.mjs"
+  },
+  "dependencies": {
+    "playwright": "1.63.0",
+    "playwright-extra": "4.3.6",
+    "puppeteer-extra-plugin-stealth": "2.11.2"
+  }
+}

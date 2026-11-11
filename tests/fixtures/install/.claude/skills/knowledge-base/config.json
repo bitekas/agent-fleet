@@ -1,0 +1,6 @@
+{
+  "_comment": "Fixture install for the fleet's tests. store.root is relative, so it resolves against this file's directory: the fixture store beside it.",
+  "store": {
+    "root": "fixture-store"
+  }
+}

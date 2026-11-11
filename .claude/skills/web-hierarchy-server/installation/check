@@ -1,0 +1,615 @@
+#!/usr/bin/env python3
+"""[" -f "${BASH_SOURCE:-$0}" ] || { echo "a Python script: run it with python3" >&2; exit 126; }; exec python3 "${BASH_SOURCE:-$0}" "$@" || exit # sh/bash: hand off to python3 before reading the docstring
+Is this skill installed, and is it current?
+
+Prints ONE LINE PER LEG and then a verdict line, and exits:
+
+    0  installed, current      -> proceed
+    1  installed, but stale, or a leg that cannot be measured -> do not proceed
+    2  not installed           -> follow INSTRUCTION.md
+
+There is no fourth code, and 1 is not "nearly 0": both 1 and 2 mean do not
+proceed. What carries the information is the printed line, not the code.
+
+STATE 1 IS THE REASON THIS EXISTS. Absent is loud: the page does not load and
+whoever wanted it says so. Stale is silent: a server IS up on the port, the page
+renders completely, and it is serving a serve.mjs from another checkout, or a
+config the current SKILL.md no longer describes. Nothing on the page says which.
+
+EVERY LEG VERIFIES BY PERFORMING THE OPERATION, NEVER BY ASKING WHETHER A FILE
+EXISTS. os.path.exists, getsize, isfile, os.access and shutil.which are all
+stat(2)/access(2)-class: they answer out of the inode and open, execute or
+connect to nothing, so every one of them is GREEN on an artifact this skill
+cannot use - a config that is present and unparseable, a serve.mjs whose import
+throws, a transcript root that exists and holds no session. So: the config is
+opened and parsed, node is asked to RUN serve.mjs --help (which loads format.mjs,
+parses the config and resolves the roster at import time), the transcript root is
+LISTED, and the formatter is made to render the shipped fixture tree.
+
+TWO LEGS CARRY A NEGATIVE CONTROL, AND THE CONTROLS ARE WHY THE LEGS MEAN
+ANYTHING. Both legs above would pass identically if node silently ignored the
+config, or if the renderer fabricated a tree from nothing:
+
+  * the SCRIPTS leg re-runs serve.mjs --help against a config path that does not
+    exist, and requires it to FAIL. If that run succeeds, serve.mjs is not
+    reading WEB_HIERARCHY_CONFIG at all and the green above measured nothing.
+  * the RENDER leg re-renders against an EMPTY transcript root and requires the
+    result to be empty. If a tree comes back from a directory with no
+    transcripts in it, the renderer is not reading the disk.
+
+⚠️ IF EITHER CONTROL PASSES WHEN IT SHOULD FAIL, THAT LEG PRINTS NO VERDICT AND
+THIS SCRIPT REFUSES TO REPORT A GREEN. A check reporting OK while its own
+control also went green has not passed: its instrument is broken, and saying
+"installed and current" there launders that into a confident answer. Do not
+delete a control to make the output tidier - a leg without one is measuring that
+the harness runs, not that the subject behaves.
+
+THE SYSTEMD LEG IS DELIBERATELY NOT A PASS/FAIL. Installing a unit needs root,
+which is a human's step and not an agent's, so on a machine where nobody has run
+it the durable form is simply absent while the server may well be up as a
+detached process. That state reports 1 IN WORDS - naming whether a serve.mjs
+from THIS skill directory holds the configured port - and never a silent green,
+because "a server is answering" and "a server will still be answering after the
+next reboot" are different claims and only the second one is what the unit
+provides.
+
+THREE PROPERTIES OF THE PORT TEST ARE LOAD-BEARING, each because the obvious
+version of the test is wrong:
+
+  1. PORT EQUALITY, NEVER SUBSTRING. `ss -ltn | grep 8091` (or lsof's) also matches 18091
+     and 80911. The port is parsed off the local address and compared as an
+     integer, so a neighbour's listener on a superstring port cannot stand in
+     for a missing server.
+  2. THE HOLDER IS IDENTIFIED, NOT ASSUMED. A listening socket only proves
+     SOMETHING is bound. The holder's command line (fleetlib.services: procfs, or
+     the kernel's on macOS) must name a serve.mjs,
+     and its directory is compared against this skill's: "something answers on
+     8091" is exactly the evidence a wrong answer needs.
+  3. IT CANNOT MATCH ITSELF. This script's own pid and its parent are excluded
+     from the holder set. It binds nothing today, and the exclusion is what
+     keeps that true if it ever probes by opening a socket.
+
+This script only ever READS system state. It never starts, stops, restarts,
+enables or disables a unit, and it never binds a port.
+
+THE SPECIFIC FILES LIVE IN THE INSTALL, NOT BESIDE THIS SCRIPT. config.json and
+installation/.install-state.json are read from this skill's install context,
+resolved by fleetlib (the same resolver `fleet where` is), and the scripts legs
+run serve.mjs with FLEET_CONTEXT_ROOT pinned to that install and
+WEB_HIERARCHY_CONFIG unset, so serve.mjs resolves its config the way a real run
+does. The SCRIPTS leg then requires the config serve.mjs reports to be the very
+file this check parsed: two resolvers that disagree would otherwise leave this
+check green about one install while the server reads another.
+
+.install-state.json records ONE ENTRY PER HOST. It is a specific file committed
+like any other, so it travels to machines that never ran the install; a single
+host field would make every other machine in a fleet report stale and
+re-recording it would un-record the machine before it, so two machines could
+never both be installed.
+"""
+import errno
+import json
+import os
+import re
+import shutil
+import socket
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+# realpath, never abspath: reached through a personal skill link, abspath is the
+# link's path under an agent's config dir, and the fleet tree is not above it.
+HERE = os.path.dirname(os.path.realpath(__file__))
+SKILL = os.path.dirname(HERE)
+FIXTURES = os.path.join(SKILL, "fixtures")
+HOST = socket.gethostname()
+sys.path.insert(0, str(Path(SKILL).parents[2] / "lib"))
+from fleetlib import FleetError, paths, services  # noqa: E402
+
+# Filled by main() from the install context before any leg runs.
+INSTALL_ROOT = None
+CONFIG = None
+STATE = None
+
+WORST = 0
+LINES = []
+FAILED = {1: [], 2: []}  # level -> leg names, in the order the legs ran
+
+
+def leg(code, text, why=None):
+    """Record one leg. The final exit code is the worst leg's; a leg that did not
+    pass is named by the text before its first colon, followed in the verdict by
+    `why` when the leg gives one: the cause in a few words, for a reader who
+    sees the verdict line only."""
+    global WORST
+    WORST = max(WORST, code)
+    label = {0: "OK", 1: "NEEDS ATTENTION", 2: "NOT INSTALLED"}[code]
+    LINES.append(f"  [{label}] {text}")
+    name = text.split(":", 1)[0] + (f" ({why})" if why else "")
+    if code and name not in FAILED[code]:
+        FAILED[code].append(name)
+    return code
+
+
+def finish():
+    """The verdict line NAMES THE LEGS THAT DID NOT PASS, worst level first.
+    `fleet check-all` shows a check's last line and nothing else, so a cause that
+    lives only on the leg lines above is a cause the operator never reads.
+    check.test.py pins it."""
+    for line in LINES:
+        print(line)
+    attention = ", ".join(FAILED[1])
+    verdict = {
+        0: "installed and current",
+        1: f"installed, but these legs are stale or could not be measured: {attention} - "
+           f"see above; do not proceed",
+        2: f"NOT INSTALLED: {', '.join(FAILED[2])}"
+           + (f"; needs attention: {attention}" if attention else "")
+           + " - follow installation/INSTRUCTION.md",
+    }[WORST]
+    print(f"verdict: {verdict} (exit {WORST})")
+    sys.exit(WORST)
+
+
+def declared_version():
+    """The version SKILL.md declares. Absent means the skill predates the
+    convention, which is itself a reason to re-install rather than to guess."""
+    try:
+        with open(os.path.join(SKILL, "SKILL.md"), encoding="utf-8") as f:
+            head = f.read(4096)
+    except OSError as e:
+        return 0, f"SKILL.md could not be read ({e.strerror})"
+    m = re.search(r"^version:\s*(\d+)\s*$", head, re.M)
+    return (int(m.group(1)) if m else 0), None
+
+
+def strip_comments(d):
+    return {k: v for k, v in (d or {}).items() if k != "_comment"}
+
+
+def run(cmd, env=None, timeout=90):
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                          env=env, cwd=SKILL)
+
+
+def base_env():
+    """The environment the scripts legs run under.
+
+    CLAUDE_CONFIG_DIR is REMOVED: it wins over the config file at runtime, so
+    leaving the caller's value in place would make this check measure whichever
+    shell happened to invoke it rather than the install it is reporting on.
+    """
+    env = dict(os.environ)
+    env.pop("CLAUDE_CONFIG_DIR", None)
+    env.pop("WEB_HIERARCHY_CONFIG", None)
+    env["FLEET_CONTEXT_ROOT"] = str(INSTALL_ROOT)
+    return env
+
+
+def config_path(value):
+    """A path out of config.json EXACTLY the way format.mjs's configPath() reads
+    it: a leading ~ expands, an absolute path stands, a relative one resolves
+    against the config file's directory. Deliberately not fleetlib's
+    resolve_config_path, which also expands $VAR: format.mjs does not, and a
+    check that resolved a path the server cannot is a false green."""
+    v = os.path.expanduser(str(value))
+    return os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(CONFIG)), v))
+
+
+# ---------------------------------------------------------------- config ----
+def leg_config():
+    try:
+        with open(CONFIG, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except FileNotFoundError:
+        leg(2, f"config: no {CONFIG}. Run: `install -m 644 "
+               f"{os.path.join(SKILL, 'config.example.json')} {CONFIG}`, then fill it in.")
+        return None
+    except (OSError, ValueError) as e:
+        leg(2, f"config: {CONFIG} does not parse or cannot be read ({type(e).__name__}: {e})")
+        return None
+    missing = [k for k, v in (
+        ("transcripts.config_dir", (cfg.get("transcripts") or {}).get("config_dir")),
+        ("labels.root_owner", (cfg.get("labels") or {}).get("root_owner")),
+        ("servers", strip_comments(cfg.get("servers") or {})),
+    ) if not v]
+    if missing:
+        leg(2, f"config: config.json is missing required key(s): {', '.join(missing)}")
+        return None
+    leg(0, f"config: config.json parses and carries every required key "
+           f"({len(strip_comments(cfg.get('servers') or {}))} server entry/entries)")
+    return cfg
+
+
+# --------------------------------------------------------------- scripts ----
+def leg_scripts():
+    """node RUNS serve.mjs --help, which resolves config.json through the fleet,
+    loads format.mjs, parses the config and loads the identity roster at import
+    time. Then the same-file check, the roster, and the control."""
+    node = shutil.which("node")
+    if not node:
+        leg(1, "scripts: NO VERDICT - node is not on PATH here, so serve.mjs cannot be "
+               "run at all. This is an unusable instrument, not evidence about the install.")
+        return
+    env = base_env()
+    try:
+        r = run([node, os.path.join(SKILL, "serve.mjs"), "--help"], env=env)
+    except (OSError, subprocess.SubprocessError) as e:
+        leg(1, f"scripts: NO VERDICT - could not run node ({type(e).__name__}: {e})")
+        return
+    if r.returncode != 0:
+        leg(2, f"scripts: `node serve.mjs --help` exited {r.returncode}: "
+               f"{(r.stderr or r.stdout).strip().splitlines()[-1] if (r.stderr or r.stdout).strip() else 'no output'}")
+        return
+    said = next((ln.split("config:", 1)[1].strip() for ln in r.stdout.splitlines()
+                 if ln.strip().startswith("config:")), "")
+    if not said or os.path.realpath(said) != os.path.realpath(CONFIG):
+        leg(1, f"scripts: serve.mjs resolves its config to {said or 'nothing it printed'}, but this "
+               f"check read {CONFIG}. Two resolvers disagree about this install; nothing below "
+               f"describes the file the server reads.")
+        return
+    roster = [ln for ln in r.stderr.splitlines() if "identities:" in ln and "not loaded" in ln]
+    if roster:
+        leg(2, f"roster: {roster[0].strip()} - every block would render with no name and no "
+               f"avatar, which looks like a design choice; fix identities.file or remove it to "
+               f"use the shipped roster")
+        return
+
+    # NEGATIVE CONTROL: the same run against a config path that does not exist
+    # must FAIL. If it succeeds, serve.mjs is not reading WEB_HIERARCHY_CONFIG
+    # and the green above says nothing about this install's config.
+    ctl_env = base_env()
+    ctl_env["WEB_HIERARCHY_CONFIG"] = os.path.join(tempfile.gettempdir(), "web-hierarchy-no-such-config.json")
+    try:
+        ctl = run([node, os.path.join(SKILL, "serve.mjs"), "--help"], env=ctl_env)
+    except (OSError, subprocess.SubprocessError) as e:
+        leg(1, f"scripts: NO VERDICT - the negative control could not be run ({type(e).__name__}: {e})")
+        return
+    if ctl.returncode == 0:
+        leg(1, "scripts: NO VERDICT - the negative control PASSED: serve.mjs --help succeeded "
+               "against a WEB_HIERARCHY_CONFIG that does not exist, so it is not reading the "
+               "config file and the green above measured nothing.")
+        return
+    leg(0, f"scripts: node ran serve.mjs --help (config resolved to {CONFIG}, the file this check "
+           f"read; roster loaded); control: a nonexistent config makes the same run fail")
+
+
+# ----------------------------------------------------------- transcripts ----
+def leg_transcripts(cfg):
+    """The configured transcript root is LISTED, and one transcript is opened.
+
+    The configured value is what is measured, not CLAUDE_CONFIG_DIR from this
+    shell: the environment wins at runtime, but it is the launcher's to set and
+    this check cannot see the launcher's.
+    """
+    root = config_path((cfg.get("transcripts") or {}).get("config_dir"))
+    subdir = (cfg.get("transcripts") or {}).get("projects_subdir") or "projects"
+    projects = os.path.join(root, subdir)
+    # An existing config_dir with no session under it is the state of every agent
+    # before its first signed-in session; a config_dir that does not exist is a
+    # wrong path. The verdict line says which.
+    unsigned = (f"no signed-in session has run under {root} yet: sign in and start the agent, "
+                f"adding-an-agent section 3 step 4"
+                if os.path.isdir(root) else f"config_dir {root} does not exist")
+    try:
+        entries = os.listdir(projects)
+    except OSError as e:
+        leg(2, f"transcripts: cannot list {projects} ({e.strerror}); the configured config_dir "
+               f"has no readable {subdir}/ and the page would sit on 'waiting for a session'",
+            why=unsigned if e.errno == errno.ENOENT else None)
+        return
+    slugs = [d for d in entries if os.path.isdir(os.path.join(projects, d))]
+    if not slugs:
+        leg(2, f"transcripts: {projects} holds no project slug directory, so there is no "
+               f"session for the server to follow", why=unsigned)
+        return
+    found = 0
+    for slug in slugs:
+        for f in os.listdir(os.path.join(projects, slug)):
+            if f.endswith(".jsonl"):
+                with open(os.path.join(projects, slug, f), "rb") as fh:
+                    fh.read(1)
+                found += 1
+                break
+        if found:
+            break
+    if not found:
+        leg(1, f"transcripts: {len(slugs)} slug(s) under {projects}, but none holds a .jsonl - "
+               f"the root is right and no session has been written yet", why=unsigned)
+        return
+    leg(0, f"transcripts: {projects} lists {len(slugs)} project slug(s) and a session "
+           f"transcript opened for reading")
+
+
+# ---------------------------------------------------------------- render ----
+FIXTURE_RENDER = r"""
+import { pickSession, snapshot } from '%s';
+const sid = pickSession(null);
+const n = sid ? snapshot(sid, { capKB: 4 }).agents.length : 0;
+console.log(JSON.stringify({ sid: sid || '', agents: n }));
+"""
+
+
+def render(config_dir, node, fixture_cfg):
+    env = base_env()
+    env["CLAUDE_CONFIG_DIR"] = config_dir
+    env["WEB_HIERARCHY_CONFIG"] = fixture_cfg
+    src = FIXTURE_RENDER % os.path.join(SKILL, "format.mjs").replace("\\", "/")
+    r = run([node, "--input-type=module", "-e", src], env=env)
+    if r.returncode != 0:
+        return None, (r.stderr or r.stdout).strip()
+    try:
+        return json.loads(r.stdout.strip().splitlines()[-1]), None
+    except (ValueError, IndexError):
+        return None, r.stdout.strip()
+
+
+def leg_render():
+    """The formatter renders the SHIPPED fixture tree, then the control."""
+    node = shutil.which("node")
+    fixture_cfg = os.path.join(FIXTURES, "config.fixture.json")
+    fixture_dir = os.path.join(FIXTURES, "config-dir")
+    if not node:
+        leg(1, "render: NO VERDICT - node is not on PATH here")
+        return
+    got, err = render(fixture_dir, node, fixture_cfg)
+    if got is None:
+        leg(2, f"render: format.mjs could not render the shipped fixture tree: {err}")
+        return
+    if got["agents"] < 3:
+        leg(2, f"render: the fixture tree rendered {got['agents']} agent(s); the fixture has a "
+               f"root and two subagents, so the formatter is not reading it")
+        return
+
+    # NEGATIVE CONTROL: an EMPTY transcript root must render nothing. A tree
+    # coming back from a directory with no transcripts means the render above
+    # was not a reading of the disk.
+    with tempfile.TemporaryDirectory(prefix="web-hierarchy-check-") as empty:
+        os.makedirs(os.path.join(empty, "projects"), exist_ok=True)
+        ctl, cerr = render(empty, node, fixture_cfg)
+    if ctl is None:
+        leg(1, f"render: NO VERDICT - the negative control could not be run: {cerr}")
+        return
+    if ctl["agents"] != 0 or ctl["sid"]:
+        leg(1, f"render: NO VERDICT - the negative control PASSED: an EMPTY transcript root "
+               f"rendered session '{ctl['sid']}' with {ctl['agents']} agent(s), so the render "
+               f"above was not a reading of the disk.")
+        return
+    leg(0, f"render: format.mjs rendered the fixture tree ({got['agents']} agents); "
+           f"control: an empty transcript root renders nothing")
+
+
+# --------------------------------------------------------------- systemd ----
+def listeners():
+    """port -> set of pids holding a LISTEN socket on it, from `ss` (Linux) or
+    `lsof` (macOS, which has no ss), or None when neither runs, which is an
+    unmeasurable instrument and not an empty result. lsof shows only this user's
+    sockets; port_holder probes the port itself for one nobody here can see."""
+    if not shutil.which("ss"):
+        return lsof_listeners()
+    try:
+        raw = subprocess.run(["ss", "-ltnpH"], capture_output=True, text=True, timeout=15).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    found = {}
+    for line in raw.splitlines():
+        cols = line.split()
+        if len(cols) < 4 or ":" not in cols[3]:
+            continue
+        try:
+            port = int(cols[3].rsplit(":", 1)[1])
+        except ValueError:
+            continue
+        found.setdefault(port, set()).update(int(m) for m in re.findall(r"pid=(\d+)", line))
+    return found
+
+
+def lsof_listeners():
+    if not shutil.which("lsof"):
+        return None
+    try:
+        raw = subprocess.run(["lsof", "-nP", "-iTCP", "-sTCP:LISTEN", "-Fpn"], capture_output=True,
+                             text=True, timeout=15).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    found, pid = {}, None
+    for line in raw.splitlines():
+        if line.startswith("p") and line[1:].isdigit():
+            pid = int(line[1:])
+        elif line.startswith("n") and ":" in line and pid is not None:
+            try:
+                found.setdefault(int(line.rsplit(":", 1)[1]), set()).add(pid)
+            except ValueError:
+                continue
+    return found
+
+
+def answers(port):
+    """Whether something accepts a TCP connection on 127.0.0.1:`port`."""
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=2):
+            return True
+    except OSError:
+        return False
+
+
+def cmdline(pid):
+    """The process's command line (fleetlib.services: procfs, or KERN_PROCARGS2 on
+    macOS), or "" when it cannot be read."""
+    return " ".join(services.proc_argv(pid) or [])
+
+
+def port_holder(holders, port):
+    """(state, text) for who holds `port`: 'mine' when a serve.mjs from THIS
+    skill directory holds it, 'other-copy', 'foreign', 'none', or 'unknown'."""
+    mine = {os.getpid(), os.getppid()}
+    pids = {p for p in holders.get(port, set()) if p not in mine}
+    if port not in holders:
+        if answers(port):
+            return "unknown", "answered by a process this user cannot see (another user's)"
+        return "none", "nothing is LISTENing"
+    if not pids:
+        return "unknown", "held by a process this user cannot identify"
+    cmds = {p: cmdline(p) for p in pids}
+    if not any(cmds.values()):
+        return "unknown", f"held by pid(s) {sorted(pids)} with no readable command line"
+    for p, c in cmds.items():
+        m = re.search(r"(\S*serve\.mjs)", c)
+        if not m:
+            continue
+        got = os.path.realpath(os.path.dirname(m.group(1)))
+        if got == os.path.realpath(SKILL):
+            return "mine", f"held by pid {p}, this skill's serve.mjs"
+        return "other-copy", f"held by pid {p} running {m.group(1)}, NOT this skill's copy"
+    return "foreign", "; ".join(f"pid {p}: {c[:100]}" for p, c in cmds.items())
+
+
+def leg_launchd(cfg):
+    """The servers as LaunchAgents in the user's gui domain (macOS): config.json's
+    `servers` is keyed by each job's label."""
+    servers = strip_comments(cfg.get("servers") or {})
+    holders = listeners()
+    for label, spec in servers.items():
+        port = spec.get("port")
+        if not isinstance(port, int):
+            leg(2, f"launchd: config.json gives {label} no integer port")
+            continue
+        hold, why = ("unmeasurable", "lsof is not available") if holders is None else port_holder(holders, port)
+        st = services.status(label, "user")
+        if st["load"] == "unknown":
+            leg(1, f"launchd: NO VERDICT for {label} - launchctl could not report it ({st['error']}). "
+                   f"This is not evidence it is absent. Port {port}: {why}.")
+        elif st["load"] == "loaded" and st["active"] == "active":
+            if hold == "mine":
+                leg(0, f"launchd: {label} is running and port {port} is {why}")
+            elif hold == "other-copy":
+                leg(1, f"launchd: STALE - {label} is running, but port {port} is {why}. A server "
+                       f"running another checkout's serve.mjs will not pick up this one's changes.")
+            elif hold == "unmeasurable":
+                leg(1, f"launchd: NO VERDICT for {label} - {why}, so who holds port {port} cannot be read.")
+            else:
+                leg(2, f"launchd: {label} is running but port {port} {why}")
+        elif st["load"] == "loaded":
+            leg(2, f"launchd: {label} is loaded but {st['active']} (last result {st['result']}); "
+                   f"{services.hint('log', label, 'user')}")
+        else:
+            leg(1, f"launchd: {label} is not loaded - the durable form is NOT installed. It is a "
+                   f"LaunchAgent, installed without sudo (installation/INSTRUCTION.md step 3). "
+                   f"Port {port}: {why}.")
+
+
+def leg_systemd(cfg):
+    if services.backend() == "launchd":
+        leg_launchd(cfg)
+        return
+    servers = strip_comments(cfg.get("servers") or {})
+    holders = listeners()
+    have_systemctl = bool(shutil.which("systemctl"))
+    for unit, spec in servers.items():
+        port = spec.get("port")
+        if not isinstance(port, int):
+            leg(2, f"systemd: config.json gives {unit} no integer port")
+            continue
+        state = "unmeasurable"
+        if have_systemctl:
+            r = subprocess.run(["systemctl", "is-enabled", unit], capture_output=True, text=True)
+            state = (r.stdout or r.stderr).strip() or "not found"
+        hold, why = ("unmeasurable", "ss is not available") if holders is None else port_holder(holders, port)
+
+        if not have_systemctl:
+            leg(1, f"systemd: NO VERDICT for {unit} - systemctl is not on PATH, so whether the "
+                   f"unit is loaded cannot be read. This is not evidence it is absent. "
+                   f"Port {port}: {why}.")
+            continue
+        if state in ("enabled", "enabled-runtime", "static", "alias", "indirect"):
+            if hold == "mine":
+                leg(0, f"systemd: {unit} is {state} and port {port} is {why}")
+            elif hold == "other-copy":
+                leg(1, f"systemd: STALE - {unit} is {state}, but port {port} is {why}. A server "
+                       f"running another checkout's serve.mjs will not pick up this one's changes.")
+            elif hold == "unmeasurable":
+                leg(1, f"systemd: NO VERDICT for {unit} - {why}, so who holds port {port} "
+                       f"cannot be read.")
+            else:
+                leg(2, f"systemd: {unit} is {state} but port {port} {why}")
+            continue
+        # The unit is not installed. That is a HUMAN step needing root, so it is
+        # reported in words at 1 rather than as a failure - and never as a green,
+        # whatever is answering on the port right now.
+        extra = {
+            "mine": f"A serve.mjs from this skill IS {why} on port {port}, so the page works "
+                    f"now and will NOT come back after a reboot.",
+            "other-copy": f"Port {port} is {why}.",
+            "foreign": f"Port {port} is held by a foreign process: {why}.",
+            "none": f"Nothing is listening on port {port} either.",
+            "unknown": f"Port {port}: {why}.",
+            "unmeasurable": f"Port {port} could not be read: {why}.",
+        }[hold]
+        leg(1, f"systemd: {unit} is '{state}' - the durable form is NOT installed. Installing a "
+               f"unit needs root and is a human's step (installation/INSTRUCTION.md step 3). "
+               f"{extra}")
+
+
+# --------------------------------------------------------------- version ----
+def leg_version(want, verr):
+    if verr:
+        leg(1, f"version: NO VERDICT - {verr}")
+        return
+    try:
+        with open(STATE, encoding="utf-8") as f:
+            state = json.load(f)
+    except FileNotFoundError:
+        leg(1, f"version: no .install-state.json records which version is installed "
+               f"(SKILL.md declares {want}). Re-run installation/INSTRUCTION.md step 4.")
+        return
+    except (OSError, ValueError) as e:
+        leg(1, f"version: .install-state.json unreadable ({type(e).__name__}: {e})")
+        return
+    hosts = state.get("hosts") or {}
+    entry = hosts.get(HOST)
+    if not entry:
+        leg(1, f"version: this machine ({HOST}) has no entry in .install-state.json; it records "
+               f"{', '.join(sorted(hosts)) or 'no host'}. The state file travels with the repo; "
+               f"the install does not. Re-run installation/INSTRUCTION.md on this machine.")
+        return
+    try:
+        have = int(entry.get("version", -1))
+    except (TypeError, ValueError):
+        leg(1, f"version: the entry for {HOST} carries no integer version")
+        return
+    if have < want:
+        leg(1, f"version: installed version {have} on {HOST}, SKILL.md declares {want}. "
+               f"Re-run installation/INSTRUCTION.md.")
+    elif have > want:
+        leg(1, f"version: installed version {have} on {HOST} is NEWER than SKILL.md's {want}. "
+               f"The checkout is behind the install; pull before running.")
+    else:
+        leg(0, f"version: {HOST} has version {want} installed ({entry.get('installed_at', 'no date')})")
+
+
+def main():
+    global INSTALL_ROOT, CONFIG, STATE
+    try:
+        INSTALL_ROOT = paths.install_root()
+        ctx = paths.skill_context("web-hierarchy-server")
+    except FleetError as e:
+        leg(2, f"install context: not resolvable ({e}); config.json and the install state "
+               f"live in the install, so there is nothing to check")
+        finish()
+    CONFIG = str(ctx / "config.json")
+    STATE = str(ctx / "installation" / ".install-state.json")
+    want, verr = declared_version()
+    cfg = leg_config()
+    leg_scripts()
+    if cfg:
+        leg_transcripts(cfg)
+    leg_render()
+    if cfg:
+        leg_systemd(cfg)
+    leg_version(want, verr)
+    finish()
+
+
+if __name__ == "__main__":
+    main()

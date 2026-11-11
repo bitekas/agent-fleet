@@ -1,0 +1,60 @@
+# agent-revive requirements.
+#
+# Two halves. The read-only tooling reads tmux panes and service units and is thin.
+# The automated sign-in route (SKILL.md step 6) drives a real browser and is not.
+# installation/check probes each one, in the tree it is run from.
+#
+# System tools:
+#   tmux    the agents already run inside tmux; the reviver captures panes and sends
+#           keys to their sessions. Present by definition on a host that runs agents.
+#   jq      tmux_triage.sh reads config.json and emits JSON with it.
+#   systemctl (optional) reads the agent's unit via `systemctl cat`, falling back to
+#           /etc/systemd/system/<unit>. THREE consumers, not one: `--bootstrap-prompt`
+#           takes the prompt out of ExecStartPost, and `--current-account` and
+#           `--accounts` take CLAUDE_CONFIG_DIR out of it to find the Claude config
+#           dir. Without it those two fall back to the fleet's own layout
+#           (fleet.agents_home), which is a convention rather than the value the
+#           session was started with.
+#   python3 `--accounts` runs agent-health's pool_pick.py (stdlib only), which reads the
+#           account pool, the leases and the usage ledger and names the next account.
+#           agent-health must sit beside this skill in the fleet tree.
+#   node    the sign-in driver and its client are node processes. Without it the
+#           automated route is unavailable and every revival falls back to the
+#           step-7e human route.
+#   xvfb-run (Linux, needed only where DISPLAY is unset) supplies the virtual
+#           display a HEADFUL browser needs. macOS needs none: the browser draws
+#           through WindowServer in the agents' user's console session. ⚠️ Headful is a requirement, not a preference:
+#           Google rejects a headless browser at the identifier step ("This browser
+#           or app may not be secure"), so there is no headless fallback to drop to.
+#
+# Per-TREE, installed by `installation/check --online` (on a fleet host, `fleet install`):
+#   signin_driver/node_modules   playwright + playwright-extra + the stealth plugin,
+#           pinned by signin_driver/package-lock.json
+#   signin_driver/browsers       the Chromium build, kept in the skill's own dir so
+#           nothing depends on a machine-wide Playwright cache
+#   ⚠️ Both are gitignored, so a fresh clone and EVERY FRESH WORKTREE has the source
+#   without the install. That is a fact about the TREE, never about the branch, and
+#   `installation/.install-state.json` cannot speak for it: that file is keyed by
+#   HOST, and one host holds many trees.
+#
+# The tap-to-solve share (SKILL.md step 7), system packages, Linux only (macOS has
+# no share: SKILL.md step 7e is the human route there):
+#   x11vnc      the VNC server on the driver's own Xvfb display. Its flags carry the
+#               input restriction (signin_driver/share.mjs), so it is the one piece
+#               that may not be swapped for another VNC server without re-proving it.
+#   novnc       the browser VNC client the person opens; share.novnc_dir points at its
+#               files (Debian/Ubuntu: /usr/share/novnc).
+#   websockify  serves noVNC and bridges its WebSocket to x11vnc, on 127.0.0.1.
+#   tailscale   with Funnel allowed for this node and share.funnel_port in the tailnet
+#               policy (the node's capability map carries `funnel` and a funnel-ports
+#               list), and runnable unattended by the agent's user through
+#               share.tailscale - `sudo -n tailscale` with a sudoers grant, or the user
+#               set as the tailscale operator.
+#   Without any of these the share cannot run and the human step falls back to SKILL.md
+#   step 7e: a person signing in in their own browser, with the account's credentials.
+#
+# The recovery-email challenge route (SKILL.md step 6b), shared with google-spreadsheet:
+#   python3 and PyJWT[crypto]   read_recovery_code.py imports that skill's gsheets.py to
+#           mint the delegated Gmail token; the JWT signing dependency is declared ONCE,
+#           in the google-spreadsheet skill's installation/requirements.txt. Install
+#           that skill and this route is installed.

@@ -1,0 +1,426 @@
+#!/usr/bin/env python3
+"""[" -f "${BASH_SOURCE:-$0}" ] || { echo "a Python script: run it with python3" >&2; exit 126; }; exec python3 "${BASH_SOURCE:-$0}" "$@" || exit # sh/bash: hand off to python3 before reading the docstring
+Is this skill installed, and is it current?
+
+Prints ONE line and exits:
+
+    0  installed, current      -> proceed
+    1  installed, but stale    -> re-run INSTRUCTION.md, then re-check
+    2  not installed           -> follow INSTRUCTION.md
+
+State 1 is the reason this exists. Absent is loud: there is no key file, and the
+first curl fails naming it. Stale is silent: every call runs, against a workspace
+that has drifted from the one config.json names, or under an install nobody has
+revisited since the procedure changed. A write into the wrong Notion workspace
+raises nothing, reads back cleanly, and looks exactly like success.
+
+It verifies REAL ARTIFACTS, never a marker file: config.json parses and carries
+every required key, the token file resolves to a non-empty file whose contents
+have Notion's token prefix, both credential files are mode 600, the MCP
+connector appears in the client's own connection record, and with --online the
+live API's own answer is compared against every identity key. A marker file can
+lie; those cannot.
+
+.install-state.json is a SPECIFIC file: it is committed like everything else, so
+it travels to machines that never ran the install. That is why it records the
+host it was written on and why this script checks it.
+
+Both SPECIFIC files - config.json and installation/.install-state.json - live in
+this skill's INSTALL CONTEXT, resolved by fleetlib (the resolver behind
+`fleet where notion-workspace`), never beside this script. A configured path is
+expanded by fleetlib's expander (${VAR:-default}, $VAR / ${VAR}, a leading ~)
+and a relative one resolves against config.json's own directory.
+
+------------------------------------------------------------------------------
+THREE LOAD-BEARING PROPERTIES. Removing any of them leaves a check that still
+runs, still prints a line, and can no longer fail for the reason its name
+claims. Each is here for a measured reason.
+
+1. THE MCP LEG CAN RETURN "NO VERDICT", AND THAT IS NOT A BUG.
+   A hosted MCP connector's binding is an account-level OAuth grant with NO
+   artifact on disk. The closest thing to evidence is the client's own
+   connection record; that record is a client internal, so its ABSENCE is
+   ambiguous. This script therefore separates three outcomes and refuses to
+   collapse them:
+     - the record exists and names the connector      -> proven "ever connected"
+     - the record exists and does NOT name it         -> genuinely not installed
+     - the record's own key is missing entirely       -> NO VERDICT
+   The third is the one that matters. Collapsing it into "installed" would
+   launder an unmeasured property into a green; collapsing it into "not
+   installed" would red every machine the day the client renames that key, and
+   a gate that reds for a reason unrelated to the subject trains its readers to
+   excuse red. If you delete this distinction, the check reports on path 2 while
+   silently claiming path 1.
+
+2. "PROVEN" HERE MEANS "EVER CONNECTED", NOT "CONNECTED NOW", AND THE LINE SAYS SO.
+   Nothing on disk can prove a live connector binding, and nothing in a shell
+   can prove WHICH workspace the connector is bound to. Only an in-session
+   notion-fetch {"id":"self"} can, and this script cannot make that call. So it
+   states the limit in its own output instead of implying coverage it does not
+   have. Do not reword that line into a pass.
+
+3. THE EXIT CODE IS LOSSY; THE PRINTED LINE IS THE VERDICT.
+   The contract in the claude-skill convention has three codes and no
+   inconclusive state, so a NO VERDICT result is mapped onto exit 1: both 1 and
+   2 mean do-not-proceed, and 1 is the "installed, but something is off" bucket,
+   which is nearer the truth than "not installed". A reader who needs to tell
+   "cannot confirm" from "confirmed stale" must read the line. If that contract
+   ever gains a fourth code, this is the case that should use it.
+
+Two env vars exist so this script can be TESTED in all three states without
+perturbing a live install, which is the only way to know it can fail at all:
+    NOTION_SKILL_CONFIG          path to an alternate config.json
+    NOTION_SKILL_INSTALL_STATE   path to an alternate .install-state.json
+With both set, no install context is consulted.
+A check that has only ever been observed in one state is not evidence. Neither
+var has any role in normal operation; do not remove them to tidy up.
+------------------------------------------------------------------------------
+
+Modes:
+    check                 offline artifact + version check (the default)
+    check --online        the above, plus one GET /v1/users/me identity compare
+    check --token-path    print the resolved token file and exit 0, or print
+                          nothing and exit 2. The ONE resolver: SKILL.md's
+                          recipes read the path from here rather than embedding
+                          one, so there is exactly one place that knows how a
+                          configured credential path is expanded.
+"""
+import json
+import os
+import re
+import socket
+import stat
+import sys
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+# realpath, never abspath: reached through a personal skill link, abspath is the
+# link's path under an agent's config dir, and the fleet tree is not above it.
+HERE = os.path.dirname(os.path.realpath(__file__))
+SKILL = os.path.dirname(HERE)
+sys.path.insert(0, str(Path(SKILL).parents[2] / "lib"))
+from fleetlib import FleetError, paths  # noqa: E402
+
+API_ROOT = "https://api.notion.com"
+API_VERSION = "2022-06-28"
+# Notion's current token format. A vendor format, not a local value, so it is
+# mechanism and belongs in the script. The LENGTH is deliberately not asserted:
+# it is 50 characters as measured 2026-09-03, and pinning a vendor's length is
+# how a check reds on the day the vendor adds a character. The prefix is the
+# part that separates a token from a pasted page id or an empty file.
+TOKEN_PREFIX = "ntn_"
+
+REQUIRED = [
+    ("workspace", "name"),
+    ("workspace", "id"),
+    ("mcp", "connector_name"),
+    ("mcp", "acts_as", "name"),
+    ("mcp", "acts_as", "email"),
+    ("mcp", "acts_as", "user_id"),
+    ("bot", "name"),
+    ("bot", "user_id"),
+    ("bot", "owner_user_id"),
+    ("token", "path"),
+]
+
+
+def out(code, msg):
+    print(msg)
+    sys.exit(code)
+
+
+def specific_files():
+    """(config.json, .install-state.json): each env override, else the file in
+    this skill's install context. The context is resolved only when an
+    override is missing, so a test that sets both needs no install at all."""
+    config = os.environ.get("NOTION_SKILL_CONFIG")
+    state = os.environ.get("NOTION_SKILL_INSTALL_STATE")
+    if not (config and state):
+        try:
+            ctx = paths.skill_context("notion-workspace")
+        except FleetError as e:
+            out(2, f"NOT INSTALLED: this skill's install context is not resolvable ({e})")
+        config = config or str(ctx / "config.json")
+        state = state or str(ctx / "installation" / ".install-state.json")
+    return config, state
+
+
+CONFIG, STATE = None, None
+
+
+def declared_version():
+    """The version SKILL.md declares. Absent means the skill predates the
+    convention, which is itself a reason to re-install rather than to guess."""
+    with open(os.path.join(SKILL, "SKILL.md"), encoding="utf-8") as f:
+        head = f.read(4096)
+    m = re.search(r"^version:\s*(\d+)\s*$", head, re.M)
+    return int(m.group(1)) if m else 0
+
+
+def expand_path(raw):
+    """A configured path, expanded and resolved: fleetlib's expander, then a
+    relative result against config.json's directory.
+
+    An unset variable with NO default stays the literal `$NAME`. The file then
+    does not exist and every caller below reports the unexpanded text, which
+    names the variable nobody set. That is the intended failure: substituting a
+    guess would quietly read a different file, and a check that reads the wrong
+    credential and passes is worse than one that reds.
+    """
+    return str(paths.resolve_config_path(raw, CONFIG))
+
+
+def resolve(configured):
+    """The file the configured path names, expanded, or None if it is absent.
+
+    The credential store is outside every checkout, so there is no repo root to
+    search and no worktree special case: one path, resolved the same way from
+    any clone, any worktree and any cwd.
+    """
+    p = expand_path(configured)
+    return p if os.path.isfile(p) else None
+
+
+def load_config():
+    if not os.path.exists(CONFIG):
+        out(2, f"NOT INSTALLED: no config at {CONFIG}. Run: `install -m 644 "
+               f"{os.path.join(SKILL, 'config.example.json')} {CONFIG}`, then fill it in.")
+    try:
+        with open(CONFIG, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception as e:  # noqa: BLE001
+        out(2, f"NOT INSTALLED: config.json does not parse "
+               f"({type(e).__name__}: {e})")
+    for path in REQUIRED:
+        node = cfg
+        for part in path:
+            if not isinstance(node, dict) or part not in node:
+                out(2, f"NOT INSTALLED: config.json is missing "
+                       f"{'.'.join(path)}")
+            node = node[part]
+        if node in (None, ""):
+            out(2, f"NOT INSTALLED: config.json has an empty "
+                   f"{'.'.join(path)}")
+    return cfg
+
+
+def check_mode(path, label):
+    """Refuse an over-permissive credential file.
+
+    A credential handed over can arrive 0644. That is not a cosmetic finding:
+    the file is readable by every account on the machine, and nothing else in
+    this skill would ever notice. Blocking on it is the whole point of asserting
+    it here rather than mentioning it in prose.
+    """
+    mode = stat.S_IMODE(os.stat(path).st_mode)
+    if mode & 0o077:
+        out(2, f"NOT INSTALLED: {label} at {path} is mode {mode:04o}, "
+               f"must be 600 (chmod 600 {path})")
+
+
+def mcp_leg(connector_name):
+    """(state, message) for the MCP connector. See load-bearing property 1."""
+    cfg_dir = os.path.expanduser(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude"))
+    record = os.path.join(cfg_dir, ".claude.json")
+    if not os.path.exists(record):
+        return "NO_VERDICT", (f"no client connection record at {record}, so "
+                              f"nothing on disk can speak for the MCP leg")
+    try:
+        with open(record, encoding="utf-8") as f:
+            doc = json.load(f)
+    except Exception as e:  # noqa: BLE001
+        return "NO_VERDICT", (f"client connection record {record} does not "
+                              f"parse ({type(e).__name__})")
+
+    ever = doc.get("claudeAiMcpEverConnected")
+    if isinstance(ever, list):
+        if connector_name in ever:
+            return "PROVEN", (f"connector {connector_name!r} is in this config "
+                              f"dir's connection record")
+        return "ABSENT", (f"connector {connector_name!r} has never been "
+                          f"connected under {cfg_dir}")
+
+    servers = list((doc.get("mcpServers") or {}).keys())
+    for proj in (doc.get("projects") or {}).values():
+        if isinstance(proj, dict):
+            servers += list((proj.get("mcpServers") or {}).keys())
+    if servers:
+        if connector_name in servers:
+            return "PROVEN", (f"MCP server {connector_name!r} is registered in "
+                              f"{record}")
+        return "ABSENT", (f"MCP server {connector_name!r} is not registered "
+                          f"under {cfg_dir}")
+
+    return "NO_VERDICT", (
+        f"{record} carries neither a claudeAiMcpEverConnected list nor any "
+        f"mcpServers entry. The client's record format has probably changed; "
+        f"this script cannot tell that from a disconnected connector")
+
+
+def online_leg(cfg, token_file):
+    """(state, message) from one live GET /v1/users/me identity compare.
+
+    This is the only instrument that can catch config.json and the key file
+    having drifted apart: the token belongs to whichever workspace issued it,
+    and the ids in config.json are just text. It does NOT cover mcp.acts_as,
+    which is the hosted connector's principal and is only observable in-session
+    via notion-fetch {"id":"self"}.
+    """
+    with open(token_file, encoding="utf-8") as f:
+        token = f.read().strip()
+    req = urllib.request.Request(
+        f"{API_ROOT}/v1/users/me",
+        headers={"Authorization": f"Bearer {token}",
+                 "Notion-Version": API_VERSION})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            me = json.load(r)
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403):
+            return "FAIL", (f"the live API rejected the token "
+                            f"(HTTP {e.code}). If this workspace blocks "
+                            f"internal integrations, a hand-made internal "
+                            f"token will never work; see CONTEXT.md")
+        return "NO_VERDICT", f"the API answered HTTP {e.code}"
+    except (urllib.error.URLError, socket.timeout, TimeoutError) as e:
+        return "NO_VERDICT", (f"could not reach {API_ROOT} ({e}). Offline is "
+                              f"not a verdict on the identity keys")
+
+    bot = me.get("bot") or {}
+    owner = ((bot.get("owner") or {}).get("user") or {})
+    live = {
+        "workspace.name": bot.get("workspace_name"),
+        "workspace.id": bot.get("workspace_id"),
+        "bot.name": me.get("name"),
+        "bot.user_id": me.get("id"),
+        "bot.owner_user_id": owner.get("id"),
+    }
+    want = {
+        "workspace.name": cfg["workspace"]["name"],
+        "workspace.id": cfg["workspace"]["id"],
+        "bot.name": cfg["bot"]["name"],
+        "bot.user_id": cfg["bot"]["user_id"],
+        "bot.owner_user_id": cfg["bot"]["owner_user_id"],
+    }
+    bad = [f"{k}: config says {want[k]!r}, the live token says {live[k]!r}"
+           for k in want if want[k] != live[k]]
+    if bad:
+        return "FAIL", ("config.json and the key file describe different "
+                        "installs. " + "; ".join(bad))
+    return "PROVEN", (f"the live token belongs to {live['workspace.name']!r} "
+                      f"and matches all 5 identity keys")
+
+
+def main():
+    global CONFIG, STATE
+    argv = sys.argv[1:]
+    unknown = [a for a in argv if a not in ("--online", "--token-path")]
+    if unknown:
+        out(2, f"NOT INSTALLED: unknown argument(s) {unknown}; "
+               f"usage: check [--online | --token-path]")
+    CONFIG, STATE = specific_files()
+
+    cfg = load_config()
+    rel = cfg["token"]["path"]
+    token_file = resolve(rel)
+
+    if "--token-path" in argv:
+        # Print nothing on failure: this mode is consumed by $(...) in a
+        # recipe, and a diagnostic on stdout would be cat'ed as a filename.
+        if not token_file:
+            print(f"token file not found at {expand_path(rel)} "
+                  f"(config token.path = {rel})", file=sys.stderr)
+            sys.exit(2)
+        print(token_file)
+        sys.exit(0)
+
+    want = declared_version()
+
+    if not token_file:
+        out(2, f"NOT INSTALLED: no integration token file at "
+               f"{expand_path(rel)} (config token.path = {rel})")
+    if os.path.getsize(token_file) == 0:
+        out(2, f"NOT INSTALLED: integration token file is empty at {token_file}")
+    check_mode(token_file, "the integration token")
+    with open(token_file, encoding="utf-8") as f:
+        if not f.read().strip().startswith(TOKEN_PREFIX):
+            out(2, f"NOT INSTALLED: {token_file} does not hold a Notion "
+                   f"integration token (no {TOKEN_PREFIX!r} prefix)")
+
+    oauth_rel = (cfg.get("oauth") or {}).get("credentials_path")
+    oauth_note = "oauth creds not configured (re-authorization will need them)"
+    if oauth_rel:
+        oauth_file = resolve(oauth_rel)
+        if not oauth_file:
+            out(2, f"NOT INSTALLED: oauth.credentials_path is set to "
+                   f"{oauth_rel} but no such file exists at "
+                   f"{expand_path(oauth_rel)} (set it to null if this install "
+                   f"keeps them elsewhere)")
+        check_mode(oauth_file, "the OAuth client credentials")
+        try:
+            with open(oauth_file, encoding="utf-8") as f:
+                oa = json.load(f)
+        except Exception as e:  # noqa: BLE001
+            out(2, f"NOT INSTALLED: {oauth_file} does not parse "
+                   f"({type(e).__name__}: {e})")
+        missing = [k for k in ("clientId", "clientSecret") if not oa.get(k)]
+        if missing:
+            out(2, f"NOT INSTALLED: {oauth_file} is missing {missing}")
+        oauth_note = "oauth creds present"
+
+    mcp_state, mcp_msg = mcp_leg(cfg["mcp"]["connector_name"])
+    if mcp_state == "ABSENT":
+        out(2, f"NOT INSTALLED: {mcp_msg}. Connect it, or follow "
+               f"installation/INSTRUCTION.md")
+    if mcp_state == "NO_VERDICT":
+        out(1, f"NO VERDICT on the MCP leg: {mcp_msg}. Path 2 (the token) "
+               f"checked out. Confirm path 1 in-session with "
+               f"notion-fetch {{\"id\":\"self\"}} and compare its workspace "
+               f"against workspace.id before writing anything.")
+
+    online_note = ("identity keys UNVERIFIED offline; run --online, and "
+                   "confirm the MCP leg with notion-fetch {\"id\":\"self\"}")
+    if "--online" in argv:
+        st, msg = online_leg(cfg, token_file)
+        if st == "FAIL":
+            out(1, f"STALE: {msg}")
+        if st == "NO_VERDICT":
+            out(1, f"NO VERDICT on the identity keys: {msg}")
+        online_note = msg
+
+    # Artifacts are all present. Only the recorded version can still be wrong.
+    if not os.path.exists(STATE):
+        out(1, f"STALE: installed, but no .install-state.json records which "
+               f"version (SKILL.md declares {want}). Re-run "
+               f"installation/INSTRUCTION.md.")
+    try:
+        with open(STATE, encoding="utf-8") as f:
+            state = json.load(f)
+        have = int(state.get("version", -1))
+    except Exception as e:  # noqa: BLE001
+        out(1, f"STALE: .install-state.json unreadable "
+               f"({type(e).__name__}: {e})")
+
+    host = state.get("host")
+    if host and host != socket.gethostname():
+        out(1, f"STALE: last installed on {host}, not on this machine "
+               f"({socket.gethostname()}). The state file travels with the "
+               f"repo; the install does not. Re-run "
+               f"installation/INSTRUCTION.md.")
+
+    if have < want:
+        out(1, f"STALE: installed version {have}, SKILL.md declares {want}. "
+               f"Re-run installation/INSTRUCTION.md.")
+    if have > want:
+        out(1, f"STALE: installed version {have} is NEWER than SKILL.md's "
+               f"{want}. The checkout is behind the install; pull before "
+               f"running.")
+
+    out(0, f"OK: installed and current (version {want}); token resolved, "
+           f"{oauth_note}; MCP leg: {mcp_msg} (ever connected, NOT proof it "
+           f"is connected now); {online_note}")
+
+
+if __name__ == "__main__":
+    main()

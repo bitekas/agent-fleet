@@ -1,0 +1,4 @@
+{
+  "f@example.com": {"agent": "beta", "since": "2026-10-15T08:00Z"},
+  "g@example.com": {"agent": "alpha", "since": "2026-10-16T06:00Z"}
+}

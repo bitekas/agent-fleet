@@ -1,0 +1,13 @@
+[Unit]
+Description=example fleet agent
+After=network-online.target
+
+[Service]
+Type=forking
+Environment=CLAUDE_CONFIG_DIR=/nonexistent-example-home/.claude
+ExecStart=/usr/bin/tmux new-session -d -s claude-example "/bin/bash -lc 'claude --dangerously-skip-permissions --agent example --continue'"
+ExecStartPost=/bin/bash -c 'for i in $(seq 1 60); do pgrep -f "claude .*example" >/dev/null && break; sleep 3; done; sleep 15; TMUX_TMPDIR=/run/claude-tmux-example tmux send-keys -t claude-example:0 "You are the example agent, just rebooted; your previous conversation was resumed. On this very first turn, arm BOTH background monitors before anything else, then pick up any in-flight duties and stand by." ; sleep 1; TMUX_TMPDIR=/run/claude-tmux-example tmux send-keys -t claude-example:0 Enter'
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

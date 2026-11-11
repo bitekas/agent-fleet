@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Web hierarchy server for ONE agent on macOS: a LaunchAgent in the user's gui
+  domain, installed WITHOUT sudo. The macOS form of
+  web-hierarchy-server.service.example, whose header says why it is decoupled
+  from the agent's session and why it is one server per config dir.
+  Placeholders, filled by the sed in installation/INSTRUCTION.md step 3:
+
+    <launchd-prefix>    host.json launchd_prefix (default com.agent-fleet)
+    <n>                 the ordinal or config-dir name this server is named by
+    <agents-root>       the directory holding the agent homes
+    <agent>             THIS agent: its config dir decides which tree is shown
+    <install-checkout>  the install checkout (serve.mjs resolves its config.json
+                        through `fleet where` from this working directory)
+    <fleet>             the fleet checkout
+    <port>              this server's port, matching its entry in config.json's
+                        `servers`, which is keyed by this job's label
+
+  A placeholder is an XML tag to the parser, so a file with one left in does not
+  load: `plutil -lint` the result. No double hyphen may appear in this comment:
+  XML ends a comment there.
+
+  `bash -lc` is load-bearing, as in the systemd unit: launchd starts a job with
+  PATH /usr/bin:/bin:/usr/sbin:/sbin and no login profile, so a node from a
+  version manager is found only through the login shell. KeepAlive restarts it
+  on every exit (the unit's Restart=always). Its output goes to
+  <agents-root>/<agent>/state/web-hierarchy-server.log, whose directory must
+  exist.
+
+  Install, then confirm:
+    install -m 644 <rendered> ~/Library/LaunchAgents/<launchd-prefix>.web-hierarchy.<n>.plist
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/<launchd-prefix>.web-hierarchy.<n>.plist
+    launchctl print gui/$(id -u)/<launchd-prefix>.web-hierarchy.<n>
+
+  systemd/agent-session.test.py fills every placeholder of this file and parses it.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string><launchd-prefix>.web-hierarchy.<n></string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-lc</string>
+    <string>exec node <fleet>/.claude/skills/web-hierarchy-server/serve.mjs --port=<port></string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string><install-checkout></string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>CLAUDE_CONFIG_DIR</key>
+    <string><agents-root>/<agent>/.claude</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string><agents-root>/<agent>/state/web-hierarchy-server.log</string>
+  <key>StandardErrorPath</key>
+  <string><agents-root>/<agent>/state/web-hierarchy-server.log</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>

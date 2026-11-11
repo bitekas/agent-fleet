@@ -1,0 +1,4 @@
+# The gitleaks configuration the leak gate passes on every run (--config), so a
+# .gitleaks.toml in the tree under scan is never read. The default rules, unchanged.
+[extend]
+useDefault = true

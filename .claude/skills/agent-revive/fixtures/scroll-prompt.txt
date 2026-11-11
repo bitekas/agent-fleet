@@ -1,0 +1,8 @@
+ Terminal setup
+
+ Choose how the mouse wheel behaves in this terminal:
+
+ ❯ Scroll the terminal (recommended)
+   Send up/down arrow keys
+
+ Enter to confirm

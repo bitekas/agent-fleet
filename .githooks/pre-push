@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# pre-push - the backstop for commits that skipped the other two hooks
+# (`--no-verify`, a rebase, a clone where the hooks were not yet enabled).
+# For every ref being pushed:
+#   * leak_gate.py --ref <remote ref> --range <range>: the ref name, and every
+#     commit the push publishes (paths, blobs, messages, identities, tags);
+#   * ai-attribution.sh check-range <range>: no commit message carries an
+#     AI-attribution line.
+# The range is <remote sha>..<local sha> for an existing ref. For a ref the
+# push creates it is <remote>/main..<local sha> when that remote-tracking ref
+# exists, else the whole history of <local sha> (the first push of main).
+# A deletion publishes nothing and is not checked.
+#
+# Every child reads stdin from /dev/null: git feeds the ref list on this
+# hook's stdin, and a child that consumed it would end the loop early and leave
+# the remaining refs unchecked.
+#
+# Enable once per clone: git config core.hooksPath .githooks
+set -euo pipefail
+top="$(git rev-parse --show-toplevel)"
+remote="$1"
+status=0
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [[ "$local_sha" =~ ^0+$ ]] && continue
+  if [[ ! "$remote_sha" =~ ^0+$ ]] && git cat-file -e "$remote_sha^{commit}" 2>/dev/null; then
+    range="$remote_sha..$local_sha"
+  elif git rev-parse -q --verify "refs/remotes/$remote/main^{commit}" >/dev/null; then
+    range="refs/remotes/$remote/main..$local_sha"
+  else
+    range="$local_sha"
+  fi
+  echo "pre-push: checking $range (the ref name is checked by the leak gate, masked)" >&2
+  python3 "$top/tools/leak-gate/leak_gate.py" --ref "$remote_ref" --range "$range" </dev/null || status=1
+  bash "$top/tools/commit-hygiene/ai-attribution.sh" check-range "$range" </dev/null || status=1
+done
+if [ "$status" -ne 0 ]; then
+  echo "pre-push: refused - fix the findings above (a published commit stays in history)" >&2
+fi
+exit "$status"

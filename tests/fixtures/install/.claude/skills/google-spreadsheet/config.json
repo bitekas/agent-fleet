@@ -1,0 +1,18 @@
+{
+  "_comment": "FIXTURE install config for the fleet's own tests. Every value is synthetic; identity.agent is a value no test-local config carries, so a test that reads it back proves this file was the one read.",
+  "identity": {
+    "agent": "fixture-install-agent",
+    "subject_template": "{agent}@example.com"
+  },
+  "credential": {
+    "key_path": "{home}/secrets/personal/{default_subject}-service-account.json"
+  },
+  "api": {
+    "sheets_base": "https://sheets.example.invalid/v4/spreadsheets",
+    "drive_base": "https://www.example.invalid/drive/v3"
+  },
+  "scopes": {
+    "sheets": "https://scope.example.invalid/spreadsheets",
+    "drive": "https://scope.example.invalid/drive"
+  }
+}

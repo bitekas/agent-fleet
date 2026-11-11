@@ -1,0 +1,11 @@
+{
+  "_comment": "Offline fixture config for pool_pick.test.py and agent-revive's tmux_triage.test.sh. Only the accounts block; every path is relative to this file's directory. No real account or credential.",
+  "accounts": {
+    "pool_file": "pool.json",
+    "lease_file": "leases.json",
+    "ledger_file": "ledger.md",
+    "exclude": [
+      { "username": "a@example.com", "reason": "Google rejects its sign-in" }
+    ]
+  }
+}

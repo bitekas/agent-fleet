@@ -1,0 +1,16 @@
+ ▐▛███▛█   Claude Code v2.1.317
+▝▜██████▀  Sonnet 5.5 · Claude API
+ ▝▝   ▝▝   /tmp/fleet-f15-probe/work
+
+⚠ Remote managed settings failed to load (authentication rejected (401)) · no remote policy applied · /status for details
+
+❯ say hi
+
+● Please run /login · API Error: 401 OAuth access token is invalid.
+
+✻ Churned for 1s · done 9:37 PM
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on · ? for shortcuts

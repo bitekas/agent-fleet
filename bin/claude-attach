@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# Attach to one fleet agent's tmux session: claude-attach <agent>
+# Run with no argument it is the fleet's ROSTER: it prints, on stderr, the agents
+# with a live tmux socket under `agents with a live tmux socket:`, and exits 2 -
+# the usage path, and the normal outcome of using it as a roster.
+#
+# The session layout is the fleet convention the agent unit template creates and
+# agent-revive's config.example.json documents (fleet.tmux): socket directory
+# <run>/claude-tmux-<agent> (TMUX_TMPDIR), session claude-<agent>, where <run> is
+# the service manager's runtime directory for the form the agent runs in:
+#   Linux   $XDG_RUNTIME_DIR (else /run/user/<uid>) for a user unit, whose %t it
+#           is, then /run for a system unit. Both are searched, in that order: an
+#           install can run either form, or both while moving between them.
+#   macOS   <agents_root>/run (host.json's agents_root): launchd has no runtime
+#           directory, so the session supervisor (systemd/agent-session.py)
+#           creates the socket directory there.
+# $CLAUDE_ATTACH_RUN_DIR replaces /run, and with $XDG_RUNTIME_DIR it is the seam
+# claude-attach.test.sh injects a fake socket tree through, so the test never reads
+# the host's live sessions; $FLEET_HOST_CONFIG names the host settings, as it does
+# for every fleet program.
+#
+# THE AGENT NAME IS REQUIRED AND THERE IS DELIBERATELY NO DEFAULT. A host runs one
+# session per agent, each on its own tmux socket. A wrapper that defaults to one of
+# them attaches an operator to the wrong agent's terminal - or, when that agent is
+# retired, to a socket that no longer exists, which reads as "the fleet is down"
+# rather than "this wrapper is stale".
+#
+# THE ROSTER IS DISCOVERED, NEVER LISTED HERE. The sessions are whatever
+# <run>/claude-tmux-* says they are, so adding or removing an agent needs no edit to
+# this file and this file can never disagree with the machine. A directory whose
+# socket is gone is a stopped agent and is NOT listed: the roster is the agents that
+# can be attached to, and a sweep that typed into a dead one would read nothing.
+# Searching only one runtime directory reads every agent the other form runs as
+# stopped, which is why both are searched.
+set -u
+uid="$(id -u)"
+runs=()
+case "$(uname -s)" in
+  Darwin)
+    host="${FLEET_HOST_CONFIG:-$HOME/.config/agent-fleet/host.json}"
+    root="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["agents_root"])' "$host" 2>/dev/null)" \
+      || { echo "claude-attach: cannot read agents_root from the host settings $host" >&2; exit 2; }
+    runs=("$root/run") ;;
+  *)
+    runs=("${XDG_RUNTIME_DIR:-/run/user/$uid}" "${CLAUDE_ATTACH_RUN_DIR:-/run}") ;;
+esac
+usage() {
+  echo "usage: claude-attach <agent>" >&2
+  echo "agents with a live tmux socket:" >&2
+  local found=" " r d n
+  for r in "${runs[@]}"; do
+    for d in "$r"/claude-tmux-*; do
+      [ -d "$d" ] || continue
+      n=${d#"$r"/claude-tmux-}
+      [ -S "$d/tmux-$uid/default" ] || continue
+      case "$found" in *" $n "*) continue ;; esac
+      echo "  $n" >&2; found="$found$n "
+    done
+  done
+  [ "$found" != " " ] || echo "  (none - is any agent session running? searched: ${runs[*]})" >&2
+  exit 2
+}
+[ $# -ge 1 ] || usage
+agent=$1; shift
+tmpdir=""; looked=""
+for r in "${runs[@]}"; do
+  looked="${looked:+$looked or }$r/claude-tmux-$agent"
+  if [ -S "$r/claude-tmux-$agent/tmux-$uid/default" ]; then tmpdir="$r/claude-tmux-$agent"; break; fi
+done
+if [ -z "$tmpdir" ]; then
+  echo "claude-attach: no tmux server for '$agent' at $looked" >&2
+  usage
+fi
+# env -u TMUX: inside a tmux session $TMUX wins over $TMUX_TMPDIR, so without this
+# the attach targets the server you are already sitting in. Measured 2026-09-04.
+exec env -u TMUX TMUX_TMPDIR="$tmpdir" tmux attach -t "claude-$agent" "$@"

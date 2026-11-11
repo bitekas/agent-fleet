@@ -1,0 +1,176 @@
+{
+  "_comment": [
+    "Everything deployment-specific for sched.py. The script hardcodes NOTHING about a",
+    "machine, an owner or a timezone - point SCHED_CONFIG at a copy of this file and you",
+    "have an independent scheduler.",
+    "",
+    "Three keys are REQUIRED and fatal when absent, because silently defaulting any of",
+    "them produces a scheduler that looks like it is working:",
+    "  owner.claude_config_dir - a wrong value means the daemon refuses to run, or worse,",
+    "                            the WRONG agent runs it and does another fleet's work.",
+    "  db.path                 - a wrong value means an empty database, which is",
+    "                            indistinguishable from 'nothing is due today'.",
+    "  defaults.tz             - a daily 09:00 job that quietly runs at 09:00 UTC when the",
+    "                            deployment is in Tokyo is off by nine hours and nobody gets",
+    "                            an error about it.",
+    "Everything else has a default. Env vars still outrank this file: SCHED_CONFIG,",
+    "SCHED_DB, SCHED_TICK_SECS, SCHED_EVAL_TIMEOUT_SECS.",
+    "",
+    "JSON has no comments, so this file documents itself with _comment keys. The loader",
+    "strips every leading-underscore key, so they can never be read as data."
+  ],
+
+  "owner": {
+    "_comment": [
+      "The ONLY CLAUDE_CONFIG_DIR allowed to run the daemon. Every other agent that arms",
+      "it exits 0 with a SCHED-GUARD line, so a shared 'arm at session start' rule is safe",
+      "to give the whole fleet."
+    ],
+    "claude_config_dir": "<agents-root>/<agent>/.claude"
+  },
+
+  "db": {
+    "_comment": [
+      "⚠️ LIVE DURABLE STATE - every schedule the fleet has ever been given lives in this",
+      "one file. It is deliberately NOT under XDG_CACHE_HOME (a cache is a place things",
+      "get deleted from) and NOT under the agent's CLAUDE_CONFIG_DIR (the harness owns that",
+      "directory and sweeps it); the agent home's state/ directory is the place. The",
+      "single-instance lock sits beside the DB, so unlike a chat watcher there is no",
+      "environment variable that can silently fork the state.",
+      "",
+      "⚠️ Deleting this file does NOT stop the schedules. Every task re-arms from an empty",
+      "state on its next evaluation and fires nothing until its next due time - so a daily",
+      "job quietly skips a day and reports nothing. Use `sched.py cancel`, never `rm`."
+    ],
+    "path": "<agents-root>/<agent>/state/scheduler/tasks.db",
+    "busy_timeout_secs": 5
+  },
+
+  "defaults": {
+    "_comment": [
+      "⚠️ SET THIS BEFORE USE. IANA name; per-task tz overrides it. Defaulted to UTC here,",
+      "which is almost certainly wrong for you - a wall-clock schedule is a LOCAL concept.",
+      "Per-task tz overrides it; this is what `add` uses when nobody says.",
+      "Wall-clock schedules ('daily at 09:00') are a LOCAL concept - storing them in UTC",
+      "drifts by an hour twice a year and the symptom is a report arriving at the wrong",
+      "time, not an error."
+    ],
+    "tz": "UTC"
+  },
+
+  "loop": {
+    "_comment": [
+      "tick_secs 1.0 is affordable: evaluation costs ~35us per task per tick, so 50 tasks",
+      "is under 0.2% of a core. The binding constraint is EMIT volume, not CPU - see emit.",
+      "resync_lag_secs: after a suspend or a stalled disk the loop resyncs its pacing",
+      "instead of bursting through the missed ticks. Bursting would call every predicate",
+      "N times with nearly the same `now`, which is wasted work at best and a flood at",
+      "worst. Predicates are edge-triggered, so one evaluation at the new time is exact."
+    ],
+    "tick_secs": 1.0,
+    "max_active_tasks": 200,
+    "max_fires_per_tick": 5,
+    "resync_lag_secs": 30
+  },
+
+  "eval": {
+    "_comment": [
+      "timeout_secs is enforced with signal.setitimer, which takes floats - signal.alarm",
+      "would round up to a whole second, making the smallest enforceable bound a full tick.",
+      "max_errors: consecutive predicate failures before the task is marked failed. A bad",
+      "RETURN SHAPE fails on the first strike instead, because it is deterministic and",
+      "retrying it just produces three identical log lines.",
+      "max_due_slots bounds the coalescing helper so a task resumed after a year of",
+      "downtime folds into one fire instead of walking 8760 hours inside the timeout."
+    ],
+    "timeout_secs": 0.25,
+    "max_errors": 3,
+    "max_due_slots": 4096
+  },
+
+  "emit": {
+    "_comment": [
+      "⚠️ min_interval_secs is a FLOOR THE DAEMON ENFORCES regardless of what a predicate",
+      "returns. A snippet stuck at fire=True would otherwise inject 3600 wake-up lines an",
+      "hour into the agent's session and make it unusable. Trusting every future snippet's",
+      "arithmetic not to do that is not a plan.",
+      "max_line_chars is larger than the Slack watcher's 500 because here the instruction",
+      "IS the payload, not a preview. Nothing structural is ever truncated - an over-long",
+      "payload degrades into a pointer to `sched.py show <id>`.",
+      "",
+      "reason_chars caps the task's REASON, which is emitted BEFORE the instruction. The",
+      "line budget cuts from the end, so reason-first is what stops a long instruction",
+      "silently swallowing the reason on the one wake-up where the agent most needs it;",
+      "this cap is what stops the reason doing the same to the instruction in return.",
+      "⚠️ Setting it to 0 does NOT turn the reason off gracefully - it drops below the",
+      "floor in format_emit, and the reason segment is omitted whole rather than",
+      "rendered as an empty stub. That is deliberate: a `why:` carrying no why spends",
+      "the instruction's budget to say nothing.",
+      "",
+      "requester_chars caps the `by=` field, which is PREFIX and therefore comes out of",
+      "the payload's budget. It also holds human text now, so it is quoted on the line:",
+      "the prefix is a space-separated field list and a display name contains spaces."
+    ],
+    "max_line_chars": 1200,
+    "reason_chars": 400,
+    "requester_chars": 40,
+    "title_chars": 60,
+    "min_interval_secs": 30,
+    "replay_grace_secs": 120,
+    "replay_max": 10,
+    "alert_min_interval_secs": 3600
+  },
+
+  "requester": {
+    "_comment": [
+      "Turns the id a request arrives with into the name a human recognises, so a task",
+      "row and a wake-up line say `by=Ada` and not `by=UEXAMPLE99`. All three keys are",
+      "optional; the two directory keys default to no directory.",
+      "",
+      "directory_file: a JSON file - typically the chat integration's own config, so",
+      "                there is ONE roster on the machine and not a second copy here",
+      "                that drifts. Read on demand, never at import: an install with no",
+      "                roster, or one whose copy is briefly unreadable, must still run.",
+      "directory_key:  the dotted path to the id-to-name object inside that file.",
+      "id_pattern:     what an unresolved id LOOKS like. A `--requester` matching this",
+      "                that the directory cannot resolve is REFUSED outright. null (the",
+      "                default) derives it: the alternation of every WORKING chat",
+      "                transport's user-id shape (`ids.user` in its transport.json), so",
+      "                it follows the transports this fleet runs. Set a regex only to",
+      "                narrow or widen that on purpose.",
+      "",
+      "⚠️ That refusal is the point, and softening it to a warning defeats the whole",
+      "block. Storing the id satisfies every constraint and every test; the failure",
+      "surfaces months later as a task whose only record of who wanted it is a string",
+      "nobody can identify."
+    ],
+    "directory_file": null,
+    "directory_key": null,
+    "id_pattern": null
+  },
+
+  "add": {
+    "_comment": [
+      "`add` dry-runs every predicate before it reaches the database and REFUSES two",
+      "outcomes without --force: zero fires in the horizon (a dead schedule, which is",
+      "silent for weeks) and more than fires_per_day_warn per day (a runaway, which is",
+      "loud and immediate). These are the two mistakes an authored snippet actually makes.",
+      "A missing --reason is refused too, and that one --force does NOT override: a",
+      "schedule whose purpose was never written down is the mistake with the longest fuse."
+    ],
+    "simulate_days": 7,
+    "fires_per_day_warn": 24
+  },
+
+  "retention": {
+    "_comment": [
+      "auto_archive_days: terminal tasks older than this flip to 'archived' and leave the",
+      "default list view. runs_per_task trims run history at insert, so growth is bounded",
+      "with no cron. Nothing here ever DELETES - only `purge --yes` does, and never",
+      "automatically."
+    ],
+    "auto_archive_days": 30,
+    "runs_per_task": 50,
+    "purge_days": 180
+  }
+}

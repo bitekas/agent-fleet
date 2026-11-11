@@ -1,0 +1,9 @@
+ Open the following URL in your browser to sign in:
+
+ https://claude.com/cai/oauth/authorize?response_type=code&client_id=9d
+1c250a-e61b-4f2c-bb27-1a0e6c7d8f90&scope=user%3Ainference%20user%3Aprof
+ile&code_challenge=Zx1aB2cD3eF4gH5iJ6kL7mN8oP9qR0sT1uV2wX3yZ4&code_chal
+lenge_method=S256&redirect_uri=https%3A%2F%2Fconsole.anthropic.com%2Foa
+uth%2Fcode%2Fcallback&state=abcdef0123456789deadbeefcafe
+
+ Paste code here if prompted >

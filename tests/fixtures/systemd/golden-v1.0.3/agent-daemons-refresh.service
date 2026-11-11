@@ -1,0 +1,8 @@
+# Rendered by fleet install from systemd/agent-daemons-refresh.service.in at <tag>. Edit the template, not this file.
+[Unit]
+Description=Restart an agent daemon whose code or config changed, or that is a day old
+Documentation=file://<fleet>/systemd/README.md
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 <fleet>/systemd/agent-daemons.py refresh

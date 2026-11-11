@@ -1,0 +1,9 @@
+ ⏺ Done (14 tool uses · 48.2k tokens · 3m 41s)
+
+ ● How is Claude doing this session? (optional)
+   1: Bad     2: Fine    3: Good    0: Dismiss
+
+╭─────────────────╮
+│ > │
+╰─────────────────╯
+ bypass permissions on (shift+tab to cycle) · ? for shortcuts

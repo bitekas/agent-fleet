@@ -1,0 +1,65 @@
+{
+  "_comment": [
+    "TEMPLATE. Copy it to the watcher's config path and replace every placeholder:",
+    "the install's own is config.json in its context for this skill (`fleet where",
+    "slack-communication config.json`); a watcher service names its config in",
+    "SLACK_WATCH_CONFIG, which watch.py requires.",
+    "",
+    "Everything workspace-, deployment- and person-specific for watch.py. The",
+    "script hardcodes NONE of it: point SLACK_WATCH_CONFIG at another copy of",
+    "this file to run the same watcher against a different workspace.",
+    "",
+    "Every key below is REQUIRED except those under 'poll' and 'slack', which",
+    "carry defaults. A missing required key is a loud startup failure naming",
+    "the key: a watcher that silently defaulted an identity value would poll",
+    "the wrong workspace or answer to the wrong owner.",
+    "",
+    "This file holds IDs and the PATH to your personal Slack key, never the key itself.",
+    "",
+    "JSON has no comments, so every _comment key here is documentation and is",
+    "stripped by the loader. Leave them in your config.json or delete them; the",
+    "script does not care."
+  ],
+  "workspace": {
+    "_comment": "Which Slack workspace this config is FOR. team_id is ENFORCED at startup via auth.test: a token belonging to a different team is refused rather than polled, because nothing else keeps the config and the token file in step and the mismatch is otherwise silent. Find it with auth.test, or in the workspace URL settings.",
+    "domain": "acme.slack.com",
+    "team_id": "T0EXAMPLE01"
+  },
+  "bot": {
+    "_comment": "The bot's own identity. Its messages are filtered out of the feed by user_id, so a wrong value here makes the watcher echo itself. auth.test returns user_id and handle; display_name is what humans see and type.",
+    "user_id": "U0EXAMPLEBOT",
+    "handle": "acmeagent",
+    "display_name": "Agent"
+  },
+  "token": {
+    "_comment": "Path to the file holding YOUR PERSONAL SLACK KEY. The key itself never appears here, in CONTEXT.md, or anywhere else in this skill: this is a path and only a path, so a leaked config is embarrassing rather than exploitable. The key is personal to the agent that owns the surface - not committed, not shared between agents - so it lives in that agent's personal-secrets directory (the agent skill, section 3), never in the organization secrets directory; the value below is the fleet's default layout: replace <agents-root> (agents_root in the host settings) and <agent> (the owning agent's name) by hand, because nothing substitutes them, and a token path that cannot be read stops the watcher with WATCH-CONFIG. Create the file mode 600. watch.py expands ${VAR:-default}, $VAR / ${VAR} and a leading ~, so all three forms below are legal: an absolute path, ~/store/key, or ${YOUR_SECRETS_DIR:-$HOME/.your-secrets}/key. Keep it OUTSIDE any checkout: a path inside one is a path that differs per worktree, and the key is then absent from all but one of them.",
+    "path": "<agents-root>/<agent>/secrets/personal/slack-bot.key"
+  },
+  "owner": {
+    "_comment": "Only this CLAUDE_CONFIG_DIR may run the watcher as a daemon (--once, the smoke test, checks no owner). Any other agent exits with WATCH-GUARD instead of double-emitting into a session that does not own the Slack surface. Set it to the config dir of the one agent that owns the surface.",
+    "claude_config_dir": "~/.claude-example"
+  },
+  "state": {
+    "_comment": "Where the per-conversation cursor files (<prefix>-<channel_id>.json) and the single-instance lock (<prefix>.lock) live. `dir` is the directory; absent, they fall back to XDG_CACHE_HOME (default ~/.cache). The prefix is LIVE ON-DISK STATE, not a name: changing it orphans every cursor (each conversation re-baselines to 'now' and drops any backlog) and lets an old-prefix and new-prefix watcher hold different locks and both run, double-emitting. A DIFFERENT workspace's config SHOULD use a different prefix: that is what keeps two watchers independent. Renaming this one needs a migration that renames the existing files first.",
+    "dir": "~/.acme-agent/state/watch",
+    "prefix": "acme-slack-watch"
+  },
+  "poll": {
+    "_comment": "Tunables, all optional. Env vars still win: SLACK_WATCH_POLL_SECS, SLACK_WATCH_SWEEP_SECS, SLACK_WATCH_SWEEP_BUDGET, SLACK_WATCH_JOIN_WINDOW_SECS, SLACK_WATCH_DM_WINDOW_SECS. sweep_secs is how often each conversation starts a sweep for replies in threads whose parent is off the poll's page; sweep_budget is how many Slack calls all sweeps together may make per poll (SKILL.md sizes it). This file is authoritative over any cadence written in prose.",
+    "poll_secs": 5,
+    "sweep_secs": 300,
+    "sweep_budget": 3,
+    "rediscover_secs": 60,
+    "recent_join_window_secs": 600,
+    "dm_baseline_window_secs": 90
+  },
+  "slack": {
+    "_comment": "API host. Optional; there is no reason to change it.",
+    "api_base": "https://slack.com/api"
+  },
+  "known_users": {
+    "_comment": "UID -> display label, for the emit lines only. AUTHORIZATION is enforced by the agent on the raw UID, which every emit line carries, so an unlabelled sender is still authorized correctly; it just reads as an outsider. A label GRANTS NOTHING. Every UID in the owning agent's charter authorization table should have a label here, and labelling someone who is not on that table is deliberate: it stops them reading as a stranger, which is the opposite of a grant.",
+    "U0EXAMPLE01": "Firstname",
+    "U0EXAMPLE02": "Another Person"
+  }
+}

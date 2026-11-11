@@ -1,0 +1,6 @@
+^(Co-Authored-By|Signed-off-by):.*(claude|anthropic|noreply@anthropic)
+^Claude-[A-Za-z-]+:
+^[^[:alnum:]]*Generated with \[?Claude Code
+^[^[:alnum:]]*(Generated|Made|Written|Created|Built|Authored) (with|by|using) \[?Claude\b
+^[[:space:]>]+(Co-Authored-By|Signed-off-by):.*(claude|anthropic)
+^[[:space:]>]+Claude-[A-Za-z-]+:

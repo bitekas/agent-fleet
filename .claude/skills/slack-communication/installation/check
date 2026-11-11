@@ -1,0 +1,440 @@
+#!/usr/bin/env python3
+"""[" -f "${BASH_SOURCE:-$0}" ] || { echo "a Python script: run it with python3" >&2; exit 126; }; exec python3 "${BASH_SOURCE:-$0}" "$@" || exit # sh/bash: hand off to python3 before reading the docstring
+Is this skill installed, and is it current?
+
+Prints ONE line and exits:
+
+    0  installed, current      -> proceed
+    1  installed, but stale    -> re-run INSTRUCTION.md, then re-check
+    2  not installed           -> follow INSTRUCTION.md
+
+State 1 is the reason this exists. Absent is loud: the watcher exits with
+WATCH-CONFIG and nothing arrives. Stale is silent: everything imports,
+everything runs, and the behaviour is subtly the old one.
+
+THE INSTALL'S FILES ARE READ FROM THE INSTALL CONTEXT, never from beside this
+script: config.json and installation/.install-state.json are SPECIFIC files, and
+this skill directory holds the mechanism only. fleetlib.paths.skill_context()
+names the directory (`fleet where slack-communication` prints the same one), so
+the check reads exactly the files the install's agents read.
+
+.install-state.json is a SPECIFIC file: it is committed like everything else,
+so it travels to machines that never ran the install. That is why it records the
+host it was written on and why this script checks it: without that, a pull would
+make every other machine read as "installed and current".
+
+It verifies REAL ARTIFACTS, never a marker file. The strongest artifact test
+available is the script's own loader: this imports watch.py with
+SLACK_WATCH_CONFIG set to the install's config.json, so the config is parsed,
+every required key is resolved and the token path is resolved by the same code
+the watcher uses. A marker file can lie; that cannot.
+
+⚠️ AND IT VERIFIES THEM BY PERFORMING THE OPERATION THE WATCHER PERFORMS, NEVER
+BY ASKING WHETHER THEY EXIST. exists() and getsize() are stat(2): they answer
+from the inode and never open anything, so a token file that is present, is the
+right size and CANNOT BE READ passes both and the check reports the install
+green. Measured 2026-09-09 on this machine, on a mode-000 copy of a real token:
+os.path.exists -> True, os.path.getsize -> 59, open(...).read(1) -> EACCES. That
+is the whole failure class: every one of these paths is consumed by opening it,
+so opening it is the only test whose green means anything. read_first_byte below
+is that test, and REPLACING ANY CALL TO IT WITH exists()/getsize() SILENTLY
+RESTORES THE BLIND SPOT - the check keeps passing on a machine where the watcher
+cannot start, which is the one outcome it exists to prevent. Do not.
+
+⚠️ AND OPENING IS NOT FREE OF ITS OWN HAZARD, WHICH IS WHY read_first_byte USES
+O_NONBLOCK AND CHECKS S_ISREG. A blocking open on a FIFO waits for a writer
+forever; measured 2026-09-09, a FIFO at token.path takes a stat-based check to
+"empty" in milliseconds and a plain open(path,"rb") has to be killed. Read that
+function's docstring before simplifying it to a plain `open()`.
+
+⚠️ THE NEGATIVE CONTROL FOR THAT CLAIM, AND WHAT IT COSTS TO SKIP IT. Point the
+variable token.path in config.json uses at a copy of the token store - for a
+token kept in the install's organisation store that is FLEET_SECRETS_DIR, whose
+fallback is the legacy variable the install manifest names in
+secrets.legacy_env - `chmod 000` the token file there, and re-run: this must
+exit 2 naming the token file and the chmod that fixes it. ⚠️ IF THAT CONTROL
+PASSES, ISSUE NO VERDICT ABOUT THIS INSTALL - a check that goes green on an
+unreadable token is not reading it, and its green is decoration. There are three
+outcomes here and only two of them are a verdict: the control red (the check
+works), the control green (the check is broken - say INCONCLUSIVE, not OK), and
+the control never reaching the token leg at all because an earlier leg exited
+first (also INCONCLUSIVE - read the printed line to tell which leg spoke).
+
+⚠️ EVERY FAILURE NAMES A COMMAND A HUMAN RUNS. A permission or ownership problem
+on a file under a secrets store is not an agent's to repair - an agent that could
+chmod the token store could also read every other credential in it - so the line
+hands the operator the exact `chmod`/`chown` rather than describing the state and
+leaving them to derive one.
+
+THE CLAIMS DIRECTORY LEG (claims_dir_problem). chat-transport's claim.py decides
+which ONE agent acts on a request by hard-linking a claim file into one
+host-wide directory - host.json's claims_dir - and it never creates that
+directory. This leg is the only thing that says whether the directory is fit for
+that, and each property it requires is there because its absence is silent at
+claim time:
+  - RESOLVED THROUGH claim.configured_dir(), never by parsing host.json here:
+    a second parser is a second answer to "which directory is the fleet's",
+    and the two would drift toward a check that is green about a directory the
+    script does not use.
+  - lstat, and NOT A SYMLINK: a link can be repointed under running agents, and
+    the agents that resolved it before and after then claim in two directories,
+    where two of them win the same request.
+  - OWNED BY THE RUNNING USER, MODE 700: every agent runs as that user; a group-
+    or world-writable directory lets any other local account create a claim
+    file for every request, after which every agent stays out silently and
+    nobody answers anything.
+  - WRITABLE, PROVEN BY PERFORMING claim.py's OWN OPERATION: create a file with
+    O_EXCL, fsync it, link(2) it to a second name, and require a second link
+    to the same name to be REFUSED - the exactly-one-winner guarantee rests on
+    that refusal, and a filesystem without hard links would fail every take
+    with exit 3. os.access() and the mode bits answer from the inode; they are
+    green on a read-only mount and on a filesystem that has no link(2).
+⚠️ ITS NEGATIVE CONTROLS, and what to conclude if one passes. Point
+FLEET_HOST_CONFIG at a copy of host.json whose claims_dir is a path you own, and
+run the check for each of: a path that does not exist (must exit 2 naming
+the `fleet install` that creates it), a symlink to a mode-700 directory,
+a regular file, and a mode-755 directory (each exit 2 naming the fix), and a
+real mode-700 directory (must exit 0). IF ANY BAD CASE EXITS 0, ISSUE NO
+VERDICT ABOUT THE INSTALL: this leg is not measuring the directory. A leftover
+`.install-check.*` file in the directory means a check was killed mid-probe;
+nothing reads it, and it is safe to delete.
+"""
+import errno
+import importlib.util
+import json
+import os
+import re
+import secrets
+import socket
+import stat
+import sys
+
+# realpath: through a personal skill link `abspath` names the agent's config
+# directory, whose parents are not the fleet tree.
+HERE = os.path.dirname(os.path.realpath(__file__))
+SKILL = os.path.dirname(HERE)
+FLEET_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(SKILL)))
+SKILL_NAME = os.path.basename(SKILL)
+
+
+def out(code: int, msg: str) -> None:
+    print(msg)
+    sys.exit(code)
+
+
+def declared_version() -> int:
+    """The version SKILL.md declares. Absent means the skill predates the
+    convention, which is itself a reason to re-install rather than to guess."""
+    with open(os.path.join(SKILL, "SKILL.md"), encoding="utf-8") as f:
+        head = f.read(4096)
+    m = re.search(r"^version:\s*(\d+)\s*$", head, re.M)
+    return int(m.group(1)) if m else 0
+
+
+def whoami():
+    """This process's real user NAME, resolved rather than read from $USER.
+
+    ⚠️ NEVER PUT A LITERAL `$USER` IN A REMEDIATION. A message that has already
+    had to fall back because $USER is unset must not then hand the operator
+    `sudo chown $USER <path>` - under systemd-run, `su` without `-`, and
+    `docker exec`, $USER is unset and that command fails with `the following
+    required arguments were not provided: <FILE>`, i.e. the one line the blocked
+    reader copy-pastes does not run. Resolve the name and interpolate it."""
+    try:
+        import pwd as _pwd
+        return _pwd.getpwuid(os.getuid()).pw_name
+    except Exception:  # noqa: BLE001 - a uid with no passwd entry is routine in a container
+        return os.environ.get("USER") or os.environ.get("LOGNAME") or f"uid {os.getuid()}"
+
+
+def errname(e):
+    """A legible name for an OSError's errno.
+
+    ⚠️ OSError.errno CAN BE None. TimeoutError, InterruptedError and the whole
+    ConnectionError family are OSError subclasses that may carry no errno at all,
+    and formatting one straight into `errno.errorcode.get(...)` renders
+    `(None: None)` in the exact sentence the operator is going to act on."""
+    if e.errno is None:
+        return type(e).__name__
+    return errno.errorcode.get(e.errno, str(e.errno))
+
+
+def file_kind(mode):
+    for pred, name in ((stat.S_ISDIR, "a directory"), (stat.S_ISFIFO, "a FIFO"),
+                       (stat.S_ISSOCK, "a socket"), (stat.S_ISCHR, "a character device"),
+                       (stat.S_ISBLK, "a block device")):
+        if pred(mode):
+            return name
+    return "not a regular file"
+
+
+def read_first_byte(path):
+    """Open PATH and read one byte -> (ok, bytes_read, OSError or None).
+
+    THE REAL OPERATION, not a question about the inode. See the header: this is
+    what separates a file that is there from a file that can be USED, and every
+    consumer of these paths reaches them by opening them.
+
+    ⚠️ O_NONBLOCK AND THE S_ISREG TEST ARE WHAT STOP THIS FROM HANGING, AND
+    NEITHER IS OPTIONAL. A plain `open(path, "rb")` on a FIFO BLOCKS FOREVER
+    waiting for a writer - measured 2026-09-09 against a FIFO at token.path: a
+    stat-based pair answers "empty" in milliseconds and a blocking open has to
+    be killed at 124. A readiness check that never returns is the worst outcome
+    available here: it is indistinguishable from a slow machine, nothing times
+    it out, and a session that hangs with nobody at the terminal stays hung for
+    hours. O_NONBLOCK makes the FIFO, socket and
+    device cases return instead of blocking, and the fstat then reports the file
+    TYPE as its own finding rather than letting a byte read decide.
+
+    ⚠️ Reports the three outcomes SEPARATELY and refuses to collapse them:
+    opened-and-had-content (True, 1, None), opened-and-was-EMPTY (True, 0, None),
+    and never-opened-at-all (False, 0, the errno). Folding the last into "empty"
+    or into a bare False is how a permission problem gets reported as a missing
+    credential, which sends the operator to re-issue a token that is already
+    correct. The caller writes a different remediation for each.
+
+    Deliberately ONE byte and no parse: the requirement this check makes of these
+    files is "present, non-empty, readable", and validating the CONTENT here
+    would make the check stricter than the install it reports on."""
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+    except OSError as e:
+        return False, 0, e
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            err = OSError(errno.EINVAL, f"is {file_kind(st.st_mode)}, not a regular file")
+            err.filename = path
+            return False, 0, err
+        return True, len(os.read(fd, 1)), None
+    except OSError as e:
+        return False, 0, e
+    finally:
+        os.close(fd)
+
+
+def wrong_shape(err):
+    """Is ERR "this path is not a usable regular file" rather than a permission
+    or a resource problem? The two need different remediations, and one line for
+    both is the failure this whole file is about."""
+    return err.errno in (errno.EISDIR, errno.ENOTDIR, errno.ELOOP,
+                         errno.ENAMETOOLONG, errno.EINVAL)
+
+
+def install_context():
+    """The install's directory for this skill (CONTEXT.md, config.json,
+    installation/.install-state.json), through fleetlib - or exit 2 naming why
+    there is none."""
+    sys.path.insert(0, os.path.join(FLEET_ROOT, "lib"))
+    try:
+        from fleetlib import paths  # noqa: PLC0415
+        return str(paths.skill_context(SKILL_NAME))
+    except BaseException as e:  # noqa: BLE001 - fleetlib's refusals include SystemExit
+        if isinstance(e, KeyboardInterrupt):
+            raise
+        out(2, f"NOT INSTALLED: no install context for {SKILL_NAME} ({type(e).__name__}: {e}). "
+               f"Run from an install's checkout, or set FLEET_CONTEXT_ROOT to the install root.")
+
+
+def claims_dir_problem(path):
+    """None when PATH is fit to be the claims directory, else the line to print.
+    See the header for why each property is required."""
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return (f"NOT INSTALLED: no claims directory at {path} (claims_dir in host.json). "
+                f"`fleet install --agents-root {os.path.dirname(path)}` creates it.")
+    except OSError as e:
+        return (f"NOT INSTALLED: the claims directory {path} cannot be reached "
+                f"({errname(e)}: {e.strerror or e}). `ls -ld` each component of it.")
+    if stat.S_ISLNK(st.st_mode):
+        return (f"NOT INSTALLED: the claims directory {path} is a symlink (to "
+                f"{os.readlink(path)}); a link can be repointed under running agents, which "
+                f"splits them into two claim spaces. Make it a real directory: move any claims "
+                f"out of the target, `rm {path}`, then `fleet install --agents-root {os.path.dirname(path)}`.")
+    if not stat.S_ISDIR(st.st_mode):
+        # file_kind() names only the NON-regular types (it serves the token leg),
+        # so a regular file has to be named here or it reads "not a regular file".
+        kind = "a regular file" if stat.S_ISREG(st.st_mode) else file_kind(st.st_mode)
+        return (f"NOT INSTALLED: {path} is {kind}, not the claims directory. "
+                f"Remove it, then `fleet install --agents-root {os.path.dirname(path)}`.")
+    if st.st_uid != os.getuid():
+        return (f"NOT INSTALLED: the claims directory {path} is owned by uid {st.st_uid}, not by "
+                f"{whoami()}, the user every agent runs as. A machine ADMIN repairs it: "
+                f"`sudo chown {whoami()} {path} && chmod 700 {path}`.")
+    mode = stat.S_IMODE(st.st_mode)
+    if mode != 0o700:
+        return (f"NOT INSTALLED: the claims directory {path} is mode {mode:o}, not 700, so "
+                f"another account could claim every request. Run: `chmod 700 {path}`.")
+    base = os.path.join(path, f".install-check.{os.getpid()}.{secrets.token_hex(4)}")
+    tmp, linked = base + ".tmp", base + ".link"
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            os.write(fd, b"x")
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.link(tmp, linked)
+        try:
+            os.link(tmp, linked)
+        except FileExistsError:
+            pass
+        else:
+            return (f"NOT INSTALLED: link(2) in {path} replaced an existing name instead of "
+                    f"refusing it, so claim.py cannot guarantee one winner on this filesystem. "
+                    f"Put claims_dir on a local POSIX filesystem.")
+    except OSError as e:
+        return (f"NOT INSTALLED: the claims directory {path} cannot do what claim.py does there "
+                f"({errname(e)}: {e.strerror or e} on create/fsync/link). Check the mount "
+                f"(`findmnt -T {path}`): it must be a writable local filesystem with hard links.")
+    finally:
+        for p in (tmp, linked):
+            try:
+                os.unlink(p)
+            except FileNotFoundError:
+                pass
+    return None
+
+
+def main() -> None:
+    want = declared_version()
+    context = install_context()
+    state_file = os.path.join(context, "installation", ".install-state.json")
+
+    # Opened, not stat'ed. An unreadable or directory-shaped config.json would
+    # otherwise pass this leg and fail inside `import watch` below, which reports
+    # it as "watch.py does not load" - a true sentence about the wrong file, and
+    # the reader then goes looking for a bug in the watcher.
+    cfg = os.path.join(context, "config.json")
+    ok, _, err = read_first_byte(cfg)
+    if not ok:
+        if err.errno == errno.ENOENT:
+            out(2, f"NOT INSTALLED: no config.json at {cfg}. Run: `install -m 644 "
+                   f"{os.path.join(SKILL, 'config.example.json')} {cfg}`, then fill it in.")
+        if wrong_shape(err):
+            # ⚠️ "SOME COMPONENT OF", not "this file". ENOTDIR and ELOOP are
+            # raised just as readily by a PARENT component, and a remediation
+            # that assumes the final one hands over `rm -rf <full path> &&
+            # install ...` whose second half then fails with "No such file or
+            # directory" - measured. Naming the path and letting the operator
+            # find the offending component is less satisfying and correct.
+            out(2, f"NOT INSTALLED: some component of {cfg} is not a readable regular file "
+                   f"({errname(err)}: {err.strerror or err}). `ls -ld` each component to "
+                   f"find it, remove what is in the way, and put the template there: "
+                   f"`install -m 644 {os.path.join(SKILL, 'config.example.json')} {cfg}`, then fill it in.")
+        out(2, f"NOT INSTALLED: config.json is present at {cfg} but cannot be read "
+               f"({errname(err)}: {err.strerror or err}). Run: "
+               f"`sudo chown {whoami()} {cfg} && chmod 0644 {cfg}`.")
+
+    # Import the watcher itself. Its module scope loads the config, resolves
+    # every required key and resolves the token path; a SystemExit here is the
+    # watcher's own WATCH-CONFIG diagnostic, which is better than anything this
+    # script could word. SLACK_WATCH_CONFIG is SET to the install's config, so the
+    # check validates the install and not whichever agent happens to call it.
+    sys.path.insert(0, SKILL)
+    os.environ["SLACK_WATCH_CONFIG"] = cfg
+    try:
+        import watch  # noqa: E402
+    except SystemExit as e:
+        out(2, f"NOT INSTALLED: {e}")
+    except Exception as e:  # noqa: BLE001 - any import failure is "not installed"
+        out(2, f"NOT INSTALLED: watch.py does not load ({type(e).__name__}: {e})")
+
+    # THE TOKEN, OPENED. Every Slack call in this skill starts by reading this
+    # file, so reading it is the only test that measures what the watcher needs.
+    # The three outcomes are kept apart on purpose (see read_first_byte): absent,
+    # unreadable and empty have three different fixes, and the middle one is the
+    # state an exists()+getsize() pair reports as installed.
+    ok, nbytes, err = read_first_byte(watch.TOKEN_FILE)
+    if not ok:
+        if err.errno == errno.ENOENT:
+            out(2, f"NOT INSTALLED: no bot token file at {watch.TOKEN_FILE}. Write the "
+                   f"bot token there: `install -m 0600 /dev/null {watch.TOKEN_FILE}` then "
+                   f"paste the bot token into it.")
+        # ⚠️ ONE REMEDIATION PER CAUSE. A permission errno and a wrong-shape
+        # errno reach this branch together, and `chmod` is actively wrong for the
+        # second: told to chmod a DIRECTORY the operator runs a command that
+        # succeeds and changes nothing, then reports the check broken. Do not
+        # flatten these two back into one line.
+        if wrong_shape(err):
+            out(2, f"NOT INSTALLED: token.path in config.json points at {watch.TOKEN_FILE}, "
+                   f"and some component of that path is not a readable regular file "
+                   f"({errname(err)}: {err.strerror or err}). `ls -ld` each component to find "
+                   f"it, remove what is in the way, and write the token as a plain file: "
+                   f"`install -m 0600 /dev/null {watch.TOKEN_FILE}`, then paste the bot "
+                   f"token into it.")
+        if err.errno == errno.EROFS:
+            out(2, f"NOT INSTALLED: the bot token file at {watch.TOKEN_FILE} is on a "
+                   f"READ-ONLY filesystem ({err.strerror or err}); chown and chmod both "
+                   f"return EROFS there, so neither is the fix. A machine ADMIN remounts it "
+                   f"read-write, or moves the token store: check `mount | grep \" $(df "
+                   f"--output=target {watch.TOKEN_FILE} | tail -1) \"`.")
+        out(2, f"NOT INSTALLED: the bot token file at {watch.TOKEN_FILE} exists but cannot "
+               f"be read by {whoami()} ({errname(err)}: {err.strerror or err}), so every "
+               f"Slack call this skill makes will fail at its first line. A machine ADMIN "
+               f"repairs it: `sudo chown {whoami()} {watch.TOKEN_FILE} && "
+               f"chmod 0600 {watch.TOKEN_FILE}`.")
+    if nbytes == 0:
+        out(2, f"NOT INSTALLED: bot token file is empty at {watch.TOKEN_FILE}")
+
+    # THE CLAIMS DIRECTORY, resolved by claim.py's own resolver (see the header).
+    claim_py = os.path.join(os.path.dirname(SKILL), "chat-transport", "claim.py")
+    try:
+        spec = importlib.util.spec_from_file_location("fleet_claim", claim_py)
+        claim = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(claim)
+    except Exception as e:  # noqa: BLE001 - any load failure is "not installed"
+        out(2, f"NOT INSTALLED: claim.py does not load from {claim_py} ({type(e).__name__}: {e})")
+    try:
+        claims_dir = claim.configured_dir()
+    except claim.Fault as e:
+        out(2, f"NOT INSTALLED: {e}")
+    problem = claims_dir_problem(claims_dir)
+    if problem:
+        out(2, problem)
+
+    # Artifacts are all present. Only the recorded version can still be wrong.
+    # Opened rather than exists()-then-opened: one operation, and its errno is
+    # what distinguishes "never installed here" from "installed and unreadable".
+    try:
+        with open(state_file, encoding="utf-8") as f:
+            state = json.load(f)
+        have = int(state.get("version", -1))
+    except FileNotFoundError:
+        out(1, f"STALE: installed, but no {state_file} records which version "
+               f"(SKILL.md declares {want}). Re-run installation/INSTRUCTION.md.")
+    except Exception as e:  # noqa: BLE001
+        out(1, f"STALE: .install-state.json at {state_file} unreadable "
+               f"({type(e).__name__}: {e}). Run: `chmod 0644 {state_file}`, or delete it and "
+               f"re-run installation/INSTRUCTION.md to rewrite it.")
+
+    host = state.get("host")
+    if host and host != socket.gethostname():
+        out(1, f"STALE: last installed on {host}, not on this machine "
+               f"({socket.gethostname()}). The state file travels with the repo; "
+               f"the install does not. Re-run installation/INSTRUCTION.md.")
+
+    if have < want:
+        out(1, f"STALE: installed version {have}, SKILL.md declares {want}. "
+               f"Re-run installation/INSTRUCTION.md.")
+    if have > want:
+        out(1, f"STALE: installed version {have} is NEWER than SKILL.md's {want}. "
+               f"The fleet checkout is older than the install; upgrade the fleet "
+               f"(`fleet upgrade`) before running.")
+
+    # ⚠️ THIS SPEAKS ONLY FOR THE INSTALL'S config.json. The check sets
+    # SLACK_WATCH_CONFIG to it on purpose (so it validates the install, not
+    # whichever agent happens to be calling it), which means the per-agent configs
+    # the LIVE watchers actually run from are never read here. A green from this script
+    # says nothing about them; the only thing that validates one of those is
+    # arming the watcher against it. The line below says so, so that a reader
+    # cannot take this pass for a statement about a running watcher.
+    out(0, f"OK: installed and current (version {want}), "
+           f"workspace {watch.WORKSPACE_DOMAIN}, owner {watch.OWNER_CONFIG_DIR}, "
+           f"claims dir {claims_dir} (link probe ok) "
+           f"(of the install's config.json only; the live per-agent configs are not read here)")
+
+
+if __name__ == "__main__":
+    main()

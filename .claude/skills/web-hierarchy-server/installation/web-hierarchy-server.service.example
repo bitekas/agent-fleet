@@ -1,0 +1,57 @@
+# Web hierarchy server for ONE agent - a standalone, machine-start service.
+#
+# TEMPLATE. Instantiate it once per agent, named by ORDINAL or by the agent's
+# config-dir name. Every copy is identical except the values marked REPLACE, and
+# every copy must also appear in config.json's `servers` map, which is what
+# installation/check reads to know what to verify.
+#
+# Deliberately DECOUPLED from the agent session's own unit: restarting a server
+# then never touches a live session, and systemd (Restart=always) supervises the
+# process directly - no tmux window, no agent involvement.
+#
+# ONE SERVER PER CONFIG DIR. A second process on the same port loses the bind
+# with EADDRINUSE while the page keeps rendering from whichever one won, so
+# "the page works" is not evidence that the server you just started is the one
+# serving it.
+#
+# Install: installation/INSTRUCTION.md.
+
+[Unit]
+# REPLACE: N and PORT, for the journal and `systemctl status` to be legible.
+Description=Web hierarchy server for agent N, port PORT
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# REPLACE: the user the agent sessions run as. It must own the config dir below
+# and be able to read every transcript under it.
+User=YOUR_USER
+# REPLACE: the install checkout - the repository whose .claude/fleet.json
+# names this install. serve.mjs finds its config.json by asking
+# `fleet where web-hierarchy-server config.json`, which resolves the install
+# from the working directory's git top level, so this line is what points the
+# server at the right install. Also the natural value for config.json's
+# `packages.repo_root`, which is what relative artifact paths in a message are
+# resolved against.
+WorkingDirectory=/path/to/your/install-checkout
+# REPLACE: THIS agent's config dir. It is the single value that decides which
+# agent's tree this server shows: the environment wins over config.json's
+# `transcripts.config_dir`. Point two units at the same dir and you get two
+# copies of one agent's tree and no view of the other, with nothing on either
+# page saying so.
+Environment=CLAUDE_CONFIG_DIR=AGENTS_ROOT/YOUR_AGENT/.claude
+# `bash -lc` is load-bearing, not decoration: systemd starts a unit with a bare
+# PATH (/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin) and no
+# login profile, so on a machine whose node comes from a version manager (nvm
+# and friends) a plain `ExecStart=node ...` is exit 127, "node: No such file or
+# directory", every boot. The login shell is what puts that node on PATH.
+# The fleet command needs no PATH entry: serve.mjs runs bin/fleet from the
+# fleet tree it lives in.
+# REPLACE: the fleet checkout and PORT, which must match this unit's entry in
+# config.json's `servers`.
+ExecStart=/bin/bash -lc 'exec node /path/to/your/fleet/.claude/skills/web-hierarchy-server/serve.mjs --port=PORT'
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

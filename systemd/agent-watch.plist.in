@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  A chat transport's watcher of one agent, as a launchd LaunchAgent: the
+  macOS form of agent-watch@.service.in. One plist per agent (launchd has no
+  template units); agent-daemons.py's install mode renders it into
+  ~/Library/LaunchAgents and bootstraps it. No double hyphen may appear in
+  this comment: XML ends a comment there.
+
+  ProgramArguments runs `agent-daemons.py exec`, the shim that stands in for the
+  unit's ExecStartPre (it rotates the log) and EnvironmentFile (it applies the
+  optional <job>.env, tunables only, over the variables below), then execs the
+  watcher, so the process's pid and argv are the watcher's as on Linux.
+  The shim imports nothing from the fleet library: anything it depended on
+  could keep every daemon on the host from starting.
+
+  CLAUDE_CONFIG_DIR and the config path are set HERE, in the job: the owner
+  guard reads CLAUDE_CONFIG_DIR, and macOS does not let another process read a
+  process's environment, so this definition (launchctl print) is what an agent
+  verifies a daemon by.
+
+  KeepAlive SuccessfulExit=false restarts every exit but 0. Exit 0 is the GUARD
+  refusal (not the owner, or another watcher holds the lock), the one exit
+  that must NOT be retried: retrying it is a loop that changes nothing. The
+  job stays down and the follower raises DAEMON-ALERT. ThrottleInterval spaces
+  crash restarts 10 s apart (launchd has no back-off like RestartSteps).
+  PATH names the interpreter's directory first: launchd's own PATH is
+  /usr/bin:/bin:/usr/sbin:/sbin, without Homebrew. FLEET_HOST_CONFIG is the
+  host settings file fleet install writes: launchd starts a job with the user's
+  real HOME, so without it a host whose host.json is not at the default path
+  would run the daemon against no host settings.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>@LABEL@</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>@PYTHON@</string>
+    <string>@FLEET@/systemd/agent-daemons.py</string>
+    <string>exec</string>
+    <string>--log</string>
+    <string>@AGENTS_ROOT@/@AGENT@/state/daemons/@JOB@.log</string>
+    <string>--env-file</string>
+    <string>@AGENTS_ROOT@/@AGENT@/config/@JOB@.env</string>
+    <string>--</string>
+    <string>@PYTHON@</string>
+    <string>-u</string>
+    <string>@SCRIPT@</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>@AGENTS_ROOT@/@AGENT@/@PROJECT_DIR@</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>CLAUDE_CONFIG_DIR</key>
+    <string>@AGENTS_ROOT@/@AGENT@/.claude</string>
+    <key>@CONFIG_ENV@</key>
+    <string>@AGENTS_ROOT@/@AGENT@/@CONFIG@</string>
+    <key>PYTHONUNBUFFERED</key>
+    <string>1</string>
+    <key>PYTHONDONTWRITEBYTECODE</key>
+    <string>1</string>
+    <key>PATH</key>
+    <string>@PATH@</string>
+    <key>FLEET_HOST_CONFIG</key>
+    <string>@HOST_CONFIG@</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>@AGENTS_ROOT@/@AGENT@/state/daemons/@JOB@.log</string>
+  <key>StandardErrorPath</key>
+  <string>@AGENTS_ROOT@/@AGENT@/state/daemons/@JOB@.log</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>ExitTimeOut</key>
+  <integer>15</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>

@@ -1,0 +1,22 @@
+{
+  "_comment": [
+    "Tests that run on one operating system only. tests/run-all.sh reads this list:",
+    "on the other system it does not run the test and prints it as SKIPPED with its reason.",
+    "Each entry: path (a discovered test, repository-relative), only (linux or macos), and",
+    "reason (one line naming the construct that ties it to that system, and the task that ports it).",
+    "An entry that names no discovered test, repeats a path or carries no reason fails the run.",
+    "A port that makes a test pass on both systems deletes its entry in the same commit."
+  ],
+  "tests": [
+    {
+      "path": ".claude/skills/agent-revive/signin_driver/share.test.mjs",
+      "only": "linux",
+      "reason": "the tap-to-solve share drives Xvfb, x11vnc and websockify and reads /proc/net/tcp; X11 screen sharing is not on macOS (F13 plan section 4)"
+    },
+    {
+      "path": ".claude/skills/adding-an-agent/units.test.py",
+      "only": "linux",
+      "reason": "verifies the systemd units with systemd-analyze, which macOS does not have; the launchd jobs are tested on both systems by systemd/agent-session.test.py (every *.plist.example) and adding-an-agent/plists.test.py (this skill's [launchd] blocks)"
+    }
+  ]
+}

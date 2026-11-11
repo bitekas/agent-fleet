@@ -1,0 +1,297 @@
+#!/usr/bin/env python3
+"""[" -f "${BASH_SOURCE:-$0}" ] || { echo "a Python script: run it with python3" >&2; exit 126; }; exec python3 "${BASH_SOURCE:-$0}" "$@" || exit # sh/bash: hand off to python3 before reading the docstring
+Is this skill installed for the agent running me, and is it current?
+
+Prints ONE line and exits:
+
+    0  installed, current      -> proceed
+    1  installed, but stale    -> do not proceed; read the line, then re-check
+    2  not installed           -> do not proceed; follow INSTRUCTION.md
+
+State 1 is the reason this exists. Absent is loud: SCHED_CONFIG names a file that
+is not there and sched.py refuses at import. Stale is silent: a scheduler resolves,
+arms, evaluates predicates and fires nothing anybody expected, and an unarmed or
+misconfigured scheduler looks exactly like a day with nothing due.
+
+⚠️ IT REPORTS ONE AGENT - the one whose environment invoked it. A fleet may
+run several schedulers, each with its own owner, config and database, and none of
+them can see the others. There is deliberately no roster in this file: a roster in
+code is a second copy of CONTEXT.md that goes stale without anything going red. So
+exit 0 here means "installed for ME", never "installed for the fleet".
+
+It verifies REAL ARTIFACTS, never a marker file: the config resolves and parses,
+its three required keys are present, none of them still carries an example
+placeholder, the database directory exists, the modes are what the security posture
+depends on, any database already there is a readable sqlite file whose `user_version` is
+REPORTED rather than compared - the migration is additive and nullable, so a version
+that differs is not by itself a fault and refusing on it would be the bump this schema
+deliberately never makes - and the requester directory - if this config declares one - is OPENED and
+LOOKED UP rather than merely present. Only then is the recorded version compared. A
+marker file can lie; a config that resolves and a directory that is 0700 cannot.
+
+⚠️ The requester-directory branch is the one that verifies a FOREIGN file, and that is
+why it performs the lookup instead of checking the two keys exist. It points into a
+repository checkout - exactly the kind of tree that moves - and a dangling one is
+silent: the config parses, the daemon arms, and the only symptom is `add --requester
+<a user id>` refusing with a message that sends the reader to edit the roster when the
+real fault is the path.
+
+⚠️ INSTALLED IS NOT ARMED, and this script deliberately does not conflate them.
+Arming is a separate decision. Exit 0 reports the arming state as information -
+whether a database exists and whether a daemon holds the lock beside it - because
+"not arming it is invisible" is this skill's sharpest trap, but neither is a
+failure here.
+"""
+import fcntl
+import json
+import os
+import re
+import socket
+import sqlite3
+import stat
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+SKILL = os.path.dirname(HERE)
+# The fleet tree this file lives in. realpath, never abspath: through a personal skill
+# link abspath is the link path, and four parents up from there is not the fleet tree.
+FLEET_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.realpath(__file__))))))
+REQUIRED = ("owner.claude_config_dir", "db.path", "defaults.tz")
+
+
+def state_path():
+    """The install record, `installation/.install-state.json` in this skill's install
+    context. It is SPECIFIC - it describes one install - so it lives with the install,
+    never beside this script, and fleetlib is the one resolver for where that is."""
+    sys.path.insert(0, os.path.join(FLEET_ROOT, "lib"))
+    from fleetlib import paths  # noqa: E402
+    return str(paths.skill_context("scheduled-tasks") / "installation" / ".install-state.json")
+
+
+def out(code, msg):
+    print(msg)
+    sys.exit(code)
+
+
+def lock_state(lock):
+    """Whether a daemon holds the scheduler's lock, as words for the OK line.
+
+    The lock FILE outlives the daemon - only the flock on it is released - so the
+    file's presence says nothing about a daemon. This makes the same non-blocking
+    flock attempt as sched.py's _daemon_running (doctor's `armed`): taken, the lock
+    is free and nothing will fire; refused, a process holds it."""
+    if not os.path.exists(lock):
+        return "lock file absent"
+    try:
+        fd = os.open(lock, os.O_RDWR)
+    except OSError as e:
+        return f"lock state unknown ({type(e).__name__}: {e})"
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return "lock file present and no daemon holds the lock (nothing will fire)"
+    except OSError:
+        return "a daemon holds the lock"
+    finally:
+        os.close(fd)
+
+
+def declared_version():
+    """The version SKILL.md declares. Absent means the skill predates the
+    convention, which is itself a reason to re-install rather than to guess."""
+    with open(os.path.join(SKILL, "SKILL.md"), encoding="utf-8") as f:
+        head = f.read(4096)
+    m = re.search(r"^version:\s*(\d+)\s*$", head, re.M)
+    return int(m.group(1)) if m else 0
+
+
+def dig(cfg, dotted):
+    node = cfg
+    for part in dotted.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return None
+        node = node[part]
+    return node
+
+
+def mode_of(path):
+    try:
+        return stat.S_IMODE(os.stat(path).st_mode)
+    except OSError:
+        return None
+
+
+def main():
+    want = declared_version()
+    host = socket.gethostname()
+
+    # --- the config, resolved exactly the way sched.py resolves it -------------
+    cfg_path = os.environ.get("SCHED_CONFIG")
+    if not cfg_path:
+        out(2, "NOT INSTALLED for this agent: SCHED_CONFIG is not set. The "
+               "fleet runs one scheduler per agent, so there is no config "
+               "beside sched.py to fall back on and nothing would resolve. "
+               "installation/INSTRUCTION.md creates this agent's config and says "
+               "where SCHED_CONFIG is set; the install's CONTEXT.md lists the agents that have one.")
+    cfg_path = os.path.expanduser(cfg_path)
+    if not os.path.isfile(cfg_path):
+        out(2, f"NOT INSTALLED: SCHED_CONFIG names {cfg_path}, which does not exist. "
+               f"sched.py would refuse at import with SCHED-CONFIG. Follow "
+               f"installation/INSTRUCTION.md.")
+    try:
+        with open(cfg_path, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception as e:  # noqa: BLE001 - any unreadable config is not installed
+        out(2, f"NOT INSTALLED: {cfg_path} does not parse "
+               f"({type(e).__name__}: {e}).")
+
+    for key in REQUIRED:
+        if dig(cfg, key) in (None, ""):
+            out(2, f"NOT INSTALLED: {cfg_path} is missing required key '{key}'. "
+                   f"sched.py exits fatally on it, naming the same key.")
+
+    # An unedited copy of the example is the failure that looks installed. Its
+    # placeholders are angle-bracketed on purpose, so a reviewer and this script
+    # spot one the same way.
+    for key in ("owner.claude_config_dir", "db.path"):
+        val = str(dig(cfg, key))
+        if "<" in val and ">" in val:
+            out(2, f"NOT INSTALLED: {cfg_path} still carries the example's "
+                   f"placeholder in '{key}' ({val}). It was copied but not filled "
+                   f"in - a daemon on this config would match no owner and write to "
+                   f"a literal placeholder path.")
+
+    owner = str(dig(cfg, "owner.claude_config_dir"))
+    db_path = os.path.expanduser(str(dig(cfg, "db.path")))
+    db_dir = os.path.dirname(db_path)
+    tz = str(dig(cfg, "defaults.tz"))
+
+    if not os.path.isdir(db_dir):
+        out(2, f"NOT INSTALLED: no database directory at {db_dir}. It holds this "
+               f"agent's durable schedule state and INSTRUCTION.md creates it 0700.")
+
+    # --- artifacts exist; from here every failure is do-not-proceed at 1 -------
+    try:
+        from zoneinfo import ZoneInfo
+        ZoneInfo(tz)
+    except Exception as e:  # noqa: BLE001
+        out(1, f"STALE: {cfg_path} sets defaults.tz to '{tz}', which does not "
+               f"resolve ({type(e).__name__}). This is NOT a version problem and "
+               f"re-installing will not fix it - set an IANA zone name. Every "
+               f"wall-clock schedule on this scheduler is wrong until it is fixed.")
+
+    dir_mode, cfg_mode = mode_of(db_dir), mode_of(cfg_path)
+    if dir_mode != 0o700:
+        out(1, f"STALE: {db_dir} is mode {dir_mode:04o}, not 0700. This is NOT a "
+               f"version problem and re-installing will not fix it - chmod it. "
+               f"Predicates run IN the daemon's process and the AST allow-list is "
+               f"not a security boundary; the modes are what make that acceptable.")
+    if cfg_mode != 0o600:
+        out(1, f"STALE: {cfg_path} is mode {cfg_mode:04o}, not 0600. This is NOT a "
+               f"version problem and re-installing will not fix it - chmod it.")
+
+    db_note = "no database yet (the daemon creates it on first run)"
+    if os.path.exists(db_path):
+        db_mode = mode_of(db_path)
+        if db_mode != 0o600:
+            out(1, f"STALE: the database at {db_path} is mode {db_mode:04o}, not "
+                   f"0600. This is NOT a version problem and re-installing will not "
+                   f"fix it - chmod it. It holds every schedule this agent was ever "
+                   f"given, and section 13's posture rests on the mode.")
+        try:
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+            uv = conn.execute("PRAGMA user_version").fetchone()[0]
+            n = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+            conn.close()
+        except Exception as e:  # noqa: BLE001
+            out(1, f"STALE: {db_path} exists but is not a usable scheduler database "
+                   f"({type(e).__name__}: {e}). This is NOT a version problem and "
+                   f"re-installing will not fix it - `sched.py doctor` reports the "
+                   f"integrity check, and a corrupt database fires nothing.")
+        db_note = f"database {db_path} (schema {uv}, {n} task rows)"
+
+    # --- the requester directory, VERIFIED BY PERFORMING THE LOOKUP -----------
+    # It is optional, but a half-configured or dangling one is the silent state: the
+    # config parses, the daemon arms, and the only symptom is `add --requester <a user
+    # id>` refusing - with a message that sends the reader to add a roster entry when
+    # the real fault is a moved file or a renamed key. It points at a FOREIGN file,
+    # typically inside a repository checkout, i.e. exactly the kind of tree that moves.
+    # So this reads it the way sched.py reads it rather than checking the keys exist.
+    r_file, r_key = dig(cfg, "requester.directory_file"), dig(cfg, "requester.directory_key")
+    if bool(r_file) != bool(r_key):
+        out(1, f"STALE: {cfg_path} sets only one of requester.directory_file / "
+               f"requester.directory_key. sched.py needs BOTH or neither: with one "
+               f"missing it resolves nothing, and every id-shaped --requester is "
+               f"refused. Set both, or remove both and pass display names.")
+    if r_file:
+        r_path = os.path.expanduser(str(r_file))
+        try:
+            with open(r_path, encoding="utf-8") as f:
+                node = json.load(f)
+        except Exception as e:  # noqa: BLE001 - unreadable is the whole finding
+            out(1, f"STALE: requester.directory_file names {r_path}, which does not "
+                   f"read as JSON ({type(e).__name__}: {e}). Every id-shaped "
+                   f"--requester will be refused; a display name still works.")
+        node = dig(node, str(r_key))
+        if not isinstance(node, dict) or not [k for k in node if not k.startswith("_")]:
+            out(1, f"STALE: requester.directory_key '{r_key}' resolves to nothing "
+                   f"usable in {r_path}. Every id-shaped --requester will be refused. "
+                   f"Check the key against that file, or remove both keys.")
+
+    armed = lock_state(db_path + ".lock")
+
+    # --- artifacts are sound; only the recorded version can still be wrong -----
+    # The record lives in the install context. A context that does not resolve is a
+    # leg this script cannot measure: 1, with the reason in words, never a guess.
+    try:
+        state = state_path()
+    except Exception as e:  # noqa: BLE001 - fleetlib's refusal is the whole finding
+        out(1, f"NO VERDICT on the recorded version: the install context does not "
+               f"resolve ({type(e).__name__}: {e}). Run this with FLEET_CONTEXT_ROOT "
+               f"set to the install's checkout, or from inside it.")
+    if not os.path.exists(state):
+        out(1, f"STALE: this agent's scheduler is provisioned at {db_dir}, but no "
+               f".install-state.json at {state} records which version made it "
+               f"(SKILL.md declares {want}). Re-run installation/INSTRUCTION.md.")
+    try:
+        with open(state, encoding="utf-8") as f:
+            hosts = json.load(f).get("hosts", {})
+    except Exception as e:  # noqa: BLE001
+        out(1, f"STALE: .install-state.json unreadable ({type(e).__name__}: {e}). "
+               f"Redo the record step in installation/INSTRUCTION.md.")
+
+    if host not in hosts:
+        elsewhere = ", ".join(sorted(hosts)) or "no host"
+        out(1, f"STALE: nothing is recorded for this machine ({host}); the state "
+               f"file records {elsewhere}. It is committed and travels with the "
+               f"repository, the databases do not - every machine records itself. "
+               f"Redo the record step in installation/INSTRUCTION.md.")
+    agents = hosts[host]
+    if owner not in agents:
+        known = ", ".join(sorted(agents)) or "no agent"
+        out(1, f"STALE: this machine records {known}, but nothing for the agent this "
+               f"config names ({owner}). Its directory and config exist, so the "
+               f"install was made and not recorded. Redo the record step in "
+               f"installation/INSTRUCTION.md.")
+    try:
+        have = int(agents[owner].get("version", -1))
+    except (TypeError, ValueError):
+        have = -1
+    if have < want:
+        out(1, f"STALE: {owner} is recorded at version {have}, SKILL.md declares "
+               f"{want}. Re-read installation/INSTRUCTION.md from the top - a bump "
+               f"means the procedure changed - then redo the record step.")
+    if have > want:
+        out(1, f"STALE: {owner} is recorded at version {have}, which is NEWER than "
+               f"SKILL.md's {want}. The fleet tree this check runs from ({FLEET_ROOT}) "
+               f"is older than the install that was recorded: `fleet upgrade` to the "
+               f"tag that made it.")
+
+    out(0, f"OK: installed and current (version {want}) for {owner} on {host}; "
+           f"{db_note}; tz {tz}; {armed}. Installed is not armed, and this reports "
+           f"this agent only - see the install's CONTEXT.md for the others.")
+
+
+if __name__ == "__main__":
+    main()

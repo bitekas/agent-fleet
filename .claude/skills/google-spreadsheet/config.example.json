@@ -1,0 +1,45 @@
+{
+  "_comment": [
+    "TEMPLATE. Copy to config.json in this skill's install context (`fleet where google-spreadsheet` prints the directory) and replace every placeholder.",
+    "",
+    "Everything install- and person-specific for the google-spreadsheet skill.",
+    "gsheets.py hardcodes NONE of it: point GSHEETS_CONFIG at a copy of this",
+    "file to run the same helper as a different Workspace user, on a different",
+    "domain, or against a different key store.",
+    "",
+    "EVERY KEY BELOW IS REQUIRED. A missing one is a startup failure naming the",
+    "key, and never a default, because every value here selects an IDENTITY or",
+    "an ENDPOINT and a guessed one fails in the worst way available: a guessed",
+    "subject acts as the wrong person and its writes land in that person's",
+    "documents; a guessed key path reads a DIFFERENT agent's credential and",
+    "signs as a different principal; a guessed API base sends a live bearer",
+    "token to a host nobody chose. None of those raise - they all succeed.",
+    "",
+    "NO CREDENTIAL IS A VALUE IN THIS FILE. credential.key_path is a PATH to the",
+    "service-account key; the key itself lives outside the skill tree, mode 0600,",
+    "in the directory CONTEXT.md names. A leaked config should be embarrassing,",
+    "not exploitable.",
+    "",
+    "JSON has no comments, so every _comment key is documentation and is ignored",
+    "by the loader. Leave them in your config.json or delete them."
+  ],
+  "identity": {
+    "_comment": "WHO THE HELPER ACTS AS. `agent` names the agent this install belongs to and is substituted into the two templates below; $GSHEETS_AGENT overrides it. `subject_template` builds that agent's Workspace user address - the human-shaped address a person types into a Drive share dialog, NOT the service account's own *gserviceaccount.com address, which cannot usefully be shared anything. $GSHEETS_SUBJECT overrides the resolved subject for a process and --as for one invocation; neither changes which key signs the assertion, and a subject the key's delegation grant does not cover is refused at the mint.",
+    "agent": "jane",
+    "subject_template": "{agent}@example.com"
+  },
+  "credential": {
+    "_comment": "PATH to the service-account key JSON, never the key. `{agent}`, `{default_subject}` and `{home}` are substituted first, then ${VAR:-default} and $VAR, then a leading ~. `{home}` is that agent's home, <agents_root>/<agent>, with the agents root read from the fleet's host settings (host.json, written by `fleet install`). `{default_subject}` is THIS INSTALL'S own user and deliberately not whatever --as asked for: impersonating another user does not change which key file signs. The account behind this key must hold domain-wide delegation for the scopes below on the Workspace the subject lives in - a key without that grant mints nothing (`unauthorized_client`), whatever else it could do.",
+    "key_path": "{home}/secrets/personal/{default_subject}-service-account.json"
+  },
+  "api": {
+    "_comment": "API roots. Here so an install can be pointed at a proxy or a regional endpoint without editing the helper, and so the helper never has a Google URL of its own to drift from.",
+    "sheets_base": "https://sheets.googleapis.com/v4/spreadsheets",
+    "drive_base": "https://www.googleapis.com/drive/v3"
+  },
+  "scopes": {
+    "_comment": "The OAuth scopes tokens are minted for, and the list that must match the Workspace's domain-wide delegation entry EXACTLY - a scope the grant does not list mints nothing. Narrow them if this install only reads: .../auth/drive.readonly and .../auth/spreadsheets.readonly are drop-in replacements, and a read-only scope is the cheapest protection against a mistaken write to somebody else's document.",
+    "sheets": "https://www.googleapis.com/auth/spreadsheets",
+    "drive": "https://www.googleapis.com/auth/drive"
+  }
+}

@@ -1,0 +1,186 @@
+#!/usr/bin/env python3
+"""[" -f "${BASH_SOURCE:-$0}" ] || { echo "a Python script: run it with python3" >&2; exit 126; }; exec python3 "${BASH_SOURCE:-$0}" "$@" || exit # sh/bash: hand off to python3 before reading the docstring
+A fake /bin/launchctl for the offline tests (FLEET_LAUNCHCTL points at it).
+
+State: the JSON file $FAKE_LAUNCHD_STATE, created on first use:
+  {"loaded": {"<domain>": {"<label>": job}}, "disabled": {"<domain>": {"<label>": bool}},
+   "canned": {"<the call's arguments, space-joined>": {"file": path, "exit": n}}, "next_pid": n,
+   "lingering": {"<domain>/<label>": n}, "absent_domains": ["<domain>"]}
+  job = {path, state, pid, runs, last_exit, signal, argv, env, workdir, stdout, stderr}
+Every call is appended to $FAKE_LAUNCHD_CALLS, one line of arguments.
+
+Verbs: print <domain>/<label>, print <domain> (exit 113 for a domain listed in
+absent_domains, as for a gui domain with no logged-in user), print-disabled <domain>, bootstrap <domain> <plist>,
+bootout <domain>/<label>, enable|disable <domain>/<label>, kickstart [-k]
+<domain>/<label>. `print` writes the layout of tests/fixtures/launchd/print-running.txt
+(captured on macOS 27.0.1); services.test.py checks the two agree key for key, so this
+fake cannot drift from the capture unnoticed. A canned entry answers a call whose
+arguments it names with a fixture file verbatim (its #fixture lines dropped) and that
+exit code: stdout when the code is 0, stderr otherwise.
+
+What the real launchctl does and this fake copies, because the code under test
+depends on it:
+  * bootstrap reads the plist NOW; kickstart -k restarts from the definition
+    already loaded, so a plist edited since is ignored;
+  * bootstrap of a label still loaded fails (5: Input/output error), and with
+    $FAKE_LAUNCHD_LINGER=n a booted-out label stays loaded (not running) for n
+    more `print` calls, as a real bootout that is still stopping does;
+  * bootstrap of a disabled label fails; a missing label is `Could not find service`.
+"""
+import json
+import os
+import plistlib
+import re
+import sys
+
+STATE, CALLS = os.environ["FAKE_LAUNCHD_STATE"], os.environ["FAKE_LAUNCHD_CALLS"]
+args = sys.argv[1:]
+with open(CALLS, "a") as f:
+    f.write(" ".join(args) + "\n")
+try:
+    with open(STATE) as f:
+        st = json.load(f)
+except (OSError, ValueError):
+    st = {}
+for k in ("loaded", "disabled", "canned", "lingering"):
+    st.setdefault(k, {})
+st.setdefault("next_pid", 5000)
+
+
+def save():
+    with open(STATE, "w") as f:
+        json.dump(st, f, indent=1)
+
+
+def die(msg, code):
+    print(msg, file=sys.stderr)
+    sys.exit(code)
+
+
+def not_found(dom, label):
+    who = "system" if dom == "system" else f"user {dom.replace('/', ': ')}"
+    die(f'Bad request.\nCould not find service "{label}" in domain for {who}', 113)
+
+
+def target(t):
+    dom, _, label = t.rpartition("/")
+    return dom, label
+
+
+def job_of(t):
+    dom, label = target(t)
+    return dom, label, st["loaded"].get(dom, {}).get(label)
+
+
+def spawn(job):
+    job["pid"] = st["next_pid"]
+    st["next_pid"] += 1
+    job["runs"] = job.get("runs", 0) + 1
+    job["state"] = "running"
+
+
+def render(dom, label, job):
+    out = [f"{dom}/{label} = {{", "\tactive count = %d" % (job["state"] == "running"),
+           f"\tpath = {job['path']}", "\ttype = LaunchAgent" if dom != "system" else "\ttype = LaunchDaemon",
+           f"\tstate = {job['state']}", "", f"\tprogram = {job['argv'][0]}", "\targuments = {"]
+    out += [f"\t\t{a}" for a in job["argv"]] + ["\t}", ""]
+    if job.get("workdir"):
+        out += [f"\tworking directory = {job['workdir']}", ""]
+    if job.get("stdout"):
+        out.append(f"\tstdout path = {job['stdout']}")
+    if job.get("stderr"):
+        out.append(f"\tstderr path = {job['stderr']}")
+    out += ["\tinherited environment = {", "\t\tSSH_AUTH_SOCK => /private/tmp/com.apple.launchd.fake/Listeners",
+            "\t}", "", "\tdefault environment = {", "\t\tPATH => /usr/bin:/bin:/usr/sbin:/sbin", "\t}", "",
+            "\tenvironment = {", "\t\tOSLogRateLimit => 64"]
+    out += [f"\t\t{k} => {v}" for k, v in job.get("env", {}).items()]
+    out += [f"\t\tXPC_SERVICE_NAME => {label}", "\t}", "", f"\tdomain = {dom} [100015]", "\tasid = 100015",
+            "\tminimum runtime = 10", "\texit timeout = 5", f"\truns = {job.get('runs', 0)}"]
+    if job["state"] == "running":
+        out.append(f"\tpid = {job['pid']}")
+    out += ["\timmediate reason = speculative", "\tforks = 0", "\texecs = 1", "\tinitialized = 1",
+            "\ttrampolined = 1", "\tstarted suspended = 0", "\tproxy started suspended = 0",
+            "\tchecked allocations = 0 (queried = 1)", "\tchecked allocations reason = no host",
+            "\tchecked allocations flags = 0x0", f"\tlast exit code = {job.get('last_exit', '(never exited)')}"]
+    if job.get("signal"):
+        out.append(f"\tlast terminating signal = {job['signal']}")
+    out += ["", "\tresource coalition = {", "\t\tID = 2609", "\t\ttype = resource",
+            "\t\tstate = active" if job["state"] == "running" else "\t\tstate = inactive",
+            "\t\tactive count = 1", f"\t\tname = {label}", "\t}", "}"]
+    return "\n".join(out)
+
+
+verb = args[0] if args else ""
+canned = st["canned"].get(" ".join(args))
+if canned:
+    with open(canned["file"]) as f:
+        text = "".join(line for line in f if not line.startswith("#fixture"))
+    (sys.stdout if canned.get("exit", 0) == 0 else sys.stderr).write(text)
+    sys.exit(canned.get("exit", 0))
+if verb == "print" and len(args) == 2 and re.fullmatch(r"(gui|user)/[0-9]+|system", args[1]):
+    if args[1] in st.get("absent_domains", []):
+        die(f"Could not find domain for {args[1]}", 113)
+    print(f"{args[1]} = {{\n\ttype = {'login' if args[1].startswith('gui') else args[1].split('/')[0]}\n}}")
+elif verb == "print" and len(args) == 2:
+    dom, label, job = job_of(args[1])
+    if job is None:
+        not_found(dom, label)
+    left = st["lingering"].get(args[1])
+    if left is not None:
+        if left <= 1:
+            del st["loaded"][dom][label]
+            del st["lingering"][args[1]]
+        else:
+            st["lingering"][args[1]] = left - 1
+        save()
+    print(render(dom, label, job))
+elif verb == "print-disabled" and len(args) == 2:
+    print(f"{args[1]} = {{\n\tdisabled services = {{")
+    for label, off in st["disabled"].get(args[1], {}).items():
+        print(f'\t\t"{label}" => {"disabled" if off else "enabled"}')
+    print("\t}\n}")
+elif verb == "bootstrap" and len(args) == 3:
+    dom, path = args[1], args[2]
+    try:
+        with open(path, "rb") as f:
+            d = plistlib.load(f)
+    except (OSError, plistlib.InvalidFileException, ValueError) as exc:
+        die(f"Bootstrap failed: 5: Input/output error ({exc})", 5)
+    label = d.get("Label")
+    if st["disabled"].get(dom, {}).get(label):
+        die("Bootstrap failed: 119: Service is disabled", 119)
+    if label in st["loaded"].get(dom, {}):
+        die("Bootstrap failed: 5: Input/output error", 5)
+    job = {"path": path, "state": "not running", "runs": 0, "argv": list(d.get("ProgramArguments", [])),
+           "env": dict(d.get("EnvironmentVariables", {})), "workdir": d.get("WorkingDirectory"),
+           "stdout": d.get("StandardOutPath"), "stderr": d.get("StandardErrorPath")}
+    if d.get("RunAtLoad"):
+        spawn(job)
+    st["loaded"].setdefault(dom, {})[label] = job
+    save()
+elif verb == "bootout" and len(args) == 2:
+    dom, label, job = job_of(args[1])
+    if job is None or args[1] in st["lingering"]:
+        die("Boot-out failed: 3: No such process", 3)
+    linger = int(os.environ.get("FAKE_LAUNCHD_LINGER") or 0)
+    if linger:
+        job.update(state="not running", last_exit="0")
+        job.pop("pid", None)
+        st["lingering"][args[1]] = linger
+    else:
+        del st["loaded"][dom][label]
+    save()
+elif verb in ("enable", "disable") and len(args) == 2:
+    dom, label = target(args[1])
+    st["disabled"].setdefault(dom, {})[label] = verb == "disable"
+    save()
+elif verb == "kickstart" and len(args) in (2, 3):
+    kill = args[1] == "-k"
+    dom, label, job = job_of(args[-1])
+    if job is None:
+        not_found(dom, label)
+    if kill or job["state"] != "running":
+        spawn(job)
+    save()
+else:
+    die(f"fake-launchctl: unsupported call: {' '.join(args)}", 64)

@@ -1,0 +1,14 @@
+# Lines allowed to trip a PUBLIC leak pattern by design (a placeholder id, the owner's
+# no-reply address). One entry per line: <repo path>:<sha256 of the exact line, without its newline>.
+# An allowed line that changes is no longer allowed. A private deny-list hit is never allowed here.
+.claude/skills/claude-skill/SKILL.md:e92f4e4a631e943c84b1dbc9ca010d0392ea811d856f2c07c4cf8a712d5ce534
+.claude/skills/chat-transport/claim.test.py:27d668ee06fca7c2e93651353a63ea3f8d055b5c3859266f950b0c4fc2888dd1
+.claude/skills/chat-transport/claim.test.py:fc8c0a392eaddacf4981b125fb9fcdf0a12e336dfe07781019c3e319283a147d
+.claude/skills/slack-communication/config.example.json:82ca1d78cdd32b7492617c33adecd97f2e96534e1793ea90e73bbcfcccf40ce9
+.claude/skills/slack-communication/config.example.json:7e34eb1df7f3ce12e8abf85a72731260235dca06c5e47f82f2fbeea5eb4a1dfc
+.claude/skills/slack-communication/config.example.json:ef73fd90376996f4032aac17048323b8f900f017196d94cc10ca3a7ac9ce9cae
+.claude/skills/slack-communication/config.example.json:a311a2579d12fbaa37039e95e3793e1433745866c34c4504a285a5e9f4ba5859
+# agent-revive: Google's own verification-code senders, which the Gmail query must name.
+.claude/skills/agent-revive/read_recovery_code.py:60a67132f5876dc40061d73869791cfa282e49cf1022aa270808320099915540
+# agent-revive: an upstream package's deprecation notice that npm records in the lockfile.
+.claude/skills/agent-revive/signin_driver/package-lock.json:14390f75be285444c07ea70f49c2989c215b10dedf1cc3f4ce9e4f9104f2aba6

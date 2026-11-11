@@ -1,0 +1,10 @@
+#fixture `launchctl print-disabled gui/<uid>`: the head and the entry layout are the
+#fixture capture's (macOS 27.0.1); the labels are synthetic and the closing lines
+#fixture follow the print layout. services.test.py drops these lines.
+gui/501 = {
+	disabled services = {
+		"com.example.helper" => enabled
+		"com.agent-fleet-test.slack-watch.ada" => disabled
+		"com.agent-fleet-test.sched.grace" => enabled
+	}
+}

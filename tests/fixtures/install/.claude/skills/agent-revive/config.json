@@ -1,0 +1,37 @@
+{
+  "_comment": "FIXTURE install config for the fleet's own tests. Every value is synthetic. The mailbox is a value no test-local config carries, so a test that reads it back proves this file was the one read. profiles_dir is absolute, outside any git tree and outside fleet.agents_home, so the driver accepts it.",
+  "fleet": {
+    "agents_home": "/tmp/fleet-fixture/agents",
+    "tmux": {
+      "tmpdir": "/run/user/<uid>/claude-tmux-<agent>",
+      "target": "claude-<agent>:0"
+    },
+    "systemd_unit": "claude-agent-<agent>.service",
+    "daemons": [
+      { "name": "watcher", "pattern": "slack-communication/watch.py" },
+      { "name": "scheduler", "pattern": "scheduled-tasks/sched.py" }
+    ]
+  },
+  "accounts": {
+    "pool_file": "/tmp/fleet-fixture/secrets/claude-account-pool.json",
+    "lease_file": "/tmp/fleet-fixture/secrets/account-leases.json",
+    "ledger_file": "/tmp/fleet-fixture/agents/healer/state/agents.md",
+    "handover_ledger_file": "/tmp/fleet-fixture/agents/healer/state/reports/handover.md",
+    "profiles_dir": "/tmp/fleet-fixture/secrets/claude-profiles",
+    "exclude": [
+      { "username": "c@example.com", "reason": "fixture install context" }
+    ]
+  },
+  "recovery": {
+    "mailbox": "fixture-install-recovery@example.com"
+  },
+  "share": {
+    "vnc_port": 5901,
+    "web_port": 6081,
+    "funnel_port": 10000,
+    "novnc_dir": "/usr/share/novnc",
+    "page": "vnc.html?autoconnect=1&resize=scale",
+    "minutes": 10,
+    "tailscale": ["tailscale"]
+  }
+}

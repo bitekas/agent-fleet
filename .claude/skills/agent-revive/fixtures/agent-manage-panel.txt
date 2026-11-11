@@ -1,0 +1,5 @@
+ ↑/↓ to select · Enter to view
+
+ ❯ ● main
+   ◯ software-engineer       Grepping imports in text-utils.ts     1h 26m 55s · ↓ 269.4k tokens
+   ↓ 3 more

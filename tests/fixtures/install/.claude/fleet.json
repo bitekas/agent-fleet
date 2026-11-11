@@ -1,0 +1,51 @@
+{
+  "_comment": [
+    "FIXTURE install manifest for the fleet's own tests (FLEET_CONTEXT_ROOT=tests/fixtures/install).",
+    "Every value is synthetic. Every house rule differs from its fleet default, so a test can tell",
+    "a value read from here from a default; the conventions use all three value forms.",
+    "transports.enabled names slack: load it with the registry at tests/fixtures/transports",
+    "(FLEET_TRANSPORTS_DIR, or the skills_dir argument) until the fleet tree carries the real",
+    "slack-communication/transport.json; the fixture descriptor holds the same values."
+  ],
+  "schema": 1,
+  "fleet": { "repo": "https://example.com/example/agent-fleet.git", "min_tag": "v1.0.0" },
+  "skills": [
+    "agent", "talking-to-humans", "self-compact", "scheduled-tasks", "restart",
+    "stall-watchdog", "slack-communication", "agent-revive", "agent-health",
+    "knowledge-base", "claude-skill", "web-hierarchy-server", "google-spreadsheet",
+    "notion-workspace", "rate-graphic", "chat-transport", "adding-an-agent",
+    "install-agent-fleet", "safe-box"
+  ],
+  "transports": { "enabled": ["slack"], "default": "slack" },
+  "conventions": {
+    "definition_of_done": { "skill": "example-definition-of-done" },
+    "feature_checklist": { "doc": "docs/checklists/<feature-slug>.md" },
+    "branch_naming": { "doc": "docs/example-process.md", "section": "Branch names" },
+    "workspace": { "skill": "example-workspace", "section": 3 },
+    "release": null,
+    "environments": null
+  },
+  "house_rules": {
+    "questions_per_message": 2,
+    "blocker_chase": { "every_minutes": 30, "tz": "Europe/Berlin",
+                       "days": ["mon", "tue", "wed", "thu"], "start": "08:30", "end": "17:00" },
+    "state_the_fact": false,
+    "times": { "cities": [ { "name": "Berlin", "tz": "Europe/Berlin" },
+                           { "name": "Tokyo", "tz": "Asia/Tokyo" },
+                           { "name": "Kolkata", "tz": "Asia/Kolkata" } ] },
+    "ascii_skill_prose": false
+  },
+  "secrets": { "legacy_env": "EXAMPLE_SECRETS_DIR", "default_dir": "~/.example-secrets" },
+  "upstream": {
+    "_comment": [
+      "deny_list names a file that deliberately does not exist. If this fixture context ever",
+      "reaches a commit hook (FLEET_CONTEXT_ROOT left exported), the leak gate cannot read the",
+      "list and refuses the commit (exit 3), instead of running its deny half with a harmless",
+      "fixture list. A test that needs a deny list writes one under its own temporary root and",
+      "passes it with FLEET_LEAK_DENY_FILE."
+    ],
+    "identity": { "name": "Viktor Korsun", "email": "3628395+bitekas@users.noreply.github.com" },
+    "deny_list": ".claude/fleet/leak-deny.txt",
+    "outside_pr_reviewer": "Ada"
+  }
+}

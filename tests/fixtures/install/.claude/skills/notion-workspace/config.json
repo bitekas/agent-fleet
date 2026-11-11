@@ -1,0 +1,19 @@
+{
+  "_comment": [
+    "FIXTURE install config for notion-workspace. Synthetic values only; it is",
+    "what the skill's install context resolves to when FLEET_CONTEXT_ROOT points",
+    "at tests/fixtures/install. The token path names a file no test creates."
+  ],
+  "workspace": { "name": "Example Workspace", "id": "00000000-1111-2222-3333-444444444444" },
+  "mcp": {
+    "connector_name": "example.ai Notion",
+    "acts_as": { "name": "Ada Example", "email": "ada@example.com", "user_id": "00000000-1111-2222-3333-555555555555" }
+  },
+  "bot": {
+    "name": "example-agent",
+    "user_id": "00000000-1111-2222-3333-666666666666",
+    "owner_user_id": "00000000-1111-2222-3333-555555555555"
+  },
+  "token": { "path": "/tmp/fleet-fixture-secrets/notion-integration.key" },
+  "oauth": { "credentials_path": null, "redirect_uri": null }
+}

@@ -1,0 +1,19 @@
+────────────────────────────────────────────────────────────────────────────
+  Settings  Status   Config   Usage   Stats
+
+  Version:                 2.1.273
+  Session name:            /rename to add a name
+  Session ID:              00000000-0000-0000-0000-000000000000
+  Session kind:            interactive
+  Peer address:            uds:/tmp/cc-socks/0000000.sock
+  cwd:                     /path/to/a/working/directory
+  Login method:            Claude Duo account
+  Organization:            <account>'s Organization
+  Email:                   <account>
+  Claude Code on the web:  Not set up · /web-setup to connect GitHub
+
+  Model:                   claude-fable-5-1[1m] (claude-fable-5-1)
+  MCP servers:             1 connected · /mcp
+  Setting sources:         User settings
+
+  Esc to cancel

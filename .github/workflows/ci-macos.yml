@@ -1,0 +1,125 @@
+# Fleet CI on macOS. One job, test-macos: every fleet test (tests/run-all.sh)
+# on the repository owner's self-hosted macOS runner, labels
+# [self-hosted, macOS, ARM64, agent-fleet-mac], where the only bash is the
+# system /bin/bash 3.2 and the userland is BSD. What that runner carries and
+# how it behaves is the runner contract in CONTRIBUTING.md section 9; the job's
+# first step checks it.
+#
+# It runs on the same events as ci.yml (every push, every pull request from a
+# branch of this repository, a manual dispatch), so a branch push shows all five
+# checks. It is not one of the checks `fleet upgrade` requires (bin/fleet
+# CI_CHECKS) or section 6 of CONTRIBUTING.md waits for.
+#
+# What runs here and what does not: tests/platforms.json lists the tests tied
+# to one operating system, each with its reason, and run-all.sh prints every
+# one it skips in the census with that reason. A Linux-only construct awaiting
+# its macOS port is listed there by name, so this job is green with an honest
+# census of what is pending, never green by not looking.
+#
+# Security shape, as in ci.yml and pinned by tests/gates/gates.py
+# workflow-safety: the job carries the fork gate (a self-hosted runner is the
+# owner's machine; without the gate a fork's pull request runs its code there);
+# push, pull_request and workflow_dispatch are the only triggers; contents: read
+# for the whole workflow and no secret; every third-party action pinned by full
+# commit SHA (the tag is the trailing comment; the same SHAs as ci.yml);
+# persist-credentials: false; no ${{ }} expression inside a run: line.
+name: ci-macos
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test-macos:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, macOS, ARM64, agent-fleet-mac]
+    timeout-minutes: 30
+    steps:
+      - name: Runner contract (CONTRIBUTING.md section 9)
+        # The runner has no Homebrew and a job has no sudo, so these come with the
+        # runner or not at all: tmux (tmux_triage.test.sh, watchdog_live.test.py,
+        # agent-session.test.py) and Python 3.14. actions/setup-python cannot
+        # provide Python here: its macOS build installs a .pkg with sudo into
+        # /Library/Frameworks.
+        run: |
+          missing=""
+          for c in tmux python3.14; do
+            command -v "$c" >/dev/null 2>&1 || missing="$missing $c"
+          done
+          for c in $missing; do
+            echo "::error::the macOS runner has no '$c' on PATH: see the runner contract, CONTRIBUTING.md section 9"
+          done
+          [ -z "$missing" ] || exit 1
+          tmux -V
+          python3.14 --version
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Prove every bash is /bin/bash 3.2
+        # A fleet host's only bash is /bin/bash 3.2, and so is this runner's (the
+        # runner contract). The step's own shell, a `bash` found on PATH and a
+        # `#!/usr/bin/env bash` script must all be 3.2: a newer bash that comes
+        # first on the runner's PATH fails the job here, naming what it found.
+        run: |
+          sw_vers
+          uname -m
+          type -a bash
+          for v in "$BASH_VERSION" "$(bash -c 'echo "$BASH_VERSION"')" "$(/usr/bin/env bash -c 'echo "$BASH_VERSION"')"; do
+            case "$v" in
+              3.2.*) echo "bash $v" ;;
+              *) echo "::error::found bash $v where /bin/bash 3.2 must run"; exit 1 ;;
+            esac
+          done
+      - name: A Python environment of this job's own
+        # The runner's python3.14 outlives the job: a package installed into it
+        # would still be there for the next job, so a dependency dropped from a
+        # requirements file would keep passing. A venv under RUNNER_TEMP holds this
+        # job's packages and nothing else, and its python3 is the one every later
+        # step runs. --clear empties it first: the runner's own emptying of
+        # RUNNER_TEMP stops at an entry it cannot delete, so an earlier job's venv
+        # can still be there.
+        run: |
+          python3.14 -m venv --clear "$RUNNER_TEMP/venv"
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+      - name: Python dependencies of the skills' tests
+        run: python3 -m pip install -r .claude/skills/google-spreadsheet/installation/requirements.txt
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          package-manager-cache: false
+      - name: Install gitleaks (pinned, checksum-verified)
+        # Into a directory made for this job: the runner's emptying of RUNNER_TEMP
+        # stops at an entry it cannot delete, so a fixed path could hold a binary
+        # an earlier job left, which the installer would accept on its version alone.
+        run: |
+          bin="$(mktemp -d "$RUNNER_TEMP/gitleaks.XXXXXX")"
+          bash tools/leak-gate/install-gitleaks.sh "$bin"
+          echo "$bin" >> "$GITHUB_PATH"
+      - name: npm ci in each sub-package
+        run: |
+          [ -d .claude/skills ] || { echo "no .claude/skills: no sub-package"; exit 0; }
+          find .claude/skills -name node_modules -prune -o -name package-lock.json -print0 |
+            while IFS= read -r -d "" lock; do
+              echo "npm ci in ${lock%/package-lock.json}"
+              npm ci --prefix "${lock%/package-lock.json}"
+            done
+      - name: Chromium for the sign-in driver tests
+        # macOS draws a headful Chromium through WindowServer, which is why the
+        # runner runs in the logged-in GUI session: no Xvfb. It downloads into the
+        # workspace, which the runner empties after the job.
+        timeout-minutes: 8
+        run: |
+          cd .claude/skills/agent-revive/signin_driver
+          PLAYWRIGHT_BROWSERS_PATH="$PWD/browsers" npx playwright install chromium
+      - name: Run every test
+        run: bash tests/run-all.sh

@@ -1,0 +1,59 @@
+{
+  "_comment": [
+    "TEMPLATE. Copy it to config.json in this skill's install context (the",
+    "file `fleet where rate-graphic config.json` names) and replace every",
+    "placeholder.",
+    "",
+    "Everything install-, deployment- and person-specific for the rate-graphic",
+    "skill. rate.mjs hardcodes NONE of it. It reads the config.json the fleet",
+    "names; point RATE_GRAPHIC_CONFIG at a copy of this file to run the same",
+    "rater against a different secret store, a different service-account key, or",
+    "a throwaway ratings log.",
+    "",
+    "The INSTRUMENT is not in here and is not meant to be. The prompt, the model",
+    "candidate list, the sampling count and the UNSTABLE threshold are the same",
+    "for every install and live in rate.mjs, because they are what a score MEANS.",
+    "A config key able to change the prompt would let two installs write records",
+    "into the same log that are not comparable with each other, which is the one",
+    "thing the prompt_version/prompt_sha pair exists to prevent.",
+    "",
+    "Every key below is REQUIRED except 'api.base', which carries a default. A",
+    "missing required key is a loud startup failure naming the key, before any",
+    "model call is paid for: each required value fails badly when guessed, and",
+    "two of them fail SILENTLY. A guessed ratings-log path writes this run's",
+    "records where nobody will look for them, and a guessed secret project reads",
+    "a key from the wrong project - both of which look like a successful run.",
+    "",
+    "RELATIVE PATHS RESOLVE AGAINST THE DIRECTORY HOLDING THIS CONFIG FILE, never",
+    "against the caller's cwd and never against the directory holding rate.mjs.",
+    "cwd-relative would make one config mean different files depending on where",
+    "the caller stood; script-relative would point into the fleet tree, which",
+    "every install on the host shares. A leading '~/' expands against the current",
+    "user's home; an absolute path is used as given.",
+    "",
+    "This file holds PATHS and IDs, never a credential. No API key, no token and",
+    "no service-account JSON is ever a value here - see the claude-skill skill,",
+    "section 4. A leaked config should be embarrassing, not exploitable.",
+    "",
+    "JSON has no comments, so every _comment key here is documentation and is",
+    "ignored by the loader. Leave them in your config.json or delete them; the",
+    "script does not care."
+  ],
+  "ratings_log": {
+    "_comment": "Where every rating and every recorded human pick is APPENDED, as JSONL. This is the whole point of the tool, not bookkeeping: the log is the only thing that can ever establish whether these ratings track human taste, so it must outlive the session and must not land in /tmp. It is deliberately OUTSIDE the skill tree - a log accumulated from live use is real company data, it names real files on a real machine, and the skill tree is publishable. The example value below is relative, so this file read in place points at ratings.example.jsonl beside it and a fresh clone runs green with no real data present. That twin is a COMMITTED FIXTURE and the script APPENDS to whatever this key names: point this at your own log in your copy, or the records land beside your config instead. Append-only JSONL specifically so two worktrees appending concurrently merge without a semantic conflict. The parent directory must exist; the script refuses to start rather than create it, because a typo here would otherwise silently produce a second log nobody reads.",
+    "path": "ratings.example.jsonl"
+  },
+  "credentials": {
+    "_comment": "Path to the SERVICE-ACCOUNT KEY FILE used to read the API key out of your secret store. A PATH, never the key itself. May contain a '*': the value is globbed and the single match is used, because a provisioned key filename often carries a per-project suffix nobody wants to paste. If several match, the first in sorted order is used and the count is reported on stderr. Keep this file outside the skill tree and outside any checkout (mode 600), so it is the same file from every worktree and no ignore rule stands between it and a commit; a clone that has never been provisioned then has no key and the script fails naming the pattern it globbed, rather than guessing. ${VAR:-default}, $VAR / ${VAR} and a leading ~ are expanded, so all three forms are legal. Set GEMINI_API_KEY in the environment to skip the whole service-account path.",
+    "service_account_key_path": "/path/to/your/keys/service-account-*.json"
+  },
+  "secret": {
+    "_comment": "Which secret in which project holds the multimodal API key. 'name' is the secret's id in your secret store (NOT the GEMINI_API_KEY environment variable, whose name is fixed and is only a caller-side short-circuit). 'project' is the cloud project that owns the secret. Both are read with 'gcloud secrets versions access latest' under an ISOLATED CLOUDSDK_CONFIG, and the key is validated FUNCTIONALLY by the model probe - never by length or prefix, because a failed firebase-CLI fetch is a 544-character English error message that passes every shape check ever written.",
+    "name": "GEMINI_API_KEY",
+    "project": "acme-example-project"
+  },
+  "api": {
+    "_comment": "Base URL of the multimodal API. Optional; omit it and the public Gemini v1beta endpoint is used. GEMINI_API_BASE in the environment still wins over this value, in that order, and is for probing against a stand-in. There is normally no reason to change it.",
+    "base": "https://generativelanguage.googleapis.com/v1beta"
+  }
+}

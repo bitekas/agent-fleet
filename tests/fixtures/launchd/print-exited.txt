@@ -1,0 +1,28 @@
+#fixture `launchctl print` of a LaunchAgent with no KeepAlive after it exited 3,
+#fixture captured on macOS 27.0.1 (the macOS runbook, facts-a). The facts it carries:
+#fixture `state = not running`, NO `pid` line, `last exit code = 3`, `runs = 1`.
+#fixture The top level only (the runbook printed no nested block); the label is the
+#fixture capture's, the path is synthetic, and the first line follows print-running.txt.
+#fixture The tests drop these #fixture lines.
+gui/501/com.agent-fleet-test.fact-exit3 = {
+	active count = 0
+	path = /tmp/fleet-fixture/tmp/facts/exit3.plist
+	type = LaunchAgent
+	state = not running
+	program = /bin/sh
+	domain = gui/501 [100015]
+	asid = 100015
+	minimum runtime = 10
+	exit timeout = 5
+	runs = 1
+	last exit code = 3
+	spawn type = daemon (3)
+	jetsam priority = 40
+	jetsam memory limit (active) = (unlimited)
+	jetsam memory limit (inactive) = (unlimited)
+	jetsamproperties category = daemon
+	jetsam thread limit = 32
+	cpumon = default
+	sanitizer flags = 0x0
+	properties = runatload | inferred program
+}

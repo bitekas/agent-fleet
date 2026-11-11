@@ -1,0 +1,42 @@
+#fixture `launchctl print` of a KeepAlive LaunchAgent that launchd respawned after a
+#fixture kill -9, captured on macOS 27.0.1 (the macOS runbook, phase p3). The facts it
+#fixture carries: `runs` counts the respawn (2), and after a signal there is a
+#fixture `last terminating signal` line and NO `last exit code` line.
+#fixture The top level only (the runbook printed no nested block); the label,
+#fixture paths and any pid are synthetic. The tests drop these #fixture lines.
+gui/501/com.agent-fleet-test.sched.ada = {
+	active count = 1
+	path = /tmp/fleet-fixture/home/Library/LaunchAgents/com.agent-fleet-test.sched.ada.plist
+	type = LaunchAgent
+	state = running
+	program = /opt/homebrew/bin/python3
+	working directory = /tmp/fleet-fixture/agents/ada/product
+	stdout path = /tmp/fleet-fixture/agents/ada/state/daemons/sched.log
+	stderr path = /tmp/fleet-fixture/agents/ada/state/daemons/sched.log
+	domain = gui/501 [100015]
+	asid = 100015
+	minimum runtime = 10
+	exit timeout = 15
+	runs = 2
+	pid = 2262
+	immediate reason = semaphore
+	forks = 0
+	execs = 4
+	initialized = 1
+	trampolined = 1
+	started suspended = 0
+	proxy started suspended = 0
+	checked allocations = 0 (queried = 1)
+	checked allocations reason = no host
+	checked allocations flags = 0x0
+	last terminating signal = Killed: 9
+	spawn type = background (5)
+	jetsam priority = 40
+	jetsam memory limit (active) = (unlimited)
+	jetsam memory limit (inactive) = (unlimited)
+	jetsamproperties category = daemon
+	jetsam thread limit = 32
+	cpumon = default
+	sanitizer flags = 0x0
+	properties = runatload | inferred program
+}

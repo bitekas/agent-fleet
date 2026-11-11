@@ -1,0 +1,268 @@
+#!/usr/bin/env python3
+"""[" -f "${BASH_SOURCE:-$0}" ] || { echo "a Python script: run it with python3" >&2; exit 126; }; exec python3 "${BASH_SOURCE:-$0}" "$@" || exit # sh/bash: hand off to python3 before reading the docstring
+Is this skill installed for the agent running it, and is it current?
+
+Prints ONE line and exits:
+
+    0  installed, current      -> proceed
+    1  installed, but stale, OR a leg that could not be measured
+    2  not installed           -> do not proceed; follow INSTRUCTION.md
+
+WHAT IS INSTALLED. Everything else in the `agent` skill is prose an agent
+reads. One thing has to exist on disk before the rules can be followed at all:
+`blockers/blockers.md` under the agent's own home directory. That file is this
+check's whole subject.
+
+WHY THE THREE STATES ARE NOT COLLAPSIBLE HERE, and each is a real failure this
+check exists to separate:
+
+  2  ABSENT is loud only in hindsight. An agent with no blockers file does not
+     error - it simply has nothing to read, so the hourly timer finds no rows,
+     pings nobody, and reports "0 blockers" every hour for ever. That reads
+     exactly like an agent who is waiting on nothing. Absent must therefore be
+     a refusal to proceed, not a quiet zero.
+
+  1  STALE is silent by construction. A blockers file written against an older
+     template is readable, parses as a table, and drops on the floor whatever
+     column was added since - most damagingly `Where`, without which the timer
+     cannot address anybody and the row is chaseable only by the session that
+     wrote it. So state 1 is measured from the ARTIFACT: the header row of the
+     installed file is compared against the header row of the template shipped
+     beside this skill. Add a column to `templates/blockers.md` and every
+     already-installed file reports stale on the next run, with no edit here.
+
+     There is deliberately NO `.install-state.json`. A recorded version would
+     be a marker file that can lie, and it would have to carry one entry per
+     agent home per host rather than one per host - so it would be wrong for
+     every agent but the last one installed, while still reading as
+     authoritative. The template's own header is the version, and it cannot go
+     out of step with itself.
+
+  1  UNMEASURABLE is also state 1, and the printed LINE is what carries the
+     information, not the code. If the agent's home directory cannot be
+     resolved, or does not exist, this check has not looked at the subject at
+     all: it must not then pronounce on it. The verdict it would manufacture is
+     the reassuring one, and a reader who sees OK stops looking.
+
+NEGATIVE CONTROL - DO NOT REMOVE, AND DO NOT "SIMPLIFY" THE ARGUMENT PATH.
+The optional positional argument (a home directory to check instead of the
+resolved one) is what makes this check falsifiable offline: point it at a
+scratch directory with no blockers file and it MUST exit 2. If that control
+ever exits 0, this check is not measuring the file's presence and no verdict it
+prints means anything. Delete the argument and the only way to see this script
+go red is to break a real agent's home, which nobody will do on purpose, and
+the check then passes for ever whether or not it works.
+
+EVERY LEG IS VERIFIED BY PERFORMING THE OPERATION, NEVER BY STAT.
+`os.path.exists` and friends answer from the inode: they are GREEN on a file
+that is present, the right size, and unreadable by this process - which is
+precisely the state in which the timer fails. So the file is OPENED and READ,
+and the real errno goes into the failure line. The timer also WRITES the file
+(`Last pinged`), so it is then opened for append - O_WRONLY|O_APPEND, no
+O_CREAT, nothing written, so bytes and mtime stay as they were - and a file
+this process can read and not write is STALE (exit 1), never OK. A copy of the
+template out of a read-only fleet checkout keeps the checkout's 0444 mode, and
+that is the copy this leg exists to catch; FIX installs it 0644 for that reason.
+
+CONTEXT.md IS READ FROM THE INSTALL CONTEXT, THROUGH fleetlib, NEVER BESIDE THIS
+SCRIPT. The fleet's skill directory holds COMMON files only, so a CONTEXT.md
+beside this script is absent in every fleet tree, and where one exists it
+describes some other install. `fleetlib.paths.skill_context('agent')` names the
+install's directory for this skill; when no install resolves, the check has
+not looked at anything and says NO VERDICT. The fleet root is found from
+realpath(__file__), never abspath: run through an agent's personal skill link,
+abspath is the link path under that agent's config directory, and four
+parents up from there is not the fleet. `check.test.py` beside this file pins
+the resolution against the fleet's fixture install, with a control that goes
+red when the install's CONTEXT.md is not the one being read.
+"""
+import os
+import re
+import sys
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+SKILL = os.path.dirname(HERE)
+FLEET_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(SKILL)))
+SKILL_MD = os.path.join(SKILL, "SKILL.md")
+TEMPLATE = os.path.join(SKILL, "templates", "blockers.md")
+
+FIX = ("fix: mkdir -p <home>/blockers && install -m 644 "
+       "<skill>/templates/blockers.md <home>/blockers/blockers.md")
+
+
+def out(code, msg):
+    print(msg)
+    sys.exit(code)
+
+
+def declared_version():
+    """SKILL.md's declared version, printed but never compared.
+
+    It is printed so the field has a RECEIVER. Nothing here compares it,
+    because staleness is measured from the template's column set instead (see
+    the header), and a version nothing reads at all is the inert signal that
+    later reads as evidence something needed reinstalling.
+    """
+    try:
+        with open(SKILL_MD, encoding="utf-8") as f:
+            m = re.search(r"^version:\s*(\d+)\s*$", f.read(4096), re.M)
+        return m.group(1) if m else "?"
+    except OSError:
+        return "?"
+
+
+def fleetlib_paths():
+    """fleetlib's `paths` module, imported from this fleet tree, or (None, why)."""
+    sys.path.insert(0, os.path.join(FLEET_ROOT, "lib"))
+    try:
+        from fleetlib import paths
+    except ImportError as e:
+        return None, "fleetlib is not importable from %s (%s)" % (
+            os.path.join(FLEET_ROOT, "lib"), e)
+    return paths, None
+
+
+def home_template():
+    """The home-directory path the install's CONTEXT.md names, `<agent>` left in.
+
+    CONTEXT.md is the SPECIFIC half of this skill: it is where the local path
+    lives, so this common script must read it rather than carry a path of its
+    own. A table row keyed on the words `home directory`. A `<agents-root>`
+    token in it is the host settings file's `agents_root`, so an install can
+    state its home layout without restating the host's root.
+    """
+    paths, why = fleetlib_paths()
+    if paths is None:
+        return None, why
+    try:
+        context = os.path.join(str(paths.skill_context("agent")), "CONTEXT.md")
+    except Exception as e:  # noqa: BLE001 - every fleetlib refusal is one verdict
+        return None, "no install context (%s: %s)" % (type(e).__name__, e)
+    try:
+        with open(context, encoding="utf-8") as f:
+            text = f.read()
+    except OSError as e:
+        return None, "cannot read the install's %s (%s)" % (context, e)
+    m = re.search(r"^\|\s*home directory\s*\|\s*`([^`]+)`\s*\|", text, re.M)
+    if not m:
+        return None, "%s has no `home directory` row in its paths table" % context
+    tmpl = m.group(1)
+    if "<agents-root>" in tmpl:
+        try:
+            tmpl = tmpl.replace("<agents-root>", str(paths.host()["agents_root"]))
+        except Exception as e:  # noqa: BLE001
+            return None, ("the home row uses <agents-root> and the host settings "
+                          "cannot supply it (%s: %s)" % (type(e).__name__, e))
+    return tmpl, None
+
+
+def resolve_home():
+    """This agent's own home directory, or (None, why).
+
+    `<agent>` is resolved from the running agent's CLAUDE_CONFIG_DIR - the one
+    value every agent's service unit sets and the same value the scheduler and
+    the chat watcher key their owner guards on - falling back to $HOME. It is
+    DISCOVERED, never written down: a committed inventory of which agent lives
+    where would be wrong on every machine but the one it was typed on. That
+    the home is the parent of CLAUDE_CONFIG_DIR and is named for the agent is
+    the fleet's home-layout contract, `SKILL.md` section 3.
+    """
+    tmpl, why = home_template()
+    if tmpl is None:
+        return None, why
+    ccd = os.environ.get("CLAUDE_CONFIG_DIR", "")
+    if ccd:
+        home = os.path.dirname(os.path.abspath(os.path.expanduser(ccd)))
+    else:
+        home = os.environ.get("HOME", "")
+    if not home:
+        return None, "neither CLAUDE_CONFIG_DIR nor HOME is set"
+    agent = os.path.basename(home.rstrip("/"))
+    if not agent:
+        return None, "cannot derive an agent name from %r" % home
+    expected = tmpl.replace("<agent>", agent)
+    if os.path.realpath(expected) != os.path.realpath(home):
+        return None, ("resolved home %s does not match CONTEXT.md's shape %s"
+                      % (home, tmpl))
+    return home, None
+
+
+def header_of(path):
+    """The column list of the first Markdown table header in `path`.
+
+    Opened and read: a file that exists and cannot be read is the state the
+    timer actually fails in, and stat cannot see it.
+    """
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith("|") and line.endswith("|"):
+                return [c.strip() for c in line.strip("|").split("|")]
+    return None
+
+
+def main():
+    argv = sys.argv[1:]
+    if argv and argv[0] in ("-h", "--help"):
+        out(0, "usage: check [HOME_DIR]   (no argument: resolve this agent's own home)")
+
+    try:
+        want = header_of(TEMPLATE)
+    except OSError as e:
+        out(1, "NO VERDICT - the shipped template %s could not be read (%s); "
+               "nothing to compare an installed file against" % (TEMPLATE, e))
+    if not want:
+        out(1, "NO VERDICT - %s carries no table header; the column set this "
+               "check compares against is undefined" % TEMPLATE)
+
+    if argv:
+        home, why = os.path.abspath(os.path.expanduser(argv[0])), None
+    else:
+        home, why = resolve_home()
+    if home is None:
+        out(1, "NO VERDICT - could not resolve this agent's home directory: %s. "
+               "The blockers file was never looked at, so this check says "
+               "nothing about it." % why)
+    if not os.path.isdir(home):
+        out(1, "NO VERDICT - home directory %s does not exist; the blockers "
+               "file was never looked at." % home)
+
+    blockers = os.path.join(home, "blockers", "blockers.md")
+    try:
+        have = header_of(blockers)
+    except FileNotFoundError:
+        out(2, "NOT INSTALLED - %s is absent. %s" % (blockers, FIX))
+    except OSError as e:
+        out(1, "NO VERDICT - %s exists but could not be read (%s); its state "
+               "is unknown." % (blockers, e))
+    if have is None:
+        out(1, "STALE - %s has no table header row; re-create it from "
+               "templates/blockers.md (its rows, if any, are worth copying "
+               "across first)." % blockers)
+    if have != want:
+        out(1, "STALE - %s has columns %s; the current template declares %s. "
+               "A missing column is dropped silently by every reader, and "
+               "without `Where` the hourly timer cannot address anybody."
+               % (blockers, have, want))
+    try:
+        os.close(os.open(blockers, os.O_WRONLY | os.O_APPEND))
+    except OSError as e:
+        # chmod repairs only a file this user owns with its write bit off; a
+        # read-only filesystem, an immutable file or another owner is named as is.
+        st = os.stat(blockers)
+        mine = st.st_uid == os.geteuid() and not st.st_mode & 0o200
+        out(1, "STALE - %s cannot be written (%s: %s); the hourly timer writes "
+               "`Last pinged` into it. %s" % (
+                   blockers, type(e).__name__, e,
+                   "fix: chmod u+w %s" % blockers if mine
+                   else "It must be writable by uid %d; the error says what stops it." % os.geteuid()))
+    out(0, "OK - %s installed (skill version %s), columns %s. NOT COVERED: "
+           "whether this agent's hourly blockers timer is set - a home with "
+           "the file and no timer pings nobody and reports zero blockers for "
+           "ever, which is the same silence the absent leg refuses. Check it "
+           "with the scheduler, not with this."
+           % (blockers, declared_version(), want))
+
+
+if __name__ == "__main__":
+    main()

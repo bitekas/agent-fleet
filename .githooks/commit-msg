@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# commit-msg - the message half of the commit gate.
+#   1. Strip every AI-attribution line (tools/commit-hygiene/ai-attribution.sh
+#      strip). Stripping, not refusing: the common case is a tool appending a
+#      whole-line trailer or footer, and removing it costs nobody a retry. CI
+#      cannot rewrite history, so the commit-hygiene job rejects instead; both
+#      read the same pattern file, so the two verdicts agree.
+#   2. Leak-check the final message and the author and committer git is about
+#      to record (tools/leak-gate/leak_gate.py --message --identity).
+#
+# Enable once per clone: git config core.hooksPath .githooks
+set -euo pipefail
+top="$(git rev-parse --show-toplevel)"
+bash "$top/tools/commit-hygiene/ai-attribution.sh" strip "$1"
+python3 "$top/tools/leak-gate/leak_gate.py" --message "$1" --identity

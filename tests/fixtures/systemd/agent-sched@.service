@@ -1,0 +1,50 @@
+#fixture This is the unit file this fleet's template replaces, copied byte for byte
+#fixture from a running host with only two substitutions: the agents root, where
+#fixture that unit writes it as an absolute path (Documentation=), is /srv/agents,
+#fixture and the install checkout's directory name is product. Everywhere else the
+#fixture unit names the agents root through the specifier, %h/agents, and that is kept
+#fixture verbatim. systemd/agent-daemons.test.py drops these #fixture lines, puts its
+#fixture own agents root where /srv/agents is, applies SPECIFIER_LINES (the render writes
+#fixture the literal agents root where this unit has %h/agents, on exactly the lines it
+#fixture names), and requires render-units' output to differ from the rest only in the
+#fixture rendered-by header, Documentation=, and the script paths in ExecStartPre= and
+#fixture ExecStart=. Edit this file only to follow a deliberate change to the units,
+#fixture never to make that comparison pass.
+[Unit]
+Description=Scheduler daemon (sched.py) of agent %i
+Documentation=file:///srv/agents/systemd/README.md
+# Never give up. A unit that hit a start limit stays dead with nothing to say so,
+# which is the silence this unit exists to end; RestartSteps below is the brake.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=%h/agents/%i/product
+# Set HERE, in the unit, not in a wrapper: the owner guard reads CLAUDE_CONFIG_DIR,
+# and the agents verify a daemon by reading it out of /proc/<pid>/environ.
+Environment=CLAUDE_CONFIG_DIR=%h/agents/%i/.claude
+Environment=SCHED_CONFIG=%h/agents/%i/config/scheduler.json
+Environment=PYTHONUNBUFFERED=1
+# Per-agent tunables (SCHED_TICK_SECS ...). Optional. A value here overrides the
+# Environment= lines above, so it holds tunables only, never the two paths.
+EnvironmentFile=-%h/agents/%i/config/sched.env
+ExecStartPre=/usr/bin/python3 %h/agents/systemd/agent-daemons.py rotate %h/agents/%i/state/daemons/sched.log
+ExecStart=/usr/bin/python3 -u %h/agents/%i/product/.claude/skills/scheduled-tasks/sched.py
+# The session reads this log through `agent-daemons.py follow`, never the journal.
+# The directory must exist before the first start (--install creates it).
+StandardOutput=append:%h/agents/%i/state/daemons/sched.log
+StandardError=append:%h/agents/%i/state/daemons/sched.log
+Restart=always
+# ⚠️ Exit 0 is the GUARD refusal (not the owner, or another scheduler holds the
+# lock), and the one exit that must NOT be retried: retrying it is a loop that
+# changes nothing. The unit stays inactive and the follower raises DAEMON-ALERT.
+RestartPreventExitStatus=0
+# A crash restarts after 10 s, backing off to 5 min over five restarts, so a
+# crash loop is slow and visible (NRestarts climbs; the follower alerts on it).
+RestartSec=10s
+RestartSteps=5
+RestartMaxDelaySec=5min
+TimeoutStopSec=15s
+
+[Install]
+WantedBy=default.target

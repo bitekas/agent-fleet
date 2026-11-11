@@ -1,0 +1,19 @@
+{
+  "_comment": "Offline fixture config for the tests. Agent-independent templates; no real path or credential. agents_home points at a root that does NOT exist: pointing it at the real fleet root made the convention fallback resolve into live fleet territory, harmless only for as long as no agent happens to be called testagent. The accounts block points at agent-health's pool fixtures, the same ones pool_pick.test.py reads; the real picker reads them, reached through the fleet root.",
+  "fleet": {
+    "agents_home": "/nonexistent-fixture-home",
+    "tmux": {
+      "tmpdir": "/run/claude-tmux-<agent>",
+      "target": "claude-<agent>:0"
+    },
+    "systemd_unit": "claude-agent-<agent>.service"
+  },
+  "accounts": {
+    "pool_file": "../../agent-health/fixtures/pool/pool.json",
+    "lease_file": "../../agent-health/fixtures/pool/leases.json",
+    "ledger_file": "../../agent-health/fixtures/pool/ledger.md",
+    "exclude": [
+      { "username": "a@example.com", "reason": "Google rejects its sign-in" }
+    ]
+  }
+}

@@ -1,0 +1,178 @@
+{
+  "_comment": [
+    "Everything deployment-specific for watchdog.py. The script names no session,",
+    "path or person - point STALL_WATCHDOG_CONFIG at a copy to run a second setup.",
+    "",
+    "This watchdog answers a blocking confirmation prompt that nobody is present to",
+    "answer. It ALWAYS answers no. See SKILL.md for why that is the only safe",
+    "automatic answer."
+  ],
+  "tmux": {
+    "_comment": [
+      "The session to watch. TMUX_TMPDIR must match the one the session was created",
+      "with, or tmux will not find it and every capture fails with 'no server running'.",
+      "The service unit sets TMUX_TMPDIR=/run/claude-tmux-<agent>; this must agree."
+    ],
+    "tmpdir": "/run/claude-tmux-<agent>",
+    "target": "claude-<agent>:0"
+  },
+  "stall": {
+    "_comment": [
+      "stall_secs 120: a prompt must sit UNCHANGED for two minutes before it is answered.",
+      "⚠️ This is deliberately SHORT. It assumes nobody is at the terminal. If a human is present and reading a prompt, they have two minutes to",
+      "answer before it is refused for them. Raise it if that stops being true.",
+      "",
+      "⚠️ BOTH conditions must hold before acting: a prompt signature matches AND the",
+      "pane has not changed for stall_secs. The unchanged test alone is meaningless -",
+      "a session idling at its input prompt is unchanged for hours and that is its",
+      "normal resting state. The signature alone would answer a prompt someone is",
+      "actively reading. Requiring both is what keeps Escape away from real work.",
+      "",
+      "prompt_patterns are matched against the captured pane, MULTILINE. ANY hit means",
+      "'a prompt is on screen'. Keep them SPECIFIC to the confirmation UI: a false",
+      "positive sends Escape into whatever the session is genuinely doing, while a false",
+      "negative only leaves the stall for a human. Only the first can destroy work.",
+      "",
+      "⚠️ The first pattern matches the SELECTION CURSOR - '❯' then a number then a dot -",
+      "and deliberately does NOT match the option text. Option names vary by dialog:",
+      "Yes/No for a command confirmation, but Compact, Login and others elsewhere. Keying",
+      "on 'Yes|No' silently missed every dialog that was not a command confirmation.",
+      "The cursor is the one element common to all of them.",
+      "",
+      "The '❯' alone is NOT enough: it is also the session's own input prompt, which is",
+      "on screen whenever the agent is idle. Requiring a digit and a dot after it is what",
+      "separates a chooser from the resting state - get this wrong and the watchdog",
+      "Escapes an idle session every stall_secs, forever.",
+      "",
+      "These patterns ARE verified against a real captured prompt - see the",
+      "fixtures/real-prompt-*.txt files, consecutive tmux captures taken while a",
+      "genuine confirmation was on screen. All three match them.",
+      "",
+      "The captured prompt is Claude Code's 'Dangerous rm operation on",
+      "possibly-empty variable path' guard; what trips it is technical/watchdog.md",
+      "section 5. The patterns do not depend on why a prompt was raised: they are",
+      "tested against real captures of one that appeared.",
+      "",
+      "A SECOND real pair, fixtures/real-prompt-permission-{a,b}.txt, captures an ordinary",
+      "Bash PERMISSION confirmation - the class this watchdog actually targets, and unlike",
+      "the rm guard it can be raised again on demand. All three patterns hit it, and",
+      "watchdog.test.py section 2c asserts each one individually so a pattern that stops",
+      "covering this dialog class cannot hide behind the other two.",
+      "",
+      "To re-verify after any UI change: run 'watchdog.py --probe' while a prompt is",
+      "on screen. It reports which patterns hit and which miss, and takes no action."
+    ],
+    "stall_secs": 120,
+    "poll_secs": 30,
+    "prompt_patterns": [
+      "^\\s*❯\\s*\\d+\\.",
+      "Do you want to (proceed|continue)",
+      "Esc to cancel · Tab to amend"
+    ],
+    "_idle_comment": [
+      "⚠️ THE EXCLUSION MATTERS MORE THAN THE PATTERNS. The pane being read also shows",
+      "the agent's OWN commands and output - so an agent that prints, greps or edits",
+      "text containing a chooser (the watchdog's own config and tests do exactly that)",
+      "would otherwise detect itself as prompting, and be Escaped stall_secs later while",
+      "perfectly healthy: a test run printing sample dialogs matches the live pane -",
+      "measured.",
+      "",
+      "The discriminator is structural, not textual. A modal dialog REPLACES the input",
+      "box and status bar at the foot of the pane. Idle or working, they are always",
+      "there; while a dialog is up they are always gone. So if the LAST idle_tail_lines",
+      "carry the idle signature, it is not a prompt - regardless of what is on screen",
+      "further up. Text can be quoted; the structure cannot.",
+      "",
+      "idle_tail_lines 6: the input box, its two rules and the status bar. Large enough",
+      "to catch them, small enough that a dialog's own footer never reaches back into it.",
+      "",
+      "⚠️ THESE PATTERNS ARE PERMISSION-MODE SPECIFIC, WHICH IS NOT OBVIOUS AND HAS NO",
+      "SIGNAL. '⏵⏵' is carried by the auto and accept-edits status bars. A session cycled",
+      "to MANUAL or PLAN mode shows '⏸ manual mode on · ? for shortcuts · ← for agents' or",
+      "'⏸ plan mode on (shift+tab to cycle) · ← for agents', and NONE of these three",
+      "patterns matches either - measured. The exclusion then reads INERT on a perfectly",
+      "healthy session, which --probe reports and nothing else does. Re-check with --probe",
+      "against a session in the mode it will actually run in, not the mode it starts in."
+    ],
+    "idle_patterns": [
+      "⏵⏵",
+      "esc to interrupt",
+      "for agents · ↓ to manage"
+    ],
+    "idle_tail_lines": 6,
+    "_comment_known_prompts": [
+      "Prompts the watchdog is TAUGHT to answer, tried in order and checked BEFORE the",
+      "generic Escape-the-prompt fallback. Each entry needs: name, match (regex searched",
+      "against the whole pane), keys (sent via tmux send-keys, in order), notice.",
+      "",
+      "⚠️ NEVER add an entry whose correct answer you are not certain of. The default",
+      "refusal is safe precisely because it is uninformed; a wrong CHOICE can be much",
+      "worse than a refusal. The entry below is the case in point: which resume option",
+      "is right is a deployment decision, and each choice costs something - compacting",
+      "discards session context on every unattended restart, and resuming in full",
+      "reloads whatever state the session stopped in.",
+      "",
+      "⚠️ Still no 'approve' for permission prompts, and there must never be one. These",
+      "entries are for NON-permission prompts that block start-up - a different class."
+    ],
+    "known_prompts": [
+      {
+        "name": "claude-code-resume-return",
+        "match": "Resuming the full session will consume a substantial portion",
+        "keys": ["Down", "Enter"],
+        "notice": "WATCHDOG: the Claude Code session-resume prompt blocked start-up for {duration}. It answered 'Resume full session as-is' - NOT compact. ⚠️ Which option this answers is a deployment decision: compacting on every unattended restart silently discards session context. Nothing else was done. ⚠️ No Monitors are running: re-arm the monitors your charter names, now, per its start-up list.",
+        "_comment": [
+          "Options, in the order the binary declares them: [compact] 'Resume from summary",
+          "(recommended)', [continue] 'Resume full session as-is', [never] \"Don't ask me",
+          "again\". The first is preselected, so Down+Enter selects the second.",
+          "",
+          "⚠️ CONTINUE vs a fresh session is a DEPLOYMENT DECISION, not a default. The",
+          "keys below resume the full session, which keeps the detail compaction loses;",
+          "record your own choice in the install's CONTEXT.md.",
+          "",
+          "Relative navigation rather than a digit key, because it does not assume the",
+          "chooser is numbered - and the digit would be wrong if the list ever reorders.",
+          "",
+          "⚠️ This should never fire. resumeReturnDismissed:true in <the session's CLAUDE_CONFIG_DIR>/.claude.json",
+          "suppresses the prompt outright; this is the backstop for a config reset, which",
+          "matters because that file is harness-managed state, not maintained config."
+        ]
+      }
+    ]
+  },
+  "action": {
+    "_comment": [
+      "deny_key is the keystroke that REFUSES. In Claude Code's confirmation UI the",
+      "'No, and tell Claude what to do differently' option is bound to Escape.",
+      "",
+      "⚠️ There is deliberately no 'approve' option in this file and there must never",
+      "be one. Auto-approving would defeat a guard that exists for a reason, and would",
+      "do it with nobody watching.",
+      "",
+      "notice is injected into the session AFTER the refusal lands. It must say that",
+      "the refusal was mechanical: an agent that believes a considered decision was",
+      "made on its behalf will not revisit it, and the whole point is that it should."
+    ],
+    "deny_key": "Escape",
+    "notice": "WATCHDOG: you entered a stall - a confirmation prompt sat unanswered for {duration} because nobody is at this terminal. The watchdog answered NO on your behalf, without thinking: it has no idea whether no was the right answer, it only knows that hanging forever is worse. Your command was refused, not executed. Re-read what you were about to run, decide whether it actually needs doing, and if it does, find a route that does not trip the guard. Then tell whoever was waiting what happened."
+  },
+  "state": {
+    "_comment": [
+      "Cursor and single-instance lock. ⚠️ Never read this from an environment",
+      "variable: that makes the location a property of whoever launched the process,",
+      "and a launcher that differs gets its own lock and runs a second watchdog",
+      "alongside the first - two processes racing to Escape the same prompt."
+    ],
+    "dir": "~/.local/share/<agent>-stall-watchdog",
+    "prefix": "stall-watchdog"
+  },
+  "owner": {
+    "_comment": [
+      "Only this CLAUDE_CONFIG_DIR may run the watchdog; anyone else exits 0 with a",
+      "WATCHDOG-GUARD line. Left null when run from systemd, which has no",
+      "CLAUDE_CONFIG_DIR set and is the intended launcher - the flock is the real",
+      "single-instance guard."
+    ],
+    "claude_config_dir": null
+  }
+}

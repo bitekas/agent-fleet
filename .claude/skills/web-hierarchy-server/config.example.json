@@ -1,0 +1,74 @@
+{
+  "_comment": [
+    "TEMPLATE. Copy it to config.json in this skill's install context (the",
+    "directory `fleet where web-hierarchy-server` prints) and replace every",
+    "placeholder.",
+    "",
+    "Everything install-, machine- and person-specific for serve.mjs, build.mjs",
+    "and format.mjs. Those scripts hardcode NONE of it. They read the config.json",
+    "`fleet where web-hierarchy-server config.json` names, or the file",
+    "WEB_HIERARCHY_CONFIG names when it is set, which runs the same viewer against",
+    "a different agent set, transcript root or identity roster with no code edit.",
+    "",
+    "A RELATIVE path in this file resolves against the directory holding the",
+    "config file, never against the scripts' directory or the caller's cwd.",
+    "",
+    "What is NOT in here: the viewer itself. The console theme, the spawn-tree",
+    "layout, the 10s refresh, the event rendering and the identity assignment rule",
+    "are the MECHANISM and live in SKILL.md, format.mjs and serve.mjs, because",
+    "they are the same for every install. Only what differs per install is a key.",
+    "",
+    "Every key below is REQUIRED except those under 'server', 'identities' and",
+    "'packages' and 'transcripts.projects_subdir', which carry defaults. A missing required key",
+    "is a loud startup failure naming the key. The optional ones default because a",
+    "wrong guess there fails LOUDLY on its own (a taken port is EADDRINUSE, a wrong",
+    "bind host refuses to listen); the required ones are required because a wrong",
+    "guess there fails SILENTLY: a guessed transcript root serves another agent's",
+    "session as if it were this one.",
+    "",
+    "This skill owns no credential and reads no secret. It reads transcript files",
+    "the agent harness already wrote, and serves them on the port 'server' names. No",
+    "token, key or password is ever a value in this file.",
+    "",
+    "JSON has no comments, so every _comment key here is documentation and is",
+    "ignored by the loader. Leave them in your config.json or delete them; the",
+    "scripts do not care."
+  ],
+  "server": {
+    "_comment": "How the server binds. All optional, all overridden by the matching CLI flag (--host, --cap, --port), which is what a service unit passes. 'host' is the bind address, and the default is 127.0.0.1: the page carries every agent's transcript and has no login, so it is readable from this machine only until an install names another address. To read it from another device, set the address that device reaches this machine on (a VPN or LAN address), or 0.0.0.0 for every interface; anyone who can reach that address and port reads every transcript. 'cap_kb' caps a single rendered event's body before it gets an expander, so one runaway tool result cannot make the document unopenable; it is also build.mjs's default --cap. 'preferred_ip_prefix' only affects the URL the server PRINTS at startup: with several addresses it prefers the one starting with this string, so the line you copy is the one reachable from the viewing device. '100.' is the CGNAT range several mesh VPNs hand out; set it to your own VPN/LAN prefix, or to \"\" to just take the first address.",
+    "host": "127.0.0.1",
+    "cap_kb": 16,
+    "preferred_ip_prefix": "100."
+  },
+  "transcripts": {
+    "_comment": "Where the agent harness writes session transcripts. CLAUDE_CONFIG_DIR in the process environment WINS over 'config_dir' and is how each server is pointed at its own agent (the service unit pins it); this key is the fallback for a run with that variable unset. Getting it wrong is the silent failure this skill is most exposed to: the viewer finds A session, renders it completely, and it belongs to a different agent. 'projects_subdir' is the directory under the config dir that holds one subdirectory per project slug; every slug is scanned, because a worktree session's transcript lands under the WORKTREE's slug and pinning one slug makes worktree sessions invisible. A leading ~/ is expanded against the current user's home directory - write it that way rather than as an absolute path, so the config does not carry one machine's home into a committed file. An agents root outside the home directory is the exception: ~/ cannot reach it, so there the absolute path is the correct value, here and in each servers entry.",
+    "config_dir": "~/agents/ada/.claude",
+    "projects_subdir": "projects"
+  },
+  "identities": {
+    "_comment": "OPTIONAL. The identity roster: agentType -> { avatar, portraits, names }. Names and avatars are a DISPLAY LABEL assigned by position within an agentType, so the file's 'names' arrays are ORDERED DATA, not a set: reordering or inserting mid-list silently renames every past session's graph. Absent or null means the identities.json shipped with the skill, which is what most installs want: the pool is the mechanism that makes assignment deterministic, so an adopter takes it or replaces it wholesale rather than editing a script. A relative path resolves against this config file's directory, and avatar and portrait paths inside a roster resolve against the roster's own directory, so an install's roster carries its own art. A roster that does not load is NOT fatal: the graph renders with no names and no avatars, which looks like a design choice rather than a fault, which is exactly why installation/check reports a roster that did not load.",
+    "file": null
+  },
+  "packages": {
+    "_comment": "OPTIONAL. How artifact paths mentioned in a message render as a foldable package block instead of plain text. 'repo_root' is the root for resolving RELATIVE artifact paths; absolute paths in a message are used as-is and never joined to it. Set it to the checkout the agents work in; a leading ~/ is expanded. Null or omitted means the server's own working directory, which is what a service unit sets anyway. 'dir_pattern' is where this install keeps package DIRECTORIES, as a repo-relative path with exactly one <slug> segment: a message mentioning a directory of that shape expands to every .md, image and .html file in it. Null or omitted means no such convention, and only individual file paths are detected. A wrong value costs package blocks, never a wrong file, because a path that does not exist is simply not rendered.",
+    "repo_root": "~/your-checkout",
+    "dir_pattern": "docs/design/<slug>"
+  },
+  "labels": {
+    "_comment": "How the human at the top of the tree is named in a from/to header. The root session's own task prompts come from a person, not from a spawning agent, so the header needs a word for them; every other from-label is derived from the transcripts. Display only, and it grants nothing.",
+    "root_owner": "ada"
+  },
+  "fleet": {
+    "_comment": "config-dir KEY -> the fleet member that config dir belongs to. Used for one thing: labelling the root block of the graph, so a viewer with several pages open can tell which agent each one is showing. An unmapped key is not an error: the root block renders unlabelled, exactly as it does with no map at all. Map EVERY config dir an agent may run under, including ones this install does not itself serve: an agent that moves to a new config dir loses its label until this map follows it.",
+    "by_config_dir": {
+      "_comment": "THE KEY IS NOT ALWAYS THE BASENAME. format.mjs's fleetKey() takes the config dir's basename, EXCEPT when that basename is the literal '.claude', where it takes the PARENT directory's basename instead. That is not a detail: a fleet that gives each agent a home directory puts every config dir at <home>/<agent>/.claude, so keyed by basename all of them collide on one entry named '.claude' and every agent's root block is labelled with whichever agent that entry names - a page that renders perfectly and says the wrong name. So '<agents-root>/ada/.claude' is keyed 'ada', while '~/.claude-2' is keyed '.claude-2'. A literal '.claude' entry is still honoured as a fallback for a single-agent install, but it cannot distinguish two agents and should not be used where more than one exists.",
+      "ada": "ada",
+      "grace": "grace",
+      ".claude-2": "second-agent-on-a-shared-home"
+    }
+  },
+  "servers": {
+    "_comment": "The servers THIS machine runs: unit name (on macOS, the LaunchAgent's label, <launchd-prefix>.web-hierarchy.<n>) -> { config_dir, port }. Read by installation/check, which verifies the unit is loaded and that the port is held by this skill's serve.mjs, and by serve.mjs to pick a default port (the entry whose config_dir resolves to the same fleet key as the running CLAUDE_CONFIG_DIR, else the first entry). Defaulting the port from the config dir is deliberate: a hand-started server that defaults to another agent's port is the collision the skill's one-server-per-config-dir rule exists to prevent. One entry per instantiation of installation/web-hierarchy-server.service.example (or .plist.example on macOS). An install running WITHOUT a unit (the server started by hand as a detached process, because installing a unit needs root and nobody with root is present) still lists its entry here: the unit name is what check reports as the missing durable form, and the port is what it measures.",
+    "web-hierarchy-1.service": { "config_dir": "~/agents/ada/.claude", "port": 8091 }
+  }
+}
