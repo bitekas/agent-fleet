@@ -67,7 +67,21 @@ def stand_in(d, body):
     return path
 
 
-def render(tmp, name, path_var, form="system", python=PY):
+def wrapper(d, target):
+    """An interpreter path of this test's own: `d`/python3, exec'ing `target`. ⚠️ NEVER
+    sys.executable ITSELF as FLEET_PYTHON: on a host whose Python is /usr/bin/python3
+    that is also a plausible hardcoded default, and a renderer that ignored
+    FLEET_PYTHON for it would pass the interpreter check there."""
+    os.makedirs(d)
+    path = os.path.join(d, "python3")
+    with open(path, "w") as f:
+        f.write(f'#!/bin/sh\nexec "{target}" "$@"\n')
+    os.chmod(path, 0o755)
+    return path
+
+
+def render(tmp, name, path_var, form="system", python=None):
+    python = python or os.path.join(tmp, "fleet-python", "python3")
     out = os.path.join(tmp, name + ".plist")
     host = os.path.join(tmp, "host.json")
     env = {"PATH": path_var, "HOME": os.path.join(tmp, "home"), "FLEET_PYTHON": python,
@@ -112,7 +126,8 @@ def main():
                        "claims_dir": "/tmp/x/claims", "launchd_prefix": "com.agent-fleet-test"}, f)
         tbin = os.path.join(tmp, "tmux-bin")
         tmux = stand_in(tbin, 'echo "tmux 9.9-stand-in"\n')
-        pydir = os.path.dirname(PY)
+        interp = wrapper(os.path.join(tmp, "fleet-python"), PY)
+        pydir = os.path.dirname(interp)
 
         # R. the control: it renders.
         p, out = render(tmp, "system", tbin)
@@ -134,7 +149,7 @@ def main():
         check("R: UserName is the user running the renderer (system form)", d.get("UserName") == ME,
               repr(d.get("UserName")))
         check("R: ProgramArguments runs watchdog.py with the fleet's interpreter (FLEET_PYTHON)",
-              d["ProgramArguments"][0] == PY and d["ProgramArguments"][1].endswith(
+              d["ProgramArguments"][0] == interp and d["ProgramArguments"][1].endswith(
                   "/.claude/skills/stall-watchdog/watchdog.py"), repr(d["ProgramArguments"]))
         check("R: PATH is the tmux's directory, the interpreter's, then the system directories",
               env.get("PATH") == want_path, f"{env.get('PATH')!r} vs {want_path!r}")

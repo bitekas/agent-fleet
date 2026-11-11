@@ -100,6 +100,22 @@ def fleet_copy(tmp, name, mutate=None):
 
 
 SYSTEM_PATH = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+# The interpreter FLEET_PYTHON names: a wrapper of this test's own Python, in a
+# directory of its own (main() writes it). ⚠️ NEVER sys.executable ITSELF: on a host
+# whose Python is /usr/bin/python3 that is also a plausible hardcoded default, and a
+# block that ignored FLEET_PYTHON for /usr/bin/python3 would pass the interpreter
+# check there (measured: that mutant stayed green with sys.executable).
+INTERP = None
+
+
+def fleet_python(tmp):
+    d = os.path.join(tmp, "fleet-python", "bin")
+    os.makedirs(d)
+    path = os.path.join(d, "python3")
+    with open(path, "w") as f:
+        f.write(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n')
+    os.chmod(path, 0o755)
+    return path
 
 
 def no_tmux_bin(base):
@@ -123,7 +139,7 @@ def run(info, fleet, tmp, name, form, auth="token", root_name="agents", edit=Non
     sysdir = os.path.join(tmp, "w-" + name, "LaunchDaemons")
     env = {"FLEET_SERVICE_BACKEND": "launchd", "FLEET_LAUNCHD_SYSTEM_DIR": sysdir,
            "FLEET_HOST_CONFIG": os.path.join(FLEET, "tests", "fixtures", "host.json"),
-           "FLEET_PYTHON": sys.executable, "PYTHONDONTWRITEBYTECODE": "1"}
+           "FLEET_PYTHON": INTERP, "PYTHONDONTWRITEBYTECODE": "1"}
     base = os.path.join(tmp, "w-" + name)
     os.makedirs(os.path.join(base, "bin"), exist_ok=True)
     if not shutil.which("plutil"):
@@ -221,10 +237,10 @@ def watchdog_findings(p, home, agents, sysdir, form):
     if (d.get("UserName") == ME) != (form == "system"):
         out.append(f"UserName is {d.get('UserName')!r} in the {form} form")
     argv = d.get("ProgramArguments", [])
-    if argv[:1] != [sys.executable]:
-        out.append(f"the job runs {argv[:1]}, not the fleet's interpreter {sys.executable} (FLEET_PYTHON)")
+    if argv[:1] != [INTERP]:
+        out.append(f"the job runs {argv[:1]}, not the fleet's interpreter {INTERP} (FLEET_PYTHON)")
     block_bin = os.path.join(os.path.dirname(agents), "bin")
-    want_path = ":".join(dict.fromkeys([block_bin, os.path.dirname(sys.executable), *SYSTEM_PATH]))
+    want_path = ":".join(dict.fromkeys([block_bin, os.path.dirname(INTERP), *SYSTEM_PATH]))
     if env.get("PATH") != want_path:
         out.append(f"the job's PATH is {env.get('PATH')!r}, not {want_path!r}")
     reached = shutil.which("tmux", path=env.get("PATH", ""))
@@ -259,7 +275,9 @@ def main():
     # more, and macOS's $TMPDIR (/var/folders/<2>/<28>/T/) alone puts every
     # world's socket past that, so H would read NOT RENDERED on the one system the
     # block is for. K3 plants the long root on purpose.
+    global INTERP
     tmp = tempfile.mkdtemp(prefix="fpl-", dir="/tmp")
+    INTERP = fleet_python(tmp)
     green = []
     try:
         print("H. the session job, from the agent-plist block")

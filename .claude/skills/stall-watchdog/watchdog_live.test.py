@@ -13,19 +13,19 @@ into it in raw mode, and the real watchdog.py with stall_secs 2 polling it.
            that merely PRINTED a chooser) receives nothing in the same time. Its
            silence means something only because `fires`, on the same text without
            the footer, was answered: the idle exclusion is what decides.
-  blind    `watchdog.py --once` against that live session with a PATH that holds no
-           tmux - the PATH a service manager hands a job whose tmux is not in the
-           directories it names, which is how a LaunchDaemon on a Mac without
-           Homebrew went up and blind. The failure must be RECORDED: a state file
-           whose capture_error names tmux and the PATH searched, and an ERROR line
-           naming both. Without the record the only trace is a log line, and
-           installation/check can only guess the cause. The same watchdog's next
-           poll with tmux reachable must drop the record: a capture_error that
-           outlived its cause would report a recovered watchdog blind for ever.
-  blind control  the same `--once`, the same session and config, with tmux's own
-           directory as the whole PATH: a state file with a digest and no
-           capture_error. It is what makes `blind` about the PATH and nothing else.
-           If the control does not capture, `blind` issues no verdict.
+  blind    three `watchdog.py --once` polls of ONE watchdog on that live session.
+           The first has tmux's own directory as the whole PATH and must capture
+           (the CONTROL: it is what makes the second about the PATH and nothing
+           else; if it does not capture, no verdict). The second has a PATH that
+           holds no tmux - the PATH a service manager hands a job whose tmux is not
+           in the directories it names, which is how a LaunchDaemon on a Mac
+           without Homebrew went up and blind - and the failure must be RECORDED:
+           capture_error naming tmux and the PATH searched, the stall cursor kept,
+           an ERROR line naming both. Without the record the only trace is a log
+           line, and installation/check can only guess the cause. The third has
+           tmux back and must drop the record: a capture_error that outlived its
+           cause would report a recovered watchdog blind for ever. The pane does
+           not change, so only an explicit drop removes it there.
 
 Exit codes: 0 every case holds; 1 a case failed; 3 NO VERDICT (no tmux, the pane
 never showed the prompt, or the blind control did not capture, so nothing below
@@ -164,8 +164,11 @@ def main():
             return 3
         print("[PASS] control: both panes show the captured prompt; the idle one ends in the idle footer")
 
-        # blind control first: the same session, reachable, captures.
-        _, seen = once("seeing", os.path.dirname(tmux))
+        # Three polls of ONE watchdog on the same unchanging pane: it captures (the
+        # control), loses tmux, gets it back. The pane does not change, so the third
+        # poll's digest equals the first's and decide() carries the saved state over:
+        # only an explicit drop removes the record, which is what that check sees.
+        _, seen = once("blind", os.path.dirname(tmux))
         if not (isinstance(seen, dict) and seen.get("digest") and "capture_error" not in seen):
             print(f"NO VERDICT: with tmux's own directory as PATH, --once did not capture ({seen!r}), "
                   f"so a failure without it would say nothing about PATH")
@@ -175,17 +178,18 @@ def main():
         os.makedirs(no_tmux)
         err, blind = once("blind", no_tmux)
         cap = (blind or {}).get("capture_error") or {}
-        check("blind: a PATH without tmux leaves a state file recording the failure",
-              blind is not None, f"no state file at all; stderr {err.strip()!r}")
-        check("blind: its capture_error names tmux, the PATH searched, and that tmux could not be started",
-              cap.get("kind") == "start" and "tmux" in cap.get("error", "") and cap.get("path") == no_tmux,
-              repr(cap))
+        check("blind: the failed poll records capture_error naming tmux, the PATH searched, and that tmux "
+              "could not be started", cap.get("kind") == "start" and "tmux" in cap.get("error", "")
+              and cap.get("path") == no_tmux, f"state {blind!r}; stderr {err.strip()!r}")
+        check("blind: the stall cursor survives the failed poll", (blind or {}).get("digest") == seen["digest"],
+              repr(blind))
         check("blind: the ERROR line names tmux and the PATH searched",
               any(ln.startswith("WATCHDOG-ERROR") and "tmux" in ln and no_tmux in ln for ln in err.splitlines()),
               err.strip())
         _, healed = once("blind", os.path.dirname(tmux))
-        check("blind recovers: the same watchdog's next poll that captures drops capture_error",
-              isinstance(healed, dict) and healed.get("digest") and "capture_error" not in healed, repr(healed))
+        check("blind recovers: the next poll that captures the same pane drops capture_error",
+              isinstance(healed, dict) and healed.get("digest") == seen["digest"]
+              and "capture_error" not in healed, repr(healed))
         procs = [watchdog("fire"), watchdog("idle")]
         fired = wait_for(lambda: notice[:40].encode() in keys(fire_log), 25)
         got = keys(fire_log)
