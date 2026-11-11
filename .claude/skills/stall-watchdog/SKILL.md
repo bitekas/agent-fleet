@@ -350,9 +350,9 @@ alone. For an agent `ada` the file then holds:
 
 Then run this skill's check, `"${CLAUDE_SKILL_DIR}/installation/check"` (with
 `STALL_WATCHDOG_CONFIG` set, or the config path as its argument), until it exits 0.
-It is a file the fleet ships, beside this one: `fleet where` names install files,
-and `fleet where stall-watchdog installation/check` prints a path where nothing
-is. It reports three states:
+It is a file the fleet ships, beside this one, never in the install context:
+`fleet where` names install files, and for this one it would print a path where
+nothing is. It reports three states:
 
 | Exit | Meaning |
 |---|---|
