@@ -45,7 +45,7 @@ What it proves:
   7. Under launchd (FLEET_SERVICE_BACKEND=launchd, the fleet's fake launchctl,
      FLEET_LAUNCHD_SYSTEM_DIR and a temp HOME): the host checks ask no polkit;
      the session and the watchdog as LaunchDaemons with UserName ada, their
-     plists, config and program out of ada's reach, are all ok; a plist ada
+     plists, config, program and tmux out of ada's reach, are all ok; a plist ada
      owns, a job with no UserName (root), a config ada owns FAIL; the session
      only as a LaunchAgent in ada's own domain, or not loaded at all, FAILs
      (UNPROTECTED with --no-admin, end to end through the script); an absent
@@ -57,12 +57,21 @@ THE LAUNCHD PROTECTED CASE NEEDS ROOT-OWNED PLISTS, which a test that must not
 run as root cannot make. So that one case runs the launchd checks in this
 process, with fleetlib's changeable() answering "cannot change" for one fixture
 directory standing in for root's (/Library/LaunchDaemons and the watchdog's
-config, program and interpreter) and the real rule everywhere else;
+config, program, interpreter and tmux) and the real rule everywhere else;
 changeable() itself is fleetlib's, tested there. Its control is the exposed
 cases beside it, on the real rule: a plist in a directory ada owns must FAIL.
 The interpreter is a stand-in too, never /opt/homebrew/bin/python3: the
 script checks the interpreter, and a real Homebrew belongs to whoever
 installed it, which on a developer's Mac is the user running this test.
+
+THE WATCHDOG'S TMUX NEEDS A ROOT-OWNED tmux, which a test that must not run as root
+cannot make and macOS does not have at all. So every run of the script goes through
+a wrapper (WRAPPER) that loads it and answers "cannot change" for ONE directory,
+World.tmux_bin, which holds a tmux stand-in, and keeps the real rule everywhere else.
+The fake systemctl's `show-environment` gives the system manager's PATH as that
+directory first, so every protected world here reaches a protected tmux.
+verify-privileges-path.test.py owns the tmux and PATH checks; its exposed cases are
+real files on the real rule.
 
 THE CONTROLS. "Protected" is an absence of findings, and it proves something
 only if the same run sees a presence: the owned-but-read-only config must FAIL
@@ -130,6 +139,17 @@ elif name == "systemctl":
     if E.get("FAKE_SYSTEMCTL") == "down":
         sys.stderr.write("System has not been booted with systemd as init system (PID 1). Can't operate.\n")
         sys.exit(1)
+    if args == ["show-environment"]:
+        # The system manager's environment block: FAKE_MANAGER_PATH is its PATH,
+        # "-" none at all, "fail" a manager that does not answer.
+        how = E.get("FAKE_MANAGER_PATH", "-")
+        if how == "fail":
+            sys.stderr.write("Failed to get environment: Connection timed out\n")
+            sys.exit(1)
+        print("LANG=C.UTF-8")
+        if how != "-":
+            print("PATH=" + how)
+        sys.exit(0)
     if args[:1] != ["show"] or "--user" in args:
         sys.exit(98)
     units = json.loads(open(E["FAKE_UNITS"]).read())
@@ -139,6 +159,21 @@ elif name == "systemctl":
     for p in want:
         print(p + "=" + props.get(p, ""))
 '''
+
+
+# Runs the script with fleetlib's changeable() answering "cannot change" for the one
+# directory standing in for a root-owned tmux's (argv[2]) and the real rule elsewhere.
+WRAPPER = r'''import importlib.util, os, sys
+script, standin = sys.argv[1], os.path.realpath(sys.argv[2])
+sys.argv = [script] + sys.argv[3:]
+spec = importlib.util.spec_from_file_location("verify_privileges", script)
+vp = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(vp)
+real = vp.changeable
+vp.changeable = lambda q: None if (os.path.realpath(q) + os.sep).startswith(standin + os.sep) else real(q)
+sys.exit(vp.main())
+'''
+TMUX_STANDIN = "#!/bin/sh\necho 'tmux 9.9-stand-in'\n"
 
 
 def check(cond, what):
@@ -201,6 +236,14 @@ class World:
             q.chmod(0o555 if q.is_dir() else 0o444)
         self.linked_checkout = base / "fleet-link"
         self.linked_checkout.symlink_to(CHECKOUT)
+        # The stand-in for a root-owned directory holding the tmux the watchdog runs
+        # (the module docstring, THE WATCHDOG'S TMUX), and the wrapper that treats it so.
+        self.tmux_bin = base / "root-standin-bin"
+        self.tmux_bin.mkdir()
+        (self.tmux_bin / "tmux").write_text(TMUX_STANDIN)
+        (self.tmux_bin / "tmux").chmod(0o755)
+        self.wrapper = base / "as-root-standin.py"
+        self.wrapper.write_text(WRAPPER)
 
     def run(self, *args, units=None, no_pkcheck=False, checkout=CHECKOUT, **env):
         if self.log.exists():
@@ -216,11 +259,12 @@ class World:
             host.write_text(json.dumps({"schema": 1, "agents_root": str(self.dir), "fleet_checkout": str(checkout),
                                         "claims_dir": str(self.dir / "claims")}))
         e = {"PATH": str(self.bin), "FAKE_LOG": str(self.log), "FAKE_UNITS": str(table), "LANG": "C",
-             "FLEET_HOST_CONFIG": str(host), "FLEET_SERVICE_BACKEND": "systemd"}
+             "FLEET_HOST_CONFIG": str(host), "FLEET_SERVICE_BACKEND": "systemd",
+             "FAKE_MANAGER_PATH": f"{self.tmux_bin}:/usr/bin:/bin"}
         e.update(env)
         try:
-            r = subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True, env=e,
-                               stdin=subprocess.DEVNULL, timeout=120)
+            r = subprocess.run([sys.executable, str(self.wrapper), str(SCRIPT), str(self.tmux_bin), *args],
+                               capture_output=True, text=True, env=e, stdin=subprocess.DEVNULL, timeout=120)
         finally:
             if no_pkcheck:
                 (self.bin / "pkcheck.off").rename(self.bin / "pkcheck")
@@ -258,9 +302,9 @@ def scenarios(w):
           and {c[c.index("--action-id") + 1] for c in pk} == {"org.freedesktop.systemd1.manage-units",
                                                              "org.freedesktop.systemd1.manage-unit-files"},
           f"polkit is asked about manage-units and manage-unit-files, with no --detail ({pk})")
-    check(not any(c[0] == "systemctl" and c[1:2] != ["show"] for c in calls)
+    check(not any(c[0] == "systemctl" and c[1:2] != ["show"] and c[1:] != ["show-environment"] for c in calls)
           and not any(c[0] == "sudo" and c[1:] not in (["-n", "true"], ["-n", "-l"]) for c in calls),
-          "the run only reads: systemctl show, sudo -n true, sudo -n -l")
+          "the run only reads: systemctl show and show-environment, sudo -n true, sudo -n -l")
 
     for env, what in ((dict(FAKE_SUDO_TRUE="yes"), "sudo -n true succeeds"),
                       (dict(FAKE_SUDO_LIST="rules"), "sudo -n -l lists a command"),
@@ -382,6 +426,10 @@ def launchd_scenarios(base, w):
     cfg_p.write_text("{}\n")
     prog_p.write_text("# watchdog\n")
     py_p.write_text("# interpreter\n")
+    # The watchdog's PATH reaches a tmux in the stand-in for root's directory.
+    (prot / "bin").mkdir()
+    (prot / "bin" / "tmux").write_text(TMUX_STANDIN)
+    (prot / "bin" / "tmux").chmod(0o755)
     state, calls = base / "launchd.json", base / "launchctl.calls"
     env = {"FLEET_SERVICE_BACKEND": "launchd", "FLEET_LAUNCHCTL": str(FAKE_LAUNCHCTL),
            "FAKE_LAUNCHD_STATE": str(state), "FAKE_LAUNCHD_CALLS": str(calls),
@@ -394,7 +442,8 @@ def launchd_scenarios(base, w):
         if user:
             d["UserName"] = user
         if "stall-watchdog" in label:
-            d["EnvironmentVariables"] = {"STALL_WATCHDOG_CONFIG": str(cfg or cfg_p)}
+            d["EnvironmentVariables"] = {"STALL_WATCHDOG_CONFIG": str(cfg or cfg_p),
+                                         "PATH": f"{prot / 'bin'}:/usr/bin:/bin:/usr/sbin:/sbin"}
         path = where / f"{label}.plist"
         with open(path, "wb") as f:
             plistlib.dump(d, f)
@@ -429,9 +478,10 @@ def launchd_scenarios(base, w):
 
         world(**{S: ("system", job(sysdir, S)), W: ("system", job(sysdir, W))})
         got = checks()
-        check(not any(s != "ok" for s, _ in got) and len(got) == 4 and has(got, "ok", str(sysdir / f"{S}.plist"))
-              and has(got, "ok", "the watchdog's config", str(cfg_p)) and has(got, "ok", "watchdog's program", str(prog_p)),
-              f"launchd: both LaunchDaemons with UserName ada, out of ada's reach: four ok lines ({got})")
+        check(not any(s != "ok" for s, _ in got) and len(got) == 5 and has(got, "ok", str(sysdir / f"{S}.plist"))
+              and has(got, "ok", "the watchdog's config", str(cfg_p)) and has(got, "ok", "watchdog's program", str(prog_p))
+              and has(got, "ok", "watchdog's tmux", str(prot / "bin" / "tmux")),
+              f"launchd: both LaunchDaemons with UserName ada, out of ada's reach: five ok lines ({got})")
         exposed = job(mine, S)
         world(**{S: ("system", exposed), W: ("system", job(sysdir, W))})
         got = checks()

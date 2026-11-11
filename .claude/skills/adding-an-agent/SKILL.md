@@ -1015,8 +1015,9 @@ too, and only the watchdog needs root.
     check is and what it does not claim. On a macOS target the same commands
     check the launchd jobs: the session and the watchdog as LaunchDaemons with
     `UserName` the agents user and plists it cannot change. Exit 0 PROTECTED is done. Exit 1 is a
-    FAIL line - sudo for the agents user, a unit file, the watchdog's config or
-    program, anything in the fleet checkout or the identities `fleet upgrade`
+    FAIL line - sudo for the agents user, a unit file, the watchdog's config,
+    program or interpreter, the tmux its PATH reaches or a directory searched
+    before it, anything in the fleet checkout or the identities `fleet upgrade`
     trusts that it can change, a session unit that is not a system unit or
     runs as anyone else - fixed before the agent counts as added, never
     reported past. Exit 3 NO VERDICT names what it could not measure. Exit 4

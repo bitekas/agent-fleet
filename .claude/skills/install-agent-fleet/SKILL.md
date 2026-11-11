@@ -480,7 +480,12 @@ closing summary states. On macOS it reads launchd instead of systemd: each
 agent's session and watchdog must be loaded in the system domain from a plist
 in `/Library/LaunchDaemons` the agents user cannot change, with `UserName` the
 agents user, and the watchdog's config, program and interpreter out of the
-agents user's reach; a LaunchAgent is the no-administrator form.
+agents user's reach; a LaunchAgent is the no-administrator form. On both
+systems the tmux the watchdog runs is checked too, as its PATH reaches it,
+with every directory searched before it: a tmux in a directory the agents user
+can change, such as its own `~/.local/bin`, leaves the watchdog unprotected and
+FAILs. A tmux the administrator installed (the distribution's `/usr/bin/tmux`,
+Homebrew's installed as the administrator) passes.
 
 ## 9. Hand off, then close [here]
 

@@ -56,6 +56,13 @@
   that way), and install-agent-fleet's verify-privileges.py fails an
   interpreter the agents user can change, as it fails the script and the plist.
 
+  SO IS THE TMUX <path> REACHES. watchdog.py runs a bare tmux, the first one
+  on <path>, so an agents user that can change that tmux, or put one in a
+  directory searched before it, runs its own program in its place.
+  verify-privileges.py fails both. <path> starts with the directory of the tmux
+  the renderer found: Homebrew's, the administrator's, passes; a tmux in the
+  agents user's own ~/.local/bin does not.
+
   The same file as a LaunchAgent (without UserName, in the user's
   ~/Library/LaunchAgents, bootstrapped into gui/<uid>) runs too, but the agent
   can bootout, disable or delete it: installation/check reports that form as

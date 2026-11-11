@@ -52,11 +52,11 @@ that is up and blind:
 
 What it does not check: that this tmux is the one the session itself runs (the
 session plist's PATH decides that; a different tmux build can refuse the
-session's server), and who can change the tmux or the PATH directories. On the
-supported layout both are Homebrew's, the administrator's; a tmux the agents user
-can change (in its own ~/.local/bin) is one the watched agent can replace, and
-install-agent-fleet's verify-privileges.py audits the job's interpreter, program
-and plist, not its tmux.
+session's server), and who can change the tmux or the PATH directories. That is
+install-agent-fleet's verify-privileges.py's, which FAILs a watchdog whose tmux,
+or a directory searched before it, the agents user can change: a tmux in that
+user's own ~/.local/bin renders here and FAILs there. Homebrew's, installed as
+the administrator, passes both.
 
 Exit codes: 0 rendered; 1 refused, nothing written; 2 usage.
 """

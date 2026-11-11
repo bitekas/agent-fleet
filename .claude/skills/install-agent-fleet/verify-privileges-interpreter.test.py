@@ -27,7 +27,8 @@ What it proves:
            replaced), though its target is root's.
   launchd  (in process, as verify-privileges.test.py section 7 does: a stand-in
            directory answers "cannot change" for root's files) both jobs with a
-           protected interpreter give four ok lines, the program line naming the
+           protected interpreter (and a protected tmux on the watchdog's PATH,
+           which verify-privileges-path.test.py owns) give five ok lines, the program line naming the
            interpreter; an interpreter this user owns FAILs; a `Program` key
            this user owns FAILs even when ProgramArguments[0] is protected,
            because launchd runs Program; an interpreter named by a relative
@@ -108,6 +109,9 @@ def launchd(base):
     cfg_p, prog_p, py_p = prot / "stall-watchdog.json", prot / "watchdog.py", prot / "python3"
     for q in (cfg_p, prog_p, py_p):
         q.write_text("#\n")
+    (prot / "bin").mkdir()
+    (prot / "bin" / "tmux").write_text(vt.TMUX_STANDIN)
+    (prot / "bin" / "tmux").chmod(0o755)
     own_py = mine / "python3"
     own_py.write_text("#!/bin/sh\n")
     state, calls = base / "launchd.json", base / "launchctl.calls"
@@ -122,7 +126,8 @@ def launchd(base):
         if program:
             d["Program"] = str(program)
         if label == W:
-            d["EnvironmentVariables"] = {"STALL_WATCHDOG_CONFIG": str(cfg_p)}
+            d["EnvironmentVariables"] = {"STALL_WATCHDOG_CONFIG": str(cfg_p),
+                                         "PATH": f"{prot / 'bin'}:/usr/bin:/bin:/usr/sbin:/sbin"}
         path = sysdir / f"{label}.plist"
         with open(path, "wb") as f:
             plistlib.dump(d, f)
@@ -154,8 +159,8 @@ def launchd(base):
 
         world()
         got = checks()
-        protected = len(got) == 4 and all(s == "ok" for s, _ in got)
-        check(protected, f"launchd: a protected interpreter: four ok lines ({got})")
+        protected = len(got) == 5 and all(s == "ok" for s, _ in got)
+        check(protected, f"launchd: a protected interpreter: five ok lines, the tmux's among them ({got})")
         check(has(got, "ok", "watchdog's program", str(prog_p), f"interpreter {py_p}"),
               f"launchd: the program line names the interpreter ({got})")
         if not protected:

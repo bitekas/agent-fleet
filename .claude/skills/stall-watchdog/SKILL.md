@@ -199,7 +199,14 @@ rendered from where tmux is**, never written by hand: watchdog.py runs a bare
 `tmux`, launchd's own PATH reaches none, and a job whose PATH misses it runs,
 captures nothing and looks healthy. So the renderer prints `NOT RENDERED` and writes
 nothing when no tmux is on its PATH, or when tmux or the interpreter does not run
-under the PATH it would write. launchd has no equivalent of `ProtectSystem`,
+under the PATH it would write. **Where that tmux is decides whether the watchdog is
+protected**: a tmux in a directory the agents user can change - its own
+`~/.local/bin` on a Mac without Homebrew - is one the watched agent can replace, and
+`install-agent-fleet`'s `verify-privileges.py` FAILs it, as it does a directory that
+user can write anywhere before it on the job's PATH; Homebrew's, installed as the
+administrator, passes. The systemd unit sets no PATH, so it runs the first tmux on
+the system manager's PATH, on a distribution's layout its own root-owned
+`/usr/bin/tmux`, which passes. launchd has no equivalent of `ProtectSystem`,
 `ReadWritePaths` or `NoNewPrivileges`, so the plist carries none; the process runs
 as the agent's user, the same boundary the session has.
 

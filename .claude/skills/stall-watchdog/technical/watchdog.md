@@ -321,7 +321,11 @@ correct.
 
 **Prefer the system service: the systemd unit, or on macOS the LaunchDaemon that
 runs as the agent's user.** A user-domain LaunchAgent is a service the watched agent
-can switch off, and `installation/check` reports it UNPROTECTED. The agent's own unit
+can switch off, and `installation/check` reports it UNPROTECTED. The system form
+protects only as far as the programs it runs: its interpreter, and the tmux the job's
+PATH reaches first. A tmux the agent's user can change, or a directory it can write
+before that tmux on the PATH, lets the watched agent swap in a tmux of its own, and
+`install-agent-fleet`'s `verify-privileges.py` FAILs either. The agent's own unit
 has `Restart=always` (launchd: KeepAlive), which covers
 the agent process *dying*. It does not cover the agent *hanging* - a process blocked
 on a prompt is alive and healthy by every measure systemd has. A watchdog armed as a

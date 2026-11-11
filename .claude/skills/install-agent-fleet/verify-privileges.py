@@ -35,6 +35,9 @@ only its owner and access. Checks:
          the user can change the watchdog's config        FAIL
          the user can change the program the watchdog
          runs, or the interpreter that runs it            FAIL
+         the user can change the tmux the watchdog runs,
+         or a directory searched before it on the
+         watchdog's PATH                                  FAIL
 
 UNDER LAUNCHD (macOS; fleetlib.services' backend) the same split holds with
 launchd's words: each agent's session (<prefix>.session.<agent>) and watchdog
@@ -51,6 +54,9 @@ UserName the agents user, their plists in /Library/LaunchDaemons
          the user can change the watchdog's config        FAIL
          the user can change the program the watchdog
          runs, or the interpreter that runs it            FAIL
+         the user can change the tmux the watchdog runs,
+         or a directory searched before it on the
+         watchdog's PATH                                  FAIL
 
 and the polkit check has no counterpart: launchd lets only root bootstrap, boot
 out, disable or edit a job of the system domain. The plist is read, never
@@ -106,6 +112,36 @@ LOAD-BEARING PROPERTIES - each one is here because removing it opens a hole:
     one ok line covers the pair, and a finding names which of the two it is.
     An interpreter named by a relative path cannot be checked: NO VERDICT.
 
+  * THE WATCHDOG'S TMUX AND ITS PATH ARE CHECKED TOO. watchdog.py starts one
+    program by a bare name, `tmux` (WATCHDOG_COMMANDS; its re-exec runs
+    sys.executable, an absolute path), so the tmux it runs is the first
+    `<entry>/tmux` on the job's PATH that is an executable file - the lookup
+    Python's subprocess makes, where a missing file, a directory or a file
+    without execute permission is passed over. An agents user that can change
+    that tmux, or create a `tmux` in a directory searched before it, runs its
+    own program wherever the watchdog runs tmux: one that answers every capture
+    with an idle pane switches the watchdog off. So the resolved tmux is checked
+    by the rule above (path and realpath), and every earlier entry by the same
+    rule applied to `<entry>/tmux`, which catches a directory the user may
+    write, one it owns or can rename away, and a non-executable `tmux` it owns
+    and may chmod. The job's PATH is the one it runs with: under systemd the
+    unit's Environment=PATH, else the system manager's environment block
+    (`systemctl show-environment`, which systemd.exec(5) says every unit's
+    environment starts from), else systemd's fixed default
+    /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin (systemd.exec(5), $PATH);
+    a unit with an EnvironmentFile= is NO VERDICT, because a PATH there wins
+    and no file is read. Under launchd the plist's EnvironmentVariables PATH,
+    else launchd's default /usr/bin:/bin:/usr/sbin:/sbin (_PATH_STDPATH in
+    macOS's <paths.h>; render-plist.py writes the same four after the tmux's
+    and the interpreter's). A relative or empty entry reached before a tmux is
+    the working directory's: NO VERDICT, as is a PATH that reaches no tmux.
+    A layout passes when tmux sits in a directory the administrator owns
+    (Homebrew's /opt/homebrew/bin installed as the administrator, the system's
+    /usr/bin) and every entry before it is out of the user's reach. A tmux in
+    the agents user's own ~/.local/bin - the layout of a Mac whose agents user
+    installed tmux and Python itself, as on the fleet's own macOS CI runner
+    (CONTRIBUTING.md section 9) - FAILs, and so does its interpreter there.
+
   * THE POLKIT QUESTION CARRIES NO UNIT. systemd authorizes a non-root
     `systemctl stop` through polkit's org.freedesktop.systemd1.manage-units, and
     an unprivileged caller may not pass --detail to pkcheck (polkit answers
@@ -157,6 +193,13 @@ from fleetlib.paths import changeable, host_config_path, tree_changeable  # noqa
 SUDO_GROUPS = ("sudo", "admin", "wheel")
 POLKIT_ACTIONS = ("org.freedesktop.systemd1.manage-units", "org.freedesktop.systemd1.manage-unit-files")
 NAME = re.compile(r"[a-z][a-z0-9-]{1,30}")
+# Every program watchdog.py starts by a bare name, looked up on its PATH (the module
+# docstring, THE WATCHDOG'S TMUX AND ITS PATH). verify-privileges-path.test.py derives
+# this set from watchdog.py's source and fails when the two differ.
+WATCHDOG_COMMANDS = ("tmux",)
+# The PATH a job runs with when it names none. Vendor facts, each with its source:
+SYSTEMD_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"  # systemd.exec(5), $PATH, system manager
+LAUNCHD_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"                      # _PATH_STDPATH, macOS <paths.h>
 
 lines = []  # (status, text)
 
@@ -226,6 +269,62 @@ def exec_checks(agent, user, guard, job, prog, interp):
     if not found:
         also = f" or its interpreter {interp}" if interp and interp != prog else ""
         say("ok", f"{agent}: {user} cannot change the watchdog's program {prog}{also}")
+
+
+def lookup(cmd, path):
+    """(the file a bare `cmd` runs on `path`, the entries searched before it, the
+    relative entry reached before any `cmd` or None) - Python's subprocess lookup:
+    the entries in order, the first `<entry>/<cmd>` that is a file this user may
+    execute. An empty entry is the working directory, so it is relative too."""
+    before = []
+    for entry in path.split(":"):
+        if not os.path.isabs(entry):
+            return None, before, entry
+        cand = os.path.join(entry, cmd)
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            return cand, before, None
+        before.append(entry)
+    return None, before, None
+
+
+def path_checks(agent, user, guard, job, path, source):
+    """Each bare command the watchdog runs, as the job's PATH resolves it, and every
+    entry searched before it (the module docstring, THE WATCHDOG'S TMUX AND ITS PATH):
+    one ok line per command, a finding per path the user can change."""
+    for cmd in WATCHDOG_COMMANDS:
+        found, before, rel = lookup(cmd, path)
+        if rel is not None:
+            say("NO VERDICT", f"{agent}: {job} runs a bare {cmd} on PATH={path} ({source}), and its entry "
+                              f"{rel!r}, reached before any {cmd}, is relative: what it runs depends on the "
+                              "working directory")
+            continue
+        if not found:
+            say("NO VERDICT", f"{agent}: no {cmd} on {job}'s PATH={path} ({source}), so the {cmd} it runs "
+                              "cannot be checked")
+            continue
+        subjects = [(found, f"the {cmd} the watchdog runs, {found}")]
+        subjects += [(os.path.join(d, cmd), f"{d} is searched before {found} on the watchdog's PATH, "
+                                            f"so a {cmd} put there runs instead") for d in dict.fromkeys(before)]
+        hits = [(why, what) for why, what in ((changeable(q), what) for q, what in subjects) if why]
+        for why, what in hits:
+            say(guard, f"{agent}: {user} {why}: {what}")
+        if not hits:
+            say("ok", f"{agent}: {user} cannot change the watchdog's {cmd} {found} or a directory searched "
+                      f"before it (PATH={path}, {source})")
+
+
+def manager_path():
+    """(PATH, its source) for a system unit that sets none, or (None, why not)."""
+    r = run("systemctl", "show-environment")
+    if r is None:
+        return None, "systemctl is not installed"
+    code, out, err = r
+    if code != 0:
+        return None, f"systemctl show-environment gave no answer (exit {code}: {(err or out).strip()[:120]})"
+    env = dict(l.split("=", 1) for l in out.splitlines() if "=" in l)
+    if "PATH" in env:
+        return env["PATH"], "the system manager's environment block, systemctl show-environment"
+    return SYSTEMD_PATH, "systemd's fixed default, the manager's environment block naming none"
 
 
 def host_checks(user, guard, identities=None, launchd=False):
@@ -310,7 +409,8 @@ def checkout_check(user, guard, identities=None):
 def agent_checks(agent, user, guard):
     session, watchdog = f"claude-agent-{agent}.service", f"claude-agent-{agent}-stall-watchdog.service"
     for unit in (session, watchdog):
-        got, why = show(unit, "LoadState", "FragmentPath", "DropInPaths", "User", "Environment", "ExecStart")
+        got, why = show(unit, "LoadState", "FragmentPath", "DropInPaths", "User", "Environment",
+                        "EnvironmentFiles", "ExecStart")
         if got is None:
             say("NO VERDICT", f"{agent}: {why}")
             continue
@@ -343,6 +443,15 @@ def agent_checks(agent, user, guard):
                 say("ok", f"{agent}: {user} cannot change the watchdog's config {cfg}")
         prog, interp = program(got.get("ExecStart", ""))
         exec_checks(agent, user, guard, f"{unit}'s ExecStart", prog, interp)
+        if got.get("EnvironmentFiles", "").strip():
+            say("NO VERDICT", f"{agent}: {unit} names an EnvironmentFile ({got['EnvironmentFiles'].strip()}), "
+                              "whose PATH would win and is not read, so the tmux it runs cannot be checked")
+            continue
+        path, source = (env["PATH"], "the unit's Environment=") if "PATH" in env else manager_path()
+        if path is None:
+            say("NO VERDICT", f"{agent}: {unit} sets no PATH and {source}, so the tmux it runs cannot be checked")
+        else:
+            path_checks(agent, user, guard, unit, path, source)
 
 
 def launchd_agent_checks(agent, user, guard):
@@ -390,6 +499,10 @@ def launchd_agent_checks(agent, user, guard):
         prog = next((x for x in args[1:] if not x.startswith("-")), args[0] if args else None)
         exec_checks(agent, user, guard, f"{label}'s ProgramArguments", prog,
                     str(job.get("Program") or (args[0] if args else "")) or None)
+        path = (job.get("EnvironmentVariables") or {}).get("PATH")
+        path_checks(agent, user, guard, label, str(path) if path is not None else LAUNCHD_PATH,
+                    "the plist's EnvironmentVariables" if path is not None else
+                    "launchd's default PATH, the plist naming none")
 
 
 def main():
