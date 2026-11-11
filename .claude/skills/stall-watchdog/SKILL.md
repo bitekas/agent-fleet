@@ -39,7 +39,7 @@ service runs whether or not any agent has read a word of it.
 | `installation/check` | is it installed here, and is it current | universal |
 | `installation/agent-stall-watchdog.service.example` | the unit template (Linux, systemd) | universal |
 | `installation/agent-stall-watchdog.plist.example` | the LaunchDaemon template (macOS, launchd) | universal |
-| `installation/render-plist.py` | renders that template for one session, its PATH from where tmux is; with `--job session`, the agent's own session job (`templates/claude-agent.plist.example`), its PATH from where tmux and `claude` are | universal |
+| `installation/render-plist.py` | renders that template for one session, its PATH from where tmux is; with `--job session`, the agent's own session job (`templates/claude-agent.plist.example`), its PATH from where tmux and `claude` are, then `/opt/homebrew/bin`, `/usr/local/bin` and the system directories | universal |
 | the config `STALL_WATCHDOG_CONFIG` names | the real values, one file per watched session | **this install** |
 | `installation/.install-state.json`, in the install context | what was installed, per host and per config | **this install** |
 

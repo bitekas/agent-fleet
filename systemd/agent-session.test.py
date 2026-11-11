@@ -361,9 +361,10 @@ def session_plist(d, mod):
           d["KeepAlive"] == {"SuccessfulExit": False} and d["RunAtLoad"] is True)
     check("session plist: its interpreter and the boot message's three follower commands are <python> and its "
           "PATH is <path>, all rendered (installation/render-plist.py --job session), never a hardcoded "
-          "Homebrew directory",
+          "Homebrew interpreter or PATH",
           argv[0] == VALUES["python"] and boot.count(VALUES["python"] + " ") == 3 and env["PATH"] == VALUES["path"]
-          and "/opt/homebrew" not in PLISTS["claude-agent"].read_text(encoding="utf-8"), repr(argv[:1]) + env["PATH"])
+          and "/opt/homebrew/bin/python3" not in PLISTS["claude-agent"].read_text(encoding="utf-8"),
+          repr(argv[:1]) + env["PATH"])
     check("session plist: no Python the session runs writes bytecode", env.get("PYTHONDONTWRITEBYTECODE") == "1")
 
 

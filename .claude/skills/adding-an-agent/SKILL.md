@@ -824,7 +824,10 @@ too, and only the watchdog needs root.
    stall-watchdog skill's `installation/render-plist.py --job session`, as the
    agents user the job runs as: it fills every placeholder, writes the job's PATH
    from the tmux and the `claude` on this block's PATH and the fleet's interpreter
-   (which the job and the boot message's follower commands run), and prints ONE
+   (which the job and the boot message's follower commands run), then
+   `/opt/homebrew/bin`, `/usr/local/bin` and the system directories, which every
+   command the agent runs inherits (the watchdog's PATH, step 7, keeps none of
+   the extra two), and prints ONE
    `NOT RENDERED` line and writes nothing when tmux or `claude` is not on that PATH,
    or when either or the interpreter does not run under the PATH it would write: a
    session whose PATH reaches no `claude` never starts. `plutil -lint` checks the

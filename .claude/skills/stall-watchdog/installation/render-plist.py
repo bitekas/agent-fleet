@@ -28,7 +28,8 @@ What it fills, besides the placeholders its arguments name:
                     is read: neither job runs a chat transport (interpreter())
   <path>            the directory of each command the job runs by a bare name, as found
                     on THIS process's PATH - tmux for the watchdog; tmux, then claude,
-                    for the session - then <python>'s directory, then
+                    for the session - then <python>'s directory, then (the session
+                    only) /opt/homebrew/bin and /usr/local/bin, then
                     /usr/bin:/bin:/usr/sbin:/sbin
 
 THE FORMS. The system form is a LaunchDaemon whose UserName is the user running this;
@@ -53,6 +54,16 @@ that is up and blind, or one that does not start:
     smoke on a Mac without Homebrew, tmux in ~/.local/bin, read "up and blind"), and a
     session plist naming Homebrew's python3 on a Mac without it does not start at all.
     Resolved for the user running this because that user is the job's UserName.
+
+  * THE SESSION'S PATH KEEPS ITS TOOL DIRECTORIES; THE WATCHDOG'S HAS NONE TO SPARE.
+    Every command an agent runs - its Bash tool, git, node or npx for an MCP server, a
+    gh or docker a .pkg installer put in /usr/local/bin - inherits the session's PATH,
+    so after the derived directories it keeps Homebrew's and /usr/local/bin before
+    the system's: a directory dropped there is a tool that silently stops being
+    found, and the session runs as its own user, so a short PATH protects nothing.
+    The watchdog's PATH is the derived directories and the system's only: every
+    extra directory is one more place to shadow the tmux it drives, and
+    verify-privileges.py checks each one. render-plist.test.py pins both.
 
   * NO COMMAND, NO PLIST. A job rendered without one of its commands on its PATH is a
     watchdog that supervises nothing and reports healthy, or a session that never
@@ -99,14 +110,15 @@ sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.realpath(__file__))
 FLEET = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(HERE))))
 SYSTEM_PATH = ("/usr/bin", "/bin", "/usr/sbin", "/sbin")
-# Per job: its template, the arguments it needs, and each command it runs by a bare
-# name with the arguments that prove it runs.
+# Per job: its template, the arguments it needs, each command it runs by a bare name
+# with the arguments that prove it runs, and the directories its PATH keeps after the
+# derived ones and before the system's (the module docstring, THE JOB'S PATH).
 JOBS = {
     "watchdog": (os.path.join(HERE, "agent-stall-watchdog.plist.example"),
-                 ("checkout", "state-dir", "tmux-dir"), (("tmux", "-V"),)),
+                 ("checkout", "state-dir", "tmux-dir"), (("tmux", "-V"),), ()),
     "session": (os.path.join(FLEET, "templates", "claude-agent.plist.example"),
                 ("name", "project-dir", "watch-job", "watch-config-env", "auth-mode"),
-                (("tmux", "-V"), ("claude", "--version"))),
+                (("tmux", "-V"), ("claude", "--version")), ("/opt/homebrew/bin", "/usr/local/bin")),
 }
 SYSTEM_MARKER = re.compile(r"<!--system: (.*?) -->")
 
@@ -147,10 +159,10 @@ def runs(argv, path):
     return None if r.returncode == 0 else f"exit {r.returncode}: {(r.stderr or r.stdout).strip()[:200]}"
 
 
-def job_path(commands, py):
+def job_path(commands, py, keep=()):
     """The job's PATH, proved: each command's directory as found on this process's PATH,
-    then the interpreter's, then the system directories; refused when a command is not
-    found, or it or the interpreter does not run under that PATH alone."""
+    then the interpreter's, then `keep`, then the system directories; refused when a
+    command is not found, or it or the interpreter does not run under that PATH alone."""
     found = []
     for cmd, *_ in commands:
         where = shutil.which(cmd)
@@ -159,7 +171,7 @@ def job_path(commands, py):
                    f"{'blind' if cmd == 'tmux' else 'without it'}. Run this with the directory of the "
                    f"{cmd} the job runs on PATH: PATH=<that directory>:$PATH")
         found.append(os.path.abspath(where))
-    path = ":".join(dict.fromkeys([*(os.path.dirname(f) for f in found), os.path.dirname(py), *SYSTEM_PATH]))
+    path = ":".join(dict.fromkeys([*(os.path.dirname(f) for f in found), os.path.dirname(py), *keep, *SYSTEM_PATH]))
     for (cmd, *proof), where in zip(commands, found):
         why = runs([cmd, *proof], path)
         if why:
@@ -183,7 +195,7 @@ def main():
     ap.add_argument("--config", help="the watchdog's STALL_WATCHDOG_CONFIG, when not the template's "
                     "<agents-root>/<agent>/config/stall-watchdog.json")
     a = ap.parse_args()
-    template, needs, commands = JOBS[a.job]
+    template, needs, commands, keep = JOBS[a.job]
     missing = [f"--{o}" for o in needs if getattr(a, o.replace("-", "_")) is None]
     if missing:
         ap.error(f"--job {a.job} needs {' '.join(missing)}")
@@ -191,7 +203,7 @@ def main():
     py = interpreter()
     if not os.path.isabs(py):
         refuse(f"the fleet's interpreter {py!r} is not an absolute path")
-    path = job_path(commands, py)
+    path = job_path(commands, py, keep)
 
     sys.path.insert(0, os.path.join(FLEET, "lib"))
     try:

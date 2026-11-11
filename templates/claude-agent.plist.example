@@ -33,7 +33,8 @@
   fleet job runs, agent-daemons.py's job table's python: FLEET_PYTHON, else
   host.json's python, else launchd's default) and <path> (the job's PATH: the
   directory of the tmux and of the claude the session runs, then the
-  directory of <python>, then /usr/bin:/bin:/usr/sbin:/sbin). The stall-watchdog
+  directory of <python>, then /opt/homebrew/bin and /usr/local/bin, then
+  /usr/bin:/bin:/usr/sbin:/sbin). The stall-watchdog
   skill's installation/render-plist.py, run for the session job as the agents
   user on the Mac the job runs on, fills every one, and refuses to render when
   tmux, claude or the interpreter is not on that user's PATH or does not run
@@ -80,6 +81,9 @@
   typing /exit into an attached pane included) and 0 only when stopped. PATH
   reaches tmux, claude and <python>, which the fleet's floor needs
   (/usr/bin/python3 is older); launchd's own PATH reaches none of them on a Mac.
+  It keeps Homebrew's directory and /usr/local/bin after them because every
+  command the agent runs inherits it: its Bash tool, git, node or npx for an MCP
+  server, and a gh or docker a .pkg installer put in /usr/local/bin.
   PYTHONDONTWRITEBYTECODE=1 holds for the whole session: the fleet checkout is
   the administrator's and read-only to the agents, so no Python the session runs
   may write a __pycache__ into it.

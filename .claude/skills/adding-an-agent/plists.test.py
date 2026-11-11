@@ -29,8 +29,10 @@ H. The session job (`agent-plist`, from templates/claude-agent.plist.example).
    ~/Library/LaunchAgents until that command runs: launchd loads every plist
    there at the next login, a refused one included. The job runs the fleet's
    interpreter (FLEET_PYTHON), which its boot message's three follower commands
-   name too, nothing in it names /opt/homebrew, and its PATH is the block's tmux
-   and claude directory, the interpreter's, then the system directories: under
+   name too, nothing in it runs Homebrew's python3, and its PATH is the block's
+   tmux and claude directory, the interpreter's, then every directory a session
+   keeps (render-plist.test.py's KEEP_SESSION: Homebrew's, /usr/local/bin, the
+   system's), while the watchdog's (I) stays the minimal one: under
    that PATH a bare tmux and a bare claude are the block's own stand-ins. Without
    claude, or without tmux, on the block's PATH the block prints ONE `NOT
    RENDERED` line naming it, no command, and writes no plist: a session whose
@@ -80,6 +82,12 @@ FLEET, AGENT, ME = U.FLEET, U.AGENT, U.ME
 SESSION_TEMPLATE = "templates/claude-agent.plist.example"
 WD_PLIST = U.WD_DIR + "/installation/agent-stall-watchdog.plist.example"
 WD_RENDER = U.WD_DIR + "/installation/render-plist.py"
+# The directories a session's PATH keeps after its derived ones: render-plist.test.py's
+# KEEP_SESSION, the one statement of that pin (imported, so the two cannot drift).
+_rspec = importlib.util.spec_from_file_location("render_plist_test", os.path.join(FLEET, U.WD_DIR, "installation",
+                                                                                 "render-plist.test.py"))
+RT = importlib.util.module_from_spec(_rspec)
+_rspec.loader.exec_module(RT)
 PREFIX = "com.agent-fleet"
 FAKE_PLUTIL = ("#!PYTHON\nimport plistlib, sys\ntry:\n    plistlib.load(open(sys.argv[-1], 'rb'))\n"
                "    print(sys.argv[-1] + ': OK')\nexcept Exception as e:\n    print(sys.argv[-1] + ': ' + str(e))\n"
@@ -226,10 +234,10 @@ def session_findings(p, home, agents, sysdir, form, auth="token"):
         out.append(f"the job runs {argv[:1]} and its boot message names the interpreter "
                    f"{boot.count(f'{INTERP} ')} time(s), not the fleet's {INTERP} (FLEET_PYTHON) for the job and "
                    f"its three follower commands")
-    if "/opt/homebrew" in open(rendered, encoding="utf-8").read():
-        out.append("the rendered session job names /opt/homebrew")
+    if "/opt/homebrew/bin/python3" in open(rendered, encoding="utf-8").read():
+        out.append("the rendered session job runs Homebrew's python3")
     block_bin = os.path.join(os.path.dirname(agents), "bin")
-    want_path = ":".join(dict.fromkeys([block_bin, os.path.dirname(INTERP), *SYSTEM_PATH]))
+    want_path = ":".join(dict.fromkeys([block_bin, os.path.dirname(INTERP), *RT.KEEP_SESSION]))
     if env.get("PATH") != want_path:
         out.append(f"the job's PATH is {env.get('PATH')!r}, not {want_path!r}")
     for cmd in ("tmux", "claude"):

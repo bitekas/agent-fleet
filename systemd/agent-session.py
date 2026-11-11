@@ -37,8 +37,9 @@ session's socket directory,
 plist's EnvironmentVariables, where bin/claude-attach, the stall watchdog and
 agent-revive read the same value. PATH must reach tmux; the session's login shell
 puts it in front of its own PATH, where `claude` is found. The plist's PATH is
-rendered from where tmux, claude and the interpreter are
-(stall-watchdog's installation/render-plist.py --job session).
+rendered from where tmux, claude and the interpreter are, then /opt/homebrew/bin,
+/usr/local/bin and the system directories, which every command the agent runs
+inherits (stall-watchdog's installation/render-plist.py --job session).
 
 Output: one timestamped line per event on stdout, which the plist points at
 <home>/state/session.log.

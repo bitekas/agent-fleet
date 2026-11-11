@@ -21,9 +21,11 @@ WHAT EACH CHECK IS FOR
   RS the session job (`--job session`, templates/claude-agent.plist.example) on a
      Mac WITHOUT Homebrew: tmux, claude and python3 in one temp `.local/bin`, as the
      macOS CI runner keeps them. The rendered job runs that python3, its boot
-     message's three follower commands name it too, nothing in it names
-     /opt/homebrew, its PATH starts with that `.local/bin` and then the system
-     directories, and under an environment of ONLY that PATH a bare tmux and a
+     message's three follower commands name it too, nothing in it runs
+     Homebrew's python3, its PATH starts with that `.local/bin` and then keeps
+     every directory of KEEP_SESSION in order (the PIN: Homebrew's, /usr/local/bin,
+     the system's - every command the agent runs inherits this PATH), and under
+     an environment of ONLY that PATH a bare tmux and a
      bare claude are the stand-ins. The system form carries UserName (the
      template's system: marker uncommented), the user form none; every
      placeholder is filled, the display name XML-escaped (it carries an ampersand).
@@ -71,6 +73,13 @@ RENDER = os.path.join(HERE, "render-plist.py")
 FLEET = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(HERE))))
 SMOKE = os.path.join(HERE, "launchd-daemon.smoke.sh")
 SYSTEM = "/usr/bin:/bin:/usr/sbin:/sbin"
+# Every directory the session job's PATH keeps after its derived ones (tmux's,
+# claude's, the interpreter's): Homebrew's, the one .pkg installers write (gh,
+# docker), then the system's. Every command an agent runs inherits the session's
+# PATH, so a directory dropped here is a tool that silently stops being found. It
+# is written out, never read from the renderer: a pin derived from the module it
+# pins agrees with a broken module. plists.test.py reads it from here.
+KEEP_SESSION = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
 ME = pwd.getpwuid(os.getuid()).pw_name
 PY = sys.executable
 PLACEHOLDER = re.compile(r"<[A-Za-z][A-Za-z0-9 -]*>")
@@ -182,10 +191,14 @@ def session_checks(tmp):
           "agent-daemons.py commands name the same interpreter",
           argv[:1] == [interp] and boot.count(f"{interp} ") == 3 and boot.count("agent-daemons.py") == 3,
           repr(argv[:2]) + " " + boot[-300:])
-    check("RS: nothing in the rendered job names /opt/homebrew", "/opt/homebrew" not in text)
-    want = ":".join([lb, *SYSTEM.split(":")])
-    check("RS: PATH starts with that .local/bin, then the system directories", env.get("PATH") == want,
+    check("RS: nothing in the rendered job runs Homebrew's python3", "/opt/homebrew/bin/python3" not in text)
+    want = ":".join(dict.fromkeys([lb, *KEEP_SESSION]))
+    check("RS: PATH starts with that .local/bin, then every directory a session keeps", env.get("PATH") == want,
           f"{env.get('PATH')!r} vs {want!r}")
+    parts = env.get("PATH", "").split(":")
+    check("RS: the PIN - every directory of KEEP_SESSION is on the session's PATH, in its order, and the "
+          "derived directory comes first",
+          parts[:1] == [lb] and [d for d in parts if d in KEEP_SESSION] == KEEP_SESSION, repr(parts))
     reached = {c: shutil.which(c, path=env.get("PATH", "")) for c in ("tmux", "claude")}
     check("RS: under an environment of ONLY the job's PATH, a bare tmux and a bare claude are the stand-ins",
           reached == {c: os.path.join(lb, c) for c in ("tmux", "claude")}, repr(reached))
@@ -211,9 +224,9 @@ def session_checks(tmp):
     os.chmod(os.path.join(home_bin, "claude"), 0o755)
     p, out_b = render_session(tmp, "session-brew", f"{brew}:{home_bin}", python=binterp)
     db = plistlib.load(open(out_b, "rb")) if p.returncode == 0 else {}
-    want = ":".join([brew, home_bin, *SYSTEM.split(":")])
+    want = ":".join(dict.fromkeys([brew, home_bin, *KEEP_SESSION]))
     check("RS: tmux and claude in different directories: the PATH holds the tmux's, then the claude's, "
-          "then the system directories, and a bare claude is the one found",
+          "then every directory a session keeps, and a bare claude is the one found",
           db.get("EnvironmentVariables", {}).get("PATH") == want
           and shutil.which("claude", path=want) == os.path.join(home_bin, "claude"),
           f"rc={p.returncode} {db.get('EnvironmentVariables', {}).get('PATH')!r} vs {want!r}")
@@ -329,7 +342,9 @@ def main():
         check("R: ProgramArguments runs watchdog.py with the fleet's interpreter (FLEET_PYTHON)",
               d["ProgramArguments"][0] == interp and d["ProgramArguments"][1].endswith(
                   "/.claude/skills/stall-watchdog/watchdog.py"), repr(d["ProgramArguments"]))
-        check("R: PATH is the tmux's directory, the interpreter's, then the system directories",
+        check("R: PATH is the tmux's directory, the interpreter's, then the system directories, and nothing "
+              "more: the watchdog's PATH keeps none of the session's extra directories, each one a place "
+              "to shadow its tmux",
               env.get("PATH") == want_path, f"{env.get('PATH')!r} vs {want_path!r}")
         check("R: the config given, the session's tmux directory",
               env.get("STALL_WATCHDOG_CONFIG") == "/etc/agent-fleet/stall-watchdog/ada.json"

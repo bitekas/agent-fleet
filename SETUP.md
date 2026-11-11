@@ -599,7 +599,9 @@ by `/adding-an-agent` section 5 step 6, through the stall-watchdog skill's
 - [ ] `<launchd-prefix>`, `<agent-name>`, `<Agent-Name>`, `<agents-root>`,
       `<fleet>`, `<project-dir>`, `<watch-job>`, `<watch-config-env>`,
       `<auth-mode>`, `<python>`, `<path>`, which the renderer derives from where
-      tmux, `claude` and `<python>` are, and in the system form `<agents-user>`
+      tmux, `claude` and `<python>` are and follows with `/opt/homebrew/bin`,
+      `/usr/local/bin` and the system directories, and in the system form
+      `<agents-user>`
 - [ ] `<uid>` stays: it is only in the opening comment, which the step does
       not fill
 
