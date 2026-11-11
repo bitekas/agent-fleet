@@ -35,6 +35,12 @@ WHAT EACH CHECK IS FOR
      template whose system: marker is misspelled, which would run the session as
      root. RS is their control: when the session job does not render at all, NS
      is not run and the run FAILs on RS.
+  T  a broken transport.json, of a skill neither job runs, refuses neither render
+     (in a copy of the fleet tree holding one). Neither job runs a chat transport,
+     so a descriptor's fault belongs to the daemons that do: the watchdog and the
+     session render beside it. Its control is the job table of the same tree,
+     which must refuse that descriptor naming its file, or the descriptor was
+     never read and the renders prove nothing (NO VERDICT).
   S  launchd-daemon.smoke.sh renders through this renderer and has no render of its
      own, prints the job's watchdog.log on a failed run before its cleanup removes
      it, and does not read a state file alone as capture. The smoke needs sudo and
@@ -48,6 +54,7 @@ any reason at all, so the run is NO VERDICT (exit 3).
 
 Exit codes: 0 every check passed; 1 a check failed; 3 NO VERDICT.
 """
+import importlib.util
 import json
 import os
 import plistlib
@@ -58,6 +65,7 @@ import subprocess
 import sys
 import tempfile
 
+sys.dont_write_bytecode = True   # it imports agent-daemons.py; nothing it runs writes into the tree
 HERE = os.path.dirname(os.path.realpath(__file__))
 RENDER = os.path.join(HERE, "render-plist.py")
 FLEET = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(HERE))))
@@ -98,13 +106,31 @@ def wrapper(d, target):
     return path
 
 
-def render(tmp, name, path_var, form="system", python=None, out=None):
+def fleet_copy(tmp, name):
+    """A copy of the files the renderer reads - itself, both templates, the job table
+    it takes the interpreter from, and lib/fleetlib - under `tmp`/`name`."""
+    copy = os.path.join(tmp, name)
+    for rel in ("templates/claude-agent.plist.example", "systemd/agent-daemons.py",
+                ".claude/skills/stall-watchdog/installation/render-plist.py",
+                ".claude/skills/stall-watchdog/installation/agent-stall-watchdog.plist.example"):
+        os.makedirs(os.path.dirname(os.path.join(copy, rel)), exist_ok=True)
+        shutil.copyfile(os.path.join(FLEET, rel), os.path.join(copy, rel))
+    shutil.copytree(os.path.join(FLEET, "lib"), os.path.join(copy, "lib"),
+                    ignore=shutil.ignore_patterns("__pycache__", "*.test.py"))
+    return copy
+
+
+def copied_renderer(copy):
+    return os.path.join(copy, ".claude", "skills", "stall-watchdog", "installation", "render-plist.py")
+
+
+def render(tmp, name, path_var, form="system", python=None, out=None, renderer=RENDER):
     python = python or os.path.join(tmp, "fleet-python", "python3")
     out = out or os.path.join(tmp, name + ".plist")
     host = os.path.join(tmp, "host.json")
     env = {"PATH": path_var, "HOME": os.path.join(tmp, "home"), "FLEET_PYTHON": python,
            "FLEET_HOST_CONFIG": host, "PYTHONDONTWRITEBYTECODE": "1", "LANG": "C.UTF-8"}
-    argv = [PY, RENDER, "--agent", "ada", "--agents-root", os.path.join(tmp, "agents"),
+    argv = [PY, renderer, "--agent", "ada", "--agents-root", os.path.join(tmp, "agents"),
             "--checkout", os.path.join(tmp, "agents", "ada", "work"),
             "--state-dir", os.path.join(tmp, "agents", "ada", "state", "stall-watchdog"),
             "--tmux-dir", os.path.join(tmp, "agents", "run", "claude-tmux-ada"),
@@ -113,12 +139,12 @@ def render(tmp, name, path_var, form="system", python=None, out=None):
     return p, out
 
 
-def render_session(tmp, name, path_var, form="system", python=None):
+def render_session(tmp, name, path_var, form="system", python=None, renderer=RENDER):
     """The session job, rendered as adding-an-agent's agent-plist block renders it."""
     out = os.path.join(tmp, name + ".plist")
     env = {"PATH": path_var, "HOME": os.path.join(tmp, "home"), "FLEET_PYTHON": python,
            "FLEET_HOST_CONFIG": os.path.join(tmp, "host.json"), "PYTHONDONTWRITEBYTECODE": "1", "LANG": "C.UTF-8"}
-    argv = [PY, RENDER, "--job", "session", "--agent", "ada", "--name", "Ada & Co",
+    argv = [PY, renderer, "--job", "session", "--agent", "ada", "--name", "Ada & Co",
             "--agents-root", os.path.join(tmp, "agents"), "--project-dir", "work", "--watch-job", "slack-watch",
             "--watch-config-env", "SLACK_WATCH_CONFIG", "--auth-mode", "token", "--form", form, "--out", out]
     p = subprocess.run(argv, env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=120)
@@ -194,25 +220,11 @@ def session_checks(tmp):
 
     # A fleet tree whose session template's system: marker is misspelled: the system
     # form would carry no UserName, a session running as root, so it is refused.
-    copy = os.path.join(tmp, "fleet-copy")
-    for rel in ("templates/claude-agent.plist.example", "systemd/agent-daemons.py",
-                ".claude/skills/stall-watchdog/installation/render-plist.py",
-                ".claude/skills/stall-watchdog/installation/agent-stall-watchdog.plist.example"):
-        os.makedirs(os.path.dirname(os.path.join(copy, rel)), exist_ok=True)
-        shutil.copyfile(os.path.join(FLEET, rel), os.path.join(copy, rel))
-    shutil.copytree(os.path.join(FLEET, "lib"), os.path.join(copy, "lib"),
-                    ignore=shutil.ignore_patterns("__pycache__", "*.test.py"))
+    copy = fleet_copy(tmp, "fleet-copy")
     tpl = os.path.join(copy, "templates", "claude-agent.plist.example")
     text = open(tpl, encoding="utf-8").read()
     open(tpl, "w", encoding="utf-8").write(text.replace("<!--system: ", "<!--sytem: ", 1))
-    out_m = os.path.join(tmp, "session-marker.plist")
-    env = {"PATH": lb, "HOME": os.path.join(tmp, "home"), "FLEET_PYTHON": interp,
-           "FLEET_HOST_CONFIG": os.path.join(tmp, "host.json"), "PYTHONDONTWRITEBYTECODE": "1"}
-    p = subprocess.run([PY, os.path.join(copy, ".claude/skills/stall-watchdog/installation/render-plist.py"),
-                        "--job", "session", "--agent", "ada", "--name", "Ada", "--agents-root", os.path.join(tmp, "agents"),
-                        "--project-dir", "work", "--watch-job", "slack-watch", "--watch-config-env", "SLACK_WATCH_CONFIG",
-                        "--auth-mode", "token", "--form", "system", "--out", out_m],
-                       env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=120)
+    p, out_m = render_session(tmp, "session-marker", lb, python=interp, renderer=copied_renderer(copy))
     lines = p.stdout.splitlines()
     check("NS: a session template whose system: marker is misspelled: refused, the job would run as root",
           "<!--sytem: " in open(tpl, encoding="utf-8").read() and p.returncode == 1 and len(lines) == 1
@@ -230,6 +242,33 @@ def session_checks(tmp):
         check(f"NS: {name}: ONE NOT RENDERED line naming it and the PATH, nothing written",
               p.returncode == 1 and len(lines) == 1 and lines[0].startswith(start) and nb in lines[0]
               and not os.path.exists(out_n), f"rc={p.returncode} {lines!r} {p.stderr[-200:]!r}")
+
+
+def transport_checks(tmp, tbin, interp):
+    """T: a broken transport.json, of a skill neither job runs, refuses neither render.
+    The control is the job table in the same tree: `agent-daemons.py jobs --json` must
+    refuse it naming the file, or the descriptor was never read and a render passing
+    beside it proves nothing (NO VERDICT)."""
+    copy = fleet_copy(tmp, "fleet-broken-transport")
+    bad = os.path.join(copy, ".claude", "skills", "chat-broken", "transport.json")
+    os.makedirs(os.path.dirname(bad))
+    with open(bad, "w") as f:
+        f.write('{"schema": 1, "name": "chat-broken"\n')
+    env = {"PATH": tbin, "FLEET_SERVICE_BACKEND": "launchd", "FLEET_HOST_CONFIG": os.path.join(tmp, "host.json"),
+           "PYTHONDONTWRITEBYTECODE": "1", "HOME": os.path.join(tmp, "home")}
+    c = subprocess.run([PY, os.path.join(copy, "systemd", "agent-daemons.py"), "jobs", "--json"], env=env,
+                       capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=60)
+    if c.returncode == 0 or bad not in c.stderr:
+        return f"T: the job table in the copy did not refuse the broken {bad} (exit {c.returncode}: {c.stderr[-200:]!r})"
+    print("[PASS] T control: the job table refuses the broken transport.json, naming it")
+    p, out = render(tmp, "t-watchdog", tbin, python=interp, renderer=copied_renderer(copy))
+    check("T: the watchdog job renders beside a broken transport.json it does not run",
+          p.returncode == 0 and os.path.isfile(out), (p.stdout + p.stderr).strip()[-300:])
+    lb, linterp = local_bin(tmp, "t-mac")
+    p, out = render_session(tmp, "t-session", lb, python=linterp, renderer=copied_renderer(copy))
+    check("T: the session job renders beside a broken transport.json it does not run",
+          p.returncode == 0 and os.path.isfile(out), (p.stdout + p.stderr).strip()[-300:])
+    return None
 
 
 def smoke_checks():
@@ -332,7 +371,29 @@ def main():
               p.returncode == 1 and len(lines) == 1 and lines[0].startswith("NOT RENDERED: cannot write")
               and "Traceback" not in p.stderr, f"rc={p.returncode} {lines!r} {p.stderr[-200:]!r}")
 
+        # No FLEET_PYTHON and no python in host.json: the interpreter is agent-daemons.py's
+        # launchd default, never its systemd one (both read from the job table's module,
+        # not restated here). It renders with it where it is installed, else refuses
+        # naming it.
+        spec = importlib.util.spec_from_file_location("agent_daemons", os.path.join(FLEET, "systemd", "agent-daemons.py"))
+        daemons = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(daemons)
+        env = {"PATH": tbin, "HOME": os.path.join(tmp, "home"), "FLEET_HOST_CONFIG": os.path.join(tmp, "host.json"),
+               "PYTHONDONTWRITEBYTECODE": "1"}
+        out_d = os.path.join(tmp, "default-python.plist")
+        p = subprocess.run([PY, RENDER, "--agent", "ada", "--agents-root", os.path.join(tmp, "agents"),
+                            "--checkout", tmp, "--state-dir", tmp, "--tmux-dir", tmp, "--form", "system", "--out", out_d],
+                           env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=120)
+        used = plistlib.load(open(out_d, "rb"))["ProgramArguments"][0] if p.returncode == 0 else p.stdout
+        check("R: with no FLEET_PYTHON or host.json python, the interpreter is launchd's default, not systemd's",
+              daemons.PYTHON_LAUNCHD != daemons.PYTHON and daemons.PYTHON_LAUNCHD in used
+              and (p.returncode == 0 or used.startswith("NOT RENDERED:")), f"rc={p.returncode} {used!r}")
+
         session_checks(tmp)
+        why = transport_checks(tmp, tbin, interp)
+        if why:
+            print(f"NO VERDICT: {why}")
+            return 3
 
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

@@ -22,9 +22,10 @@ What it fills, besides the placeholders its arguments name:
                     the user running this, which is the job's UserName in the system
                     form (the user form, a LaunchAgent, carries no UserName)
   <fleet>           the fleet tree this file is in
-  <python>          the interpreter every fleet job runs: `agent-daemons.py jobs
-                    --json`'s `python` (FLEET_PYTHON, else host.json's python, else
-                    launchd's default), the one place the fleet writes it down
+  <python>          the interpreter every fleet job runs: agent-daemons.py's python()
+                    (FLEET_PYTHON, else host.json's python, else launchd's default),
+                    the one place the fleet writes it down. No transport descriptor
+                    is read: neither job runs a chat transport (interpreter())
   <path>            the directory of each command the job runs by a bare name, as found
                     on THIS process's PATH - tmux for the watchdog; tmux, then claude,
                     for the session - then <python>'s directory, then
@@ -83,7 +84,7 @@ the session runs as the agents user, which may change its own programs.
 Exit codes: 0 rendered; 1 refused, nothing written; 2 usage.
 """
 import argparse
-import json
+import importlib.util
 import os
 import plistlib
 import pwd
@@ -116,18 +117,24 @@ def refuse(msg):
 
 
 def interpreter():
-    """The fleet's job interpreter, as agent-daemons.py's job table states it for launchd."""
-    env = dict(os.environ, FLEET_SERVICE_BACKEND="launchd", PYTHONDONTWRITEBYTECODE="1")
-    argv = [sys.executable, os.path.join(FLEET, "systemd", "agent-daemons.py"), "jobs", "--json"]
+    """The fleet's job interpreter under launchd: agent-daemons.py's python(), the one
+    place the fleet writes it down (the `python` of its `jobs --json`).
+
+    ⚠️ IT CALLS python() ITSELF, NEVER `jobs --json`, AND THAT IS LOAD-BEARING. The job
+    table reads every skill's transport.json, and one broken descriptor refuses the
+    whole table, so a render that asked it for one value refused every watchdog and
+    session on the host for a chat skill neither runs. Neither job reads a transport;
+    a broken descriptor is the daemons' finding (`agent-daemons.py`, `fleet install`),
+    and render-plist.test.py's T pins that both jobs render beside one."""
+    os.environ["FLEET_SERVICE_BACKEND"] = "launchd"   # every job this renders is launchd's
+    path = os.path.join(FLEET, "systemd", "agent-daemons.py")
     try:
-        p = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=60)
-    except (OSError, subprocess.SubprocessError) as e:
-        refuse(f"agent-daemons.py jobs --json did not run ({type(e).__name__}: {e})")
-    try:
-        return json.loads(p.stdout)["python"]
-    except (ValueError, KeyError, TypeError):
-        refuse(f"agent-daemons.py jobs --json names no interpreter (exit {p.returncode}: "
-               f"{p.stderr.strip()[-300:]})")
+        spec = importlib.util.spec_from_file_location("agent_daemons", path)
+        daemons = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(daemons)
+        return daemons.python()
+    except Exception as e:  # noqa: BLE001 - whatever stops it, it names no interpreter
+        refuse(f"{path} names no interpreter ({type(e).__name__}: {e})")
 
 
 def runs(argv, path):
