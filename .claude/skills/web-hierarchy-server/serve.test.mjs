@@ -97,6 +97,13 @@
 //   contained makes "the tree lost it" true for free, and a vacuously true
 //   control is a decorative one.
 //
+// 11. THE "ACTIVE ONLY" VIEW IS APPLIED BY THE ROUTE. GET /state?view=active
+//     draws the alive block and the root and not the stopped block, while the
+//     default /state draws all three: a pair, so a route that ignored ?view
+//     reds here. It also requires the tree ROWS to stay complete in that view
+//     (the view filters the graph, nothing else) and an unknown view to be
+//     "all". It runs before leg 10, which deletes the alive agent it needs.
+//
 // EXIT CODES - THREE, NEVER TWO:
 //   0  PASS      every leg green.
 //   1  FAIL      a real disagreement between the server and the fixture.
@@ -402,6 +409,37 @@ check('GET / bakes the root session\'s log', page.body.includes(ONLY_IN_ROOT_LOG
 check('GET / bakes NO subagent log', !page.body.includes(ONLY_IN_ALIVE_LOG));
 check('GET / still carries the whole tree', page.body.includes(`"${STOPPED_AGENT}"`) && page.body.includes(`"${ALIVE_AGENT}"`));
 
+// --- leg 11: the "active only" view, through the route ---------------------
+// Runs BEFORE leg 10, which deletes the alive agent this leg needs. view.test.mjs
+// measures filterView() on its own; this leg measures that GET /state actually
+// applies it, which a pure-function test cannot see. The pair: the default
+// /state draws all three blocks (leg 3's `state`), the active view draws the
+// alive one and the root and NOT the stopped one - so a route that ignored
+// ?view passes the first half and reds the second.
+const nodeIn = (svg, id) => String(svg).includes(`id="node-${id}"`);
+check('the default /state draws every block (the "all" control)',
+  nodeIn(state.svg, 'root') && nodeIn(state.svg, ALIVE_AGENT) && nodeIn(state.svg, STOPPED_AGENT));
+check('the default /state says it is the "all" view', state.view === 'all', `got ${state.view}`);
+const activeView = await getJson('/state?view=active', 'the active view');
+check('GET /state?view=active returns 200', activeView.status === 200, `status ${activeView.status}`);
+const av = activeView.json || {};
+check('the active view says so', av.view === 'active', `got ${av.view}`);
+check('the active view draws the alive block', nodeIn(av.svg, ALIVE_AGENT));
+// The fixture root is stopped and is the alive block's parent, so this is the
+// ANCESTOR rule seen through the route. "The root shows with nothing active"
+// is a different rule, and this fixture cannot see it: view.test.mjs leg 2 does.
+check('the active view draws the stopped root the alive block hangs from', nodeIn(av.svg, 'root'));
+check('the active view does NOT draw the stopped block', !nodeIn(av.svg, STOPPED_AGENT));
+check('the active view reports how many blocks it drew', av.shown === 2, `got ${av.shown}`);
+// The view filters the GRAPH only: the tree rows stay complete, so a from-link
+// or a #a-<id> hash to a hidden agent still resolves and the stamp still counts
+// the whole session.
+check('the active view still carries every tree row', (av.agents || []).some((a) => a.id === STOPPED_AGENT)
+  && (av.agents || []).length === state.agents.length, `${(av.agents || []).length} rows vs ${state.agents.length}`);
+const bogus = await getJson('/state?view=bogus', 'an unknown view');
+check('an unknown view is the "all" view', bogus.json?.view === 'all' && nodeIn(bogus.json?.svg, STOPPED_AGENT));
+check('GET / carries the view switch', page.body.includes('data-view="active"') && page.body.includes('data-view="all"'));
+
 // --- leg 10: the negative control -----------------------------------------
 // Remove one subagent's transcript and ask again. See the header: a control
 // that does not fire is NO VERDICT, and a control the tree never contained is
@@ -435,5 +473,5 @@ if (fails.length) {
   for (const f of fails) console.log(`  - ${f}`);
   process.exit(1);
 }
-console.log('\nPASS - server, tree, lazy logs, images by hash, and the negative control.');
+console.log('\nPASS - server, tree, lazy logs, images by hash, the active view, and the negative control.');
 process.exit(0);

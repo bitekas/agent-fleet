@@ -8,7 +8,8 @@ description: >
   wrote, builds a spawn-tree graph of the root session and every subagent
   under it (type, task description, model, start/end time, alive or stopped,
   last log line), and serves ONE standalone HTML document at GET / with a
-  GET /state JSON snapshot the page polls every 10s to patch itself in place.
+  GET /state JSON snapshot the page polls every 10s to patch itself in place;
+  a switch on the page draws all agents (the default) or only the active ones.
   The TREE is served and the LOGS are fetched: a log arrives from
   GET /agent/<id> when the viewer selects that agent, incrementally via
   ?since=<n>, and images come from GET /img/<hash>, so the page stays
@@ -85,7 +86,7 @@ So the payload is split, and each route carries one kind of thing:
 | Route | Carries | Costs |
 |---|---|---|
 | `GET /` | the whole tree, the ROOT session's log, and that content's images inline as data URIs | one document, complete without a server |
-| `GET /state` | the whole tree and NO logs (`?logs=<id>,<id>` names exceptions) | what the 10s poll pays, every tick, for ever |
+| `GET /state` | the whole tree and NO logs (`?logs=<id>,<id>` names exceptions); `?view=active` narrows the GRAPH to the active view | what the 10s poll pays, every tick, for ever |
 | `GET /agent/<id>` | exactly that agent's rendered log | one fetch, when the viewer selects a block |
 | `GET /agent/<id>?since=<n>` | only events from index `n` | an empty array for a quiet agent |
 | `GET /img/<hash>` | one image by content hash, `immutable` | once per image per viewer, then cached |
@@ -190,7 +191,13 @@ a basename match would hand every agent the first entry's port.
   shipping only what is new, an image served by hash byte for byte), and then
   DELETES one subagent's transcript and requires the tree AND the per-agent route
   to lose it. Its header states why each leg is there, which pair each size leg
-  is half of, and why the negative control is the load-bearing part.
+  is half of, and why the negative control is the load-bearing part. Leg 11
+  requires `GET /state?view=active` to drop the stopped block that the default
+  view draws.
+- `view.test.mjs` - the "active only" rule on its own (`filterView()` over a
+  synthetic tree): alive blocks, the blocks above them and the root, with the
+  stopped siblings and children next to them dropped, and "all" returning every
+  row unchanged.
 - `format.test.mjs` - how the config is found and read: through `fleet where`
   when `WEB_HIERARCHY_CONFIG` is unset (a fake fleet selected by `FLEET_BIN`),
   the variable winning, a failing fleet relayed rather than guessed past,
@@ -209,6 +216,18 @@ markers, task and user messages framed like console input).
   hangs off it. Blue = alive (with a rotating spinner arc beside the time range;
   static under `prefers-reduced-motion`), grey = stopped. Click a block to show
   that agent's full log below.
+- **An "all / active only" switch above the graph.** "all" is the default and
+  draws every block. "active only" draws the blue blocks, every block above
+  one of them, and the root: the alive flag is the one that colours a block,
+  so the switch never disagrees with the colours. The blocks above stay
+  because a parent waiting on a long child writes nothing to its own
+  transcript and reads as stopped while the child runs; without them the
+  child would hang from nothing. With nothing alive the view is the root
+  alone. The switch narrows the GRAPH only: the stamp still counts the whole
+  session (plus "N shown"), and a from-link or `#a-<id>` to a hidden agent
+  still opens its log. The choice is remembered per viewer in the browser's
+  `localStorage`; where storage is blocked the switch still works for that
+  visit. `format.mjs`'s `filterView()` is the rule; `view.test.mjs` pins it.
 - **Per-agent task description on every block.** Source of truth: the spawning
   `Agent` call's `description`, which the harness copies into
   `agent-<id>.meta.json`. Fallback when absent: the first line of the agent's

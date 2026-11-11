@@ -18,6 +18,10 @@
 //   GET /state            JSON snapshot: the tree for every agent (type, task,
 //                         model, times, alive/stopped, event count, last log
 //                         line) and NO logs, unless ?logs=<id>,<id> names some.
+//   GET /state?view=active  the same, with the GRAPH narrowed to the alive
+//                         blocks, their ancestors and the root (format.mjs
+//                         filterView); the tree rows stay complete. Any other
+//                         value, or none, is "all" - the default.
 //   GET /agent/<id>       JSON: that agent's rendered log, and nothing else.
 //   GET /agent/<id>?since=<n>   only events from index n - what the poll uses,
 //                         so a quiet agent costs an empty array per tick.
@@ -94,14 +98,16 @@ const currentSession = () => { try { return pickSession(PINNED); } catch { retur
 // /agent/<id> and its images from /img/<hash>, which the browser caches by
 // content hash. Handing data URIs to the poll is the 358MB regression in
 // miniature - the graph avatars alone are ~95KB of base64 every tick.
-const statePayload = ({ logsFor = [], bakeImgs = false } = {}) => {
+// `view` is the page's "active only / all" switch ("all" unless it is
+// "active"); it narrows the graph and `shown` counts the blocks drawn.
+const statePayload = ({ logsFor = [], bakeImgs = false, view = 'all' } = {}) => {
   const sid = currentSession();
   // No session has delegated yet: serve a complete, empty document rather than
   // exiting - the agent may not even be up, and the page must survive the wait.
-  if (!sid) return { sessionId: '', stamp: 'waiting for a session…', workingCount: 0, firstId: null, svg: '', imgs: {}, agents: [] };
-  const s = snapshot(sid, { capKB: CAPKB, logsFor });
+  if (!sid) return { sessionId: '', stamp: 'waiting for a session…', view: view === 'active' ? 'active' : 'all', shown: 0, workingCount: 0, firstId: null, svg: '', imgs: {}, agents: [] };
+  const s = snapshot(sid, { capKB: CAPKB, logsFor, view });
   return {
-    sessionId: s.sessionId, stamp: s.stamp, workingCount: s.workingCount, firstId: s.firstId,
+    sessionId: s.sessionId, stamp: s.stamp, view: s.view, shown: s.nodes.length, workingCount: s.workingCount, firstId: s.firstId,
     svg: svgMarkup(s), imgs: bakeImgs ? s.imgs : {},
     agents: s.agents.map((a) => ({
       id: a.id, type: a.type, desc: a.desc, header: a.header, active: a.active,
@@ -122,8 +128,9 @@ const shell = () => `<!doctype html><html><head><meta charset="utf-8">
 <title>Agent hierarchy · live</title><style>${css()}</style></head><body><main>
   <h1>Agent hierarchy <span style="font-size:11px;color:var(--success)">● live</span></h1>
   <p class="stamp" id="stamp">connecting…</p>
+  <div class="viewsw" id="viewsw" role="group" aria-label="Which agents the graph shows"><span>show</span><button type="button" data-view="all" aria-pressed="true">all</button><button type="button" data-view="active" aria-pressed="false">active only</button></div>
   <div class="graphwrap" id="graph"></div>
-  <p class="hint">Blue = alive · grey = stopped. Click a block to load that agent's full log below; hover one to see what it is doing. Updates every 10s in place — your scroll and selection are preserved. Extended <em>thinking</em> is stored encrypted in subagent transcripts, so only its position is shown.</p>
+  <p class="hint">Blue = alive · grey = stopped; <em>active only</em> draws the alive blocks, the blocks they hang from and the root. Click a block to load that agent's full log below; hover one to see what it is doing. Updates every 10s in place — your scroll and selection are preserved. Extended <em>thinking</em> is stored encrypted in subagent transcripts, so only its position is shown.</p>
   <div id="logs"></div>
 </main>
 <script>
@@ -224,7 +231,8 @@ const shell = () => `<!doctype html><html><head><meta charset="utf-8">
   }
   function update(snap, first) {
     document.getElementById('stamp').innerHTML = snap.sessionId
-      ? 'session <code>' + snap.sessionId.slice(0, 8) + '</code> · ' + snap.stamp + ' · <b>' + snap.workingCount + ' working</b> · ' + snap.agents.length + ' agents · live (10s)'
+      ? 'session <code>' + snap.sessionId.slice(0, 8) + '</code> · ' + snap.stamp + ' · <b>' + snap.workingCount + ' working</b> · ' + snap.agents.length + ' agents'
+        + (snap.view === 'active' ? ' (' + snap.shown + ' shown)' : '') + ' · live (10s)'
       : snap.stamp + ' · live (10s)';
     // The server follows the newest session, so the id can change under a
     // long-lived page (/exit, an agent restart). Agent ids are per-session:
@@ -243,13 +251,37 @@ const shell = () => `<!doctype html><html><head><meta charset="utf-8">
     var t = ev.target && ev.target.closest ? ev.target.closest('.fromlink') : null;
     if (t && t.dataset.id) { ev.preventDefault(); select(t.dataset.id, true); window.scrollTo(0, 0); }
   });
-  update(INIT, true); // baked-in snapshot: the tree and the root log render with no server
-  function tick() {
-    fetch('state').then(function (r) { return r.json(); })
-      .then(function (snap) { update(snap, false); })
-      .catch(function () {})
-      .then(function () { setTimeout(tick, 10000); });
+  // The "active only / all" switch. "all" is the default and is what the baked
+  // INIT snapshot draws. The choice is remembered per viewer in localStorage,
+  // and EVERY storage access is inside try/catch: storage throws in a private
+  // window, with blocked site data or in a sandboxed frame, and the page must
+  // then still work, holding the choice in memory for this visit only.
+  var VIEW_KEY = 'web-hierarchy-server.view', VIEW = 'all';
+  try { if (window.localStorage.getItem(VIEW_KEY) === 'active') VIEW = 'active'; } catch (e) {}
+  function paintView() {
+    var bs = document.querySelectorAll('#viewsw button');
+    for (var i = 0; i < bs.length; i++) bs[i].setAttribute('aria-pressed', bs[i].dataset.view === VIEW ? 'true' : 'false');
   }
+  // One fetch of the tree in the current view. A response for a view the viewer
+  // has switched away from since is dropped, so a poll in flight across a click
+  // cannot paint the old view back for ten seconds.
+  function refresh() {
+    var asked = VIEW;
+    return fetch(asked === 'active' ? 'state?view=active' : 'state').then(function (r) { return r.json(); })
+      .then(function (snap) { if (asked === VIEW) update(snap, false); })
+      .catch(function () {});
+  }
+  document.getElementById('viewsw').addEventListener('click', function (ev) {
+    var b = ev.target && ev.target.closest ? ev.target.closest('button[data-view]') : null;
+    if (!b || b.dataset.view === VIEW) return;
+    VIEW = b.dataset.view === 'active' ? 'active' : 'all';
+    try { window.localStorage.setItem(VIEW_KEY, VIEW); } catch (e) {}
+    paintView(); refresh();
+  });
+  paintView();
+  update(INIT, true); // baked-in snapshot: the tree and the root log render with no server
+  if (VIEW !== 'all') refresh(); // a remembered "active only" is applied at once, not at the first poll
+  function tick() { refresh().then(function () { setTimeout(tick, 10000); }); }
   setTimeout(tick, 10000);
 })();
 </script></body></html>`;
@@ -292,7 +324,7 @@ const server = createServer((req, res) => {
   const path = u.pathname;
   if (path === '/state') {
     return guard(req, res, () => send(req, res, 200, 'application/json',
-      JSON.stringify(statePayload({ logsFor: ids(u.searchParams.get('logs')), bakeImgs: false }))));
+      JSON.stringify(statePayload({ logsFor: ids(u.searchParams.get('logs')), bakeImgs: false, view: u.searchParams.get('view') }))));
   }
   if (path.startsWith('/agent/')) {
     return guard(req, res, () => {

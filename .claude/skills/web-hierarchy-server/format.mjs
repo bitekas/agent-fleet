@@ -922,10 +922,39 @@ export function agentLog(sessionId, id, { capKB = 16, since = 0 } = {}) {
   };
 }
 
+// The page's "active only / all" switch: which tree rows the GRAPH draws.
+// `rows` are {id, parentId, active}; `active` is the same alive flag that
+// colours a block blue. "active" keeps every active row, every ancestor of one,
+// and the root; every other `view` value is "all" (the default) and returns
+// `rows` unchanged. The result is the same row objects in input order.
+//
+// The ancestor rule is not decoration: a parent waiting on a long child writes
+// nothing to its own transcript, so it reads as stopped while its child runs.
+// Drop it and that child is drawn with no edge to anything, or hung under a
+// block that never spawned it. The root always shows because it is the session
+// the page follows: with nothing active the view is the root alone, never an
+// empty graph that reads as "no session". view.test.mjs pins both.
+export function filterView(rows, view) {
+  if (view !== 'active') return rows;
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const keep = new Set();
+  for (const r of rows) {
+    if (!r.active && r.id !== ROOT_ID) continue;
+    // Walk up until a row already kept (its ancestors are kept too) or a parent
+    // outside the set; the `keep` check also ends a cyclic parent chain.
+    for (let x = r; x && !keep.has(x.id); x = byId.get(x.parentId)) keep.add(x.id);
+  }
+  return rows.filter((r) => keep.has(r.id));
+}
+
 // The whole tree, plus the logs of the agents named in `logsFor`.
 // `logsFor: null` = every log (build.mjs's self-contained bake); an array or
 // Set = exactly those, and every other agent contributes its tree row only.
-export function snapshot(sessionId, { capKB = 16, logsFor = null } = {}) {
+// `view` ("all" | "active", see filterView) narrows the GRAPH - nodes, edges,
+// layout and canvas size - and nothing else: `agents` stays the whole session,
+// so a from-link or a #a-<id> hash to a hidden agent still resolves and the
+// stamp still counts every agent.
+export function snapshot(sessionId, { capKB = 16, logsFor = null, view = 'all' } = {}) {
   const CAP = capKB * 1024;
   const now = Date.now();
   const fleet = fleetName();
@@ -964,10 +993,14 @@ export function snapshot(sessionId, { capKB = 16, logsFor = null } = {}) {
     }
   }
 
-  // spawn map + tidy-tree layout
+  // spawn map + tidy-tree layout, over the rows the view draws. filterView's
+  // result is ancestor-closed, so every drawn block's parent is drawn too and
+  // the layout below needs no other change.
   const kids = childByToolUse(metas);
-  const childrenOf = (id) => [...raw.values()].filter((a) => a.meta.parentAgentId === id).sort((x, y) => (x.startTs || 0) - (y.startTs || 0));
-  const roots = [...raw.values()].filter((a) => !a.meta.parentAgentId || !raw.has(a.meta.parentAgentId)).sort((x, y) => (x.startTs || 0) - (y.startTs || 0));
+  const viewName = view === 'active' ? 'active' : 'all';
+  const drawn = new Set(filterView([...raw.values()].map((a) => ({ id: a.id, parentId: a.meta.parentAgentId || null, active: a.active })), viewName).map((r) => r.id));
+  const childrenOf = (id) => [...raw.values()].filter((a) => drawn.has(a.id) && a.meta.parentAgentId === id).sort((x, y) => (x.startTs || 0) - (y.startTs || 0));
+  const roots = [...raw.values()].filter((a) => drawn.has(a.id) && (!a.meta.parentAgentId || !raw.has(a.meta.parentAgentId))).sort((x, y) => (x.startTs || 0) - (y.startTs || 0));
   const pos = new Map(); let leaf = 0, maxDepth = 0;
   const layout = (a, depth) => {
     maxDepth = Math.max(maxDepth, depth);
@@ -1019,14 +1052,16 @@ export function snapshot(sessionId, { capKB = 16, logsFor = null } = {}) {
 
   const nodes = [], edges = [], agents = [];
   for (const a of raw.values()) {
-    const p = pos.get(a.id); if (!p) continue;
+    // No position = a block this view does not draw: it still gets its tree
+    // row below, and no node or edge.
+    const p = pos.get(a.id);
     const type = a.meta.agentType || '?';
     const ident = idents.get(a.id) || null;
     const isRoot = a.id === ROOT_ID;
     const descText = descOf(a);
     const dim = dims.get(a.id);
     const lastLine = lastLineOf(a.events);
-    nodes.push({
+    if (p) nodes.push({
       id: a.id, type, typeShort: type.length > 26 ? type.slice(0, 25) + '…' : type,
       name: ident?.name || '', avatarHash: ident ? avatarRef(ident.avatarPath) : null,
       desc: descText, descLines: dim.descLines, timesY: dim.timesY, h: dim.h,
@@ -1038,7 +1073,7 @@ export function snapshot(sessionId, { capKB = 16, logsFor = null } = {}) {
       x: cx(p.col) - BW / 2, y: rowTop[p.depth],
       times: `${hhmmss(a.startTs)} → ${a.active ? 'live' : hhmmss(a.endTs)}`,
     });
-    if (a.meta.parentAgentId && pos.has(a.meta.parentAgentId)) {
+    if (p && a.meta.parentAgentId && pos.has(a.meta.parentAgentId)) {
       const pp = pos.get(a.meta.parentAgentId);
       edges.push({ x1: cx(pp.col), y1: rowTop[pp.depth] + dims.get(a.meta.parentAgentId).h, x2: cx(p.col), y2: rowTop[p.depth] });
     }
@@ -1065,7 +1100,7 @@ export function snapshot(sessionId, { capKB = 16, logsFor = null } = {}) {
     });
   }
   return {
-    sessionId, now, workingCount: agents.filter((a) => a.active).length,
+    sessionId, now, view: viewName, workingCount: agents.filter((a) => a.active).length,
     // Variable node heights: canvas height is the last row's top + its tallest
     // node + bottom pad, not a uniform-BH formula.
     svgW: PAD * 2 + maxCol * (BW + HGAP) + BW,
@@ -1111,6 +1146,11 @@ export function css() {
   code { font:inherit; color:var(--permission); }
   .stamp { font-size:11.5px; color:var(--inactive); margin:0 0 12px; }
   .stamp b { color:var(--success); }
+  /* the live page's "active only / all" switch (serve.mjs) */
+  .viewsw { font-size:11.5px; color:var(--inactive); margin:-6px 0 10px; display:flex; gap:6px; align-items:center; }
+  .viewsw button { font:inherit; color:var(--inactive); background:var(--bg); border:1px solid var(--subtle); border-radius:4px; padding:2px 9px; cursor:pointer; }
+  .viewsw button:hover { color:var(--fg); border-color:var(--border); }
+  .viewsw button[aria-pressed="true"] { color:var(--success); border-color:var(--success); background:rgba(51,153,255,.12); }
   .graphwrap { overflow-x:auto; border:1px solid var(--panel); border-radius:6px; background:var(--bg); padding:10px; margin-bottom:8px; }
   svg { display:block; }
   .edge { fill:none; stroke:var(--subtle); stroke-width:1.4; }
