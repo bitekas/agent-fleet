@@ -13,9 +13,23 @@ into it in raw mode, and the real watchdog.py with stall_secs 2 polling it.
            that merely PRINTED a chooser) receives nothing in the same time. Its
            silence means something only because `fires`, on the same text without
            the footer, was answered: the idle exclusion is what decides.
+  blind    `watchdog.py --once` against that live session with a PATH that holds no
+           tmux - the PATH a service manager hands a job whose tmux is not in the
+           directories it names, which is how a LaunchDaemon on a Mac without
+           Homebrew went up and blind. The failure must be RECORDED: a state file
+           whose capture_error names tmux and the PATH searched, and an ERROR line
+           naming both. Without the record the only trace is a log line, and
+           installation/check can only guess the cause. The same watchdog's next
+           poll with tmux reachable must drop the record: a capture_error that
+           outlived its cause would report a recovered watchdog blind for ever.
+  blind control  the same `--once`, the same session and config, with tmux's own
+           directory as the whole PATH: a state file with a digest and no
+           capture_error. It is what makes `blind` about the PATH and nothing else.
+           If the control does not capture, `blind` issues no verdict.
 
-Exit codes: 0 both hold; 1 a case failed; 3 NO VERDICT (no tmux, or the pane never
-showed the prompt, so nothing below could be about the watchdog).
+Exit codes: 0 every case holds; 1 a case failed; 3 NO VERDICT (no tmux, the pane
+never showed the prompt, or the blind control did not capture, so nothing below
+could be about the watchdog).
 """
 import json
 import os
@@ -97,9 +111,9 @@ def main():
                f"{sys.executable} {pane_py} {text} {log}")
         return log, r
 
-    def watchdog(name):
+    def config(name, target):
         cfg = json.loads(json.dumps(base))
-        cfg["tmux"] = {"tmpdir": run, "target": f"{name}:0"}
+        cfg["tmux"] = {"tmpdir": run, "target": f"{target}:0"}
         cfg["stall"]["stall_secs"] = 2
         cfg["stall"]["poll_secs"] = 0.5
         cfg["state"]["dir"] = os.path.join(tmp, f"state-{name}")
@@ -108,9 +122,31 @@ def main():
         path = os.path.join(tmp, f"{name}.json")
         with open(path, "w", encoding="utf-8") as f:
             json.dump(cfg, f)
+        return path, os.path.join(cfg["state"]["dir"], cfg["state"]["prefix"] + ".json")
+
+    def watchdog(name):
+        path, _ = config(name, name)
         out = open(os.path.join(tmp, f"{name}.log"), "w")
         return subprocess.Popen([sys.executable, WATCHDOG], env=dict(env, STALL_WATCHDOG_CONFIG=path),
                                 stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, cwd=tmp)
+
+    configs = {}
+
+    def once(name, path_var):
+        """watchdog.py --once on the `fire` session with PATH=path_var and nothing
+        else changed -> (stderr, the saved state or None). A name used again reuses
+        its config and state directory: the next poll of the same watchdog."""
+        if name not in configs:
+            configs[name] = config(name, "fire")
+        cfg_path, state_file = configs[name]
+        p = subprocess.run([sys.executable, WATCHDOG, "--once"], capture_output=True, text=True,
+                           env=dict(env, STALL_WATCHDOG_CONFIG=cfg_path, PATH=path_var),
+                           stdin=subprocess.DEVNULL, cwd=tmp, timeout=60)
+        try:
+            with open(state_file, encoding="utf-8") as f:
+                return p.stderr, json.load(f)
+        except FileNotFoundError:
+            return p.stderr, None
 
     def keys(log):
         with open(log, "rb") as f:
@@ -127,6 +163,29 @@ def main():
             print(f"NO VERDICT: the panes never showed the prompt ({r1.stderr.strip()} {r2.stderr.strip()})")
             return 3
         print("[PASS] control: both panes show the captured prompt; the idle one ends in the idle footer")
+
+        # blind control first: the same session, reachable, captures.
+        _, seen = once("seeing", os.path.dirname(tmux))
+        if not (isinstance(seen, dict) and seen.get("digest") and "capture_error" not in seen):
+            print(f"NO VERDICT: with tmux's own directory as PATH, --once did not capture ({seen!r}), "
+                  f"so a failure without it would say nothing about PATH")
+            return 3
+        print("[PASS] blind control: with tmux's directory as the whole PATH, --once captures the live session")
+        no_tmux = os.path.join(tmp, "no-tmux-bin")
+        os.makedirs(no_tmux)
+        err, blind = once("blind", no_tmux)
+        cap = (blind or {}).get("capture_error") or {}
+        check("blind: a PATH without tmux leaves a state file recording the failure",
+              blind is not None, f"no state file at all; stderr {err.strip()!r}")
+        check("blind: its capture_error names tmux, the PATH searched, and that tmux could not be started",
+              cap.get("kind") == "start" and "tmux" in cap.get("error", "") and cap.get("path") == no_tmux,
+              repr(cap))
+        check("blind: the ERROR line names tmux and the PATH searched",
+              any(ln.startswith("WATCHDOG-ERROR") and "tmux" in ln and no_tmux in ln for ln in err.splitlines()),
+              err.strip())
+        _, healed = once("blind", os.path.dirname(tmux))
+        check("blind recovers: the same watchdog's next poll that captures drops capture_error",
+              isinstance(healed, dict) and healed.get("digest") and "capture_error" not in healed, repr(healed))
         procs = [watchdog("fire"), watchdog("idle")]
         fired = wait_for(lambda: notice[:40].encode() in keys(fire_log), 25)
         got = keys(fire_log)

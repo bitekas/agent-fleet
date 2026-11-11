@@ -18,6 +18,15 @@ THE CONTROL. The protected form with every leg made to pass must exit 0 with OK:
 it is the positive evidence that every leg was reached and can pass. If it does
 not, no case below can say which leg its verdict is about: NO VERDICT (exit 3).
 
+THE BLIND CASES ARE WRITTEN BY THE REAL watchdog.py, never by this file: `--once`
+with this config and a PATH that holds no tmux (the job a PATH without tmux
+renders), and with tmux's own directory as PATH against a socket directory with no
+server. Each writes the state file as the daemon does, and the check must print
+the cause the daemon recorded - the PATH for the first, the TMUX_TMPDIR hint only
+for the second, where it is right. A state file hand-written here would pin a shape
+the daemon may no longer write; the pair is the contract between the two files.
+The second needs a tmux binary; without one the run is NO VERDICT.
+
 Run: python3 .claude/skills/stall-watchdog/installation/check.test.py
 Exits 0 when every case passes, 1 on a failure, 3 on NO VERDICT.
 """
@@ -67,6 +76,9 @@ class Rig:
         cfg["tmux"]["tmpdir"] = self.tmux_dir
         cfg["state"]["dir"] = self.state_dir
         cfg["owner"]["claude_config_dir"] = None
+        # Two polls fit inside the second the rig waits after starting the job, so
+        # "too early to tell" never answers for a case that needs a verdict.
+        cfg["stall"]["poll_secs"] = 0.5
         self.config = os.path.join(tmp, "stall-watchdog.json")
         with open(self.config, "w", encoding="utf-8") as f:
             json.dump(cfg, f)
@@ -96,7 +108,8 @@ class Rig:
             text = f.read()
         values = {"<launchd-prefix>": "com.agent-fleet-test", "<agent>": "ada", "<user>": "ada",
                   "<checkout>": self.tmp, "<fleet>": REPO, "<agents-root>": self.tmp,
-                  "<state dir>": self.state_dir, "<tmux-dir>": self.tmux_dir}
+                  "<state dir>": self.state_dir, "<tmux-dir>": self.tmux_dir,
+                  "<python>": sys.executable, "<path>": "/usr/bin:/bin:/usr/sbin:/sbin"}
         for k, v in values.items():
             text = text.replace(k, v)
         text = text.replace(f"{self.tmp}/ada/config/stall-watchdog.json", self.config)
@@ -136,6 +149,16 @@ class Rig:
                            text=True, stdin=subprocess.DEVNULL, timeout=60)
         lines = [ln for ln in p.stdout.splitlines() if ln.strip()]
         return p.returncode, (lines[-1] if lines else ""), p.stdout + p.stderr
+
+    def once(self, path_var):
+        """The real watchdog.py --once with this config and PATH=path_var: one poll, its
+        state file written (or not) exactly as the daemon writes it."""
+        if os.path.exists(self.state_file):
+            os.remove(self.state_file)
+        env = dict(self.env, STALL_WATCHDOG_CONFIG=self.config, PATH=path_var)
+        env.pop("TMUX", None)
+        return subprocess.run([sys.executable, os.path.join(SKILL, "watchdog.py"), "--once"], env=env,
+                              capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=60)
 
 
 def main():
@@ -211,6 +234,44 @@ def main():
         check("no plist names this config: exit 2, naming the plist example",
               rc == 2 and "no launchd job names STALL_WATCHDOG_CONFIG" in last
               and "agent-stall-watchdog.plist.example" in last, f"rc={rc} last={last!r}")
+
+        # BLIND, recorded by the real watchdog.py (see the header).
+        tmux = shutil.which("tmux")
+        if not tmux:
+            print("NO VERDICT: no tmux on PATH, so the blind case of a tmux that RAN cannot be written")
+            return 3
+        rig.reset()
+        rig.load(rig.plist(rig.system_dir), "system", rig.sleeper.pid)
+        no_tmux = os.path.join(tmp, "no-tmux-bin")
+        os.makedirs(no_tmux)
+        p = rig.once(no_tmux)
+        rc, last, _ = rig.run()
+        check("a watchdog whose PATH reaches no tmux: exit 1 BLIND naming tmux, that PATH and the "
+              "re-render, never the TMUX_TMPDIR hint",
+              rc == 1 and "BLIND" in last and "cannot start tmux" in last and f"on PATH={no_tmux})" in last
+              and "render-plist.py" in last and "TMUX_TMPDIR" not in last,
+              f"rc={rc} last={last!r} watchdog stderr={p.stderr.strip()!r}")
+        p = rig.once(os.path.dirname(tmux))
+        rc, last, _ = rig.run()
+        check("a watchdog whose tmux RAN and found no server: exit 1 BLIND with tmux's own words and "
+              "the TMUX_TMPDIR hint",
+              rc == 1 and "BLIND" in last and "last capture failed" in last and rig.tmux_dir in last
+              and "Check the job's TMUX_TMPDIR" in last and "render-plist" not in last,
+              f"rc={rc} last={last!r} watchdog stderr={p.stderr.strip()!r}")
+
+        # A job that has run longer than two polls (the rig's poll is 0.5 s; its pid
+        # started over a second ago) and never wrote its state has not completed one
+        # poll: the line sends the reader to its log, never to a guessed tmux cause.
+        rig.reset()
+        if os.path.exists(rig.state_file):
+            os.remove(rig.state_file)
+        rig.load(rig.plist(rig.system_dir), "system", rig.sleeper.pid)
+        rc, last, _ = rig.run()
+        check("a job that ran past two polls and never wrote its state: exit 1 BLIND, naming its log, "
+              "no tmux guess",
+              rc == 1 and "has not completed one poll" in last
+              and "tail -n 30 " + os.path.join(rig.state_dir, "watchdog.log") in last
+              and "TMUX_TMPDIR" not in last, f"rc={rc} last={last!r}")
     finally:
         if rig is not None:
             rig.sleeper.kill()

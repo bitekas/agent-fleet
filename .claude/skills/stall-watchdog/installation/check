@@ -23,8 +23,9 @@ because the code alone cannot carry that difference.
 this config, so every required key is resolved by the same loader the daemon uses;
 it finds the systemd unit BY the config path it names, so a unit pointing somewhere
 else cannot be mistaken for this one; and it compares the state file's mtime against
-the service start, which is the only cheap proof that captures are actually landing.
-A marker file can lie; none of those can.
+the service start and reads the capture_error a failed poll records in it, which
+together are the only cheap proof that captures are actually landing. A marker file
+can lie; none of those can.
 
 ⚠️ THE SERVICE IS FOUND ON THE HOST'S SERVICE MANAGER (fleetlib.services: systemd,
 or launchd on macOS). Under systemd it is the system unit whose Environment= names
@@ -632,11 +633,14 @@ def main() -> None:
             out(1, f"STALE: {unit} is installed and enabled but '{active}'. The session it "
                    f"watches is unsupervised right now. journalctl -u {unit} -n 30")
 
-    # Proof of CAPTURE, not merely of running. A capture failure raises before
-    # save_state, so a state file older than the service start is the exact signature
-    # of a watchdog that is up and blind - which the service manager reports as
-    # healthy. The start is the running process's (services.started_at); an active
-    # service whose start cannot be read is NO VERDICT, never a skipped leg.
+    # Proof of CAPTURE, not merely of running. Every poll saves the state file, and
+    # a poll whose capture failed saves it with `capture_error` (watchdog.py's
+    # CaptureError), so the proof is a state file newer than the service start that
+    # holds no capture_error. A file older than the start is a watchdog that has not
+    # completed one poll; a capture_error is one that polls and cannot see. Both are
+    # up and blind, which the service manager reports as healthy. The start is the
+    # running process's (services.started_at); an active service whose start cannot
+    # be read is NO VERDICT, never a skipped leg.
     state_file = os.path.join(state_dir, watchdog.STATE_PREFIX + ".json")
     started = services.started_at(unit, scope)
     if started is None:
@@ -670,16 +674,49 @@ def main() -> None:
             out(1, f"NO VERDICT: {unit} started {ran_for:.0f}s ago and has not written "
                    f"{state_file} yet; the first poll is due within "
                    f"{watchdog.POLL_SECS:.0f}s. Too early to tell - re-run.")
-        where = ("the job's TMUX_TMPDIR" if backend == "launchd"
-                 else "ReadWritePaths for the tmux dir")
-        out(1, f"STALE: {unit} has run {ran_for:.0f}s and never wrote {state_file}. "
-               f"Every capture is failing: it is up and BLIND. Check {where}, and "
-               f"tmux.tmpdir against the live session.")
+        # ⚠️ NOT A CAPTURE FAILURE, AND THIS LINE MUST NOT GUESS ONE. A failed
+        # capture is recorded in the state file (the capture_error branch below
+        # names its cause), so a watchdog that never wrote it has not finished a
+        # single poll: it exits at start, or cannot save. Its log says which.
+        out(1, f"STALE: {unit} has run {ran_for:.0f}s and never wrote {state_file}: it has "
+               f"not completed one poll, so it is up and BLIND. A failed capture would have "
+               f"been recorded there, so read its log for the reason: "
+               f"{services.hint('log', unit, scope)}")
     age = os.path.getmtime(state_file)
     if time.time() - age > ran_for:
         out(1, f"STALE: {state_file} predates this run of {unit} (started "
                f"{ran_for:.0f}s ago). Nothing has been captured since it started: "
                f"up and BLIND. See technical/watchdog.md section 11.")
+    # THE CAUSE, IN THE DAEMON'S OWN WORDS. A state file written by a poll whose
+    # capture failed is fresh, so the legs above pass it: only its capture_error
+    # says the watchdog is blind. The TMUX_TMPDIR hint belongs to a tmux that RAN
+    # and failed; a tmux that cannot be started is the job's PATH, and pointing
+    # that reader at TMUX_TMPDIR sends them to the wrong file.
+    try:
+        with open(state_file, encoding="utf-8") as f:
+            saved = json.load(f)
+    except (OSError, ValueError):
+        saved = {}
+    cap = saved.get("capture_error") if isinstance(saved, dict) else None
+    if isinstance(cap, dict):
+        when = cap.get("at")
+        ago = f", {time.time() - when:.0f}s ago" if isinstance(when, (int, float)) else ""
+        if cap.get("kind") == "start":
+            if backend == "launchd":
+                fix = ("Re-render the job with installation/render-plist.py (`/adding-an-agent` "
+                       "section 5 step 7 runs it), which puts the directory of the tmux the "
+                       "session runs on the job's PATH, and install it again with the root "
+                       "command that step prints")
+            else:
+                fix = ("The unit runs with systemd's default PATH: install tmux as /usr/bin/tmux, "
+                       "where the session unit runs it from")
+            out(1, f"STALE: {unit} is up and BLIND: it cannot start tmux{ago} "
+                   f"({cap.get('error')}). {fix}.")
+        where = ("the job's TMUX_TMPDIR" if backend == "launchd"
+                 else "the unit's Environment=TMUX_TMPDIR=")
+        out(1, f"STALE: {unit} is up and BLIND: its last capture failed{ago} "
+               f"({cap.get('error')}). Check {where}, and tmux.tmpdir against the live "
+               f"session.")
 
     # Captures are landing. A watchdog the agent can switch off is still not the
     # service this skill installs: said before the version, which cannot change it.

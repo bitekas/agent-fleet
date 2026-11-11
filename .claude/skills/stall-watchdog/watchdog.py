@@ -290,6 +290,32 @@ def decide(state: dict, digest: str, is_prompt: bool, now: float,
 # Effects
 # --------------------------------------------------------------------------
 
+class CaptureError(RuntimeError):
+    """A tmux client command that did not reach the pane. `kind` says which way:
+
+      start    tmux could not be started at all (not on PATH, not executable): an
+               OSError from the exec. The message names the PATH that was searched,
+               because a service manager's PATH is not the shell's, and that
+               difference is the usual cause.
+      timeout  tmux did not answer within its timeout.
+      exit     tmux ran and failed (no server, no such session): the message is
+               tmux's own stderr.
+
+    ⚠️ IT IS RECORDED IN THE STATE FILE ON EVERY FAILED POLL (`capture_error`), AND
+    THAT IS WHAT MAKES A BLIND WATCHDOG LOUD. Without the record a failed capture
+    leaves nothing but a log line, and `installation/check` can only say "never
+    wrote its state" and guess at a cause - a guess that points at TMUX_TMPDIR when
+    the job's PATH has no tmux. The record is the cause, in the daemon's own words,
+    and `check` prints it. Removing it puts the guess back. The loop still never
+    exits on one: KeepAlive or Restart= would start it again every few seconds, and
+    the restart loop would hide the reason.
+    """
+
+    def __init__(self, kind, msg):
+        super().__init__(msg)
+        self.kind = kind
+
+
 def _tmux(*args, check=True) -> str:
     """Run a tmux client command against the server named by tmux.tmpdir.
 
@@ -317,10 +343,21 @@ def _tmux(*args, check=True) -> str:
     """
     env = dict(os.environ, TMUX_TMPDIR=TMUX_TMPDIR)
     env.pop("TMUX", None)
-    r = subprocess.run(("tmux",) + args, env=env, capture_output=True, text=True, timeout=20)
+    try:
+        r = subprocess.run(("tmux",) + args, env=env, capture_output=True, text=True, timeout=20)
+    except OSError as e:
+        raise CaptureError("start", f"tmux could not be started ({type(e).__name__}: {e}) "
+                                    f"on PATH={searched_path()}") from None
+    except subprocess.TimeoutExpired:
+        raise CaptureError("timeout", f"tmux {args[0]} did not answer within 20 s") from None
     if check and r.returncode != 0:
-        raise RuntimeError(f"tmux {' '.join(args)}: {r.stderr.strip()}")
+        raise CaptureError("exit", f"tmux {' '.join(args)}: {r.stderr.strip()}")
     return r.stdout
+
+
+def searched_path() -> str:
+    """The PATH a bare `tmux` is looked up on: this process's, else Python's default."""
+    return os.environ.get("PATH") or f"{os.defpath} (PATH unset: Python's default)"
 
 
 def capture_pane() -> str:
@@ -528,8 +565,19 @@ def main() -> None:
     while True:
         try:
             state = evaluate_once(state, time.time())
+            state.pop("capture_error", None)
             save_state(state)
-        except Exception as e:  # a transient tmux failure must not kill the watchdog
+        except CaptureError as e:
+            # Recorded, not only logged: see CaptureError. The stall cursor is kept,
+            # so a capture that recovers carries on where it left off.
+            log("ERROR", f"{e}")
+            state = dict(state, capture_error={"kind": e.kind, "error": str(e),
+                                               "path": searched_path(), "at": time.time()})
+            try:
+                save_state(state)
+            except Exception as e2:  # noqa: BLE001 - the state dir's own failure, logged
+                log("ERROR", f"{type(e2).__name__}: {e2}")
+        except Exception as e:  # a transient failure must not kill the watchdog
             log("ERROR", f"{type(e).__name__}: {e}")
         if once:
             return
