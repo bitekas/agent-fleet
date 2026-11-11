@@ -293,13 +293,15 @@ def decide(state: dict, digest: str, is_prompt: bool, now: float,
 class CaptureError(RuntimeError):
     """A tmux client command that did not reach the pane. `kind` says which way:
 
-      start    tmux could not be started at all (not on PATH, not executable): an
-               OSError from the exec. The message names the PATH that was searched,
-               because a service manager's PATH is not the shell's, and that
-               difference is the usual cause.
+      start    tmux could not be started from this PATH (not found, not
+               executable). The message names the PATH that was searched, because
+               a service manager's PATH is not the shell's, and that difference is
+               the usual cause.
+      os       any other OSError starting it (EMFILE, EAGAIN): the machine's.
       timeout  tmux did not answer within its timeout.
       exit     tmux ran and failed (no server, no such session): the message is
-               tmux's own stderr.
+               tmux's own stderr. A session that is simply down reads this way
+               too, so the cause named for it is one of two.
 
     ⚠️ IT IS RECORDED IN THE STATE FILE ON EVERY FAILED POLL (`capture_error`), AND
     THAT IS WHAT MAKES A BLIND WATCHDOG LOUD. Without the record a failed capture
@@ -345,9 +347,13 @@ def _tmux(*args, check=True) -> str:
     env.pop("TMUX", None)
     try:
         r = subprocess.run(("tmux",) + args, env=env, capture_output=True, text=True, timeout=20)
-    except OSError as e:
+    except (FileNotFoundError, PermissionError) as e:
+        # Not found on PATH, or found and not executable: what PATH reaches is the cause.
         raise CaptureError("start", f"tmux could not be started ({type(e).__name__}: {e}) "
                                     f"on PATH={searched_path()}") from None
+    except OSError as e:
+        # EMFILE, EAGAIN and the like: the machine, not the PATH. No remedy is guessed.
+        raise CaptureError("os", f"tmux could not be started ({type(e).__name__}: {e})") from None
     except subprocess.TimeoutExpired:
         raise CaptureError("timeout", f"tmux {args[0]} did not answer within 20 s") from None
     if check and r.returncode != 0:
@@ -401,9 +407,13 @@ def load_state() -> dict:
     path = os.path.join(STATE_DIR, f"{STATE_PREFIX}.json")
     try:
         with open(path) as fh:
-            return json.load(fh)
+            data = json.load(fh)
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
+    # A file holding valid JSON that is not an object (null, a number) is a cursor
+    # nobody can use: start afresh, or the first failed poll's record would raise
+    # inside the loop's handler and turn the watchdog into a restart loop.
+    return data if isinstance(data, dict) else {}
 
 
 def save_state(state: dict) -> None:

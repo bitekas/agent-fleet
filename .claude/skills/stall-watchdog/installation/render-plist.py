@@ -38,10 +38,12 @@ that is up and blind:
     PATH searched, never a render with a guess in it.
 
   * THE RENDERED PATH IS PROVED, NOT ASSUMED: `tmux -V` and the interpreter run here
-    under an environment holding ONLY that PATH, which is what launchd gives the
-    job. A tmux that is found but does not run (a broken link, a missing library)
-    and an interpreter that is not there both refuse. Checking that the files exist
-    would pass both.
+    under an environment holding ONLY that PATH. launchd gives the job that PATH
+    and adds HOME, USER and the like, so this is stricter than the job's start: an
+    interpreter that needs HOME to start at all (a pyenv shim) is refused - name the
+    real interpreter instead. A tmux that is found but does not run (a broken link,
+    a missing library) and an interpreter that is not there both refuse. Checking
+    that the files exist would pass both.
 
   * COMMENTS ARE DROPPED BEFORE THE FILL. A value carrying a double hyphen inside the
     template's XML comment would end the comment early and the plist would not
@@ -49,9 +51,12 @@ that is up and blind:
     rendered job.
 
 What it does not check: that this tmux is the one the session itself runs (the
-session plist's PATH decides that), and who can change the tmux or the PATH
-directories (install-agent-fleet's verify-privileges.py audits the job's
-interpreter, program and plist).
+session plist's PATH decides that; a different tmux build can refuse the
+session's server), and who can change the tmux or the PATH directories. On the
+supported layout both are Homebrew's, the administrator's; a tmux the agents user
+can change (in its own ~/.local/bin) is one the watched agent can replace, and
+install-agent-fleet's verify-privileges.py audits the job's interpreter, program
+and plist, not its tmux.
 
 Exit codes: 0 rendered; 1 refused, nothing written; 2 usage.
 """
@@ -142,7 +147,11 @@ def main():
     except Exception as e:  # noqa: BLE001 - fleetlib's refusal is the whole finding
         refuse(f"fleetlib names no launchd prefix ({type(e).__name__}: {e})")
 
-    values = {"launchd-prefix": prefix, "agent": a.agent, "user": pwd.getpwuid(os.getuid()).pw_name,
+    try:
+        user = pwd.getpwuid(os.getuid()).pw_name
+    except KeyError:
+        refuse(f"uid {os.getuid()} has no passwd entry, so the job has no UserName to run as")
+    values = {"launchd-prefix": prefix, "agent": a.agent, "user": user,
               "checkout": a.checkout, "fleet": FLEET, "agents-root": a.agents_root,
               "state dir": a.state_dir, "tmux-dir": a.tmux_dir, "python": py, "path": path}
     with open(TEMPLATE, encoding="utf-8") as f:
@@ -160,14 +169,19 @@ def main():
         job.pop("UserName", None)
 
     out_dir = os.path.dirname(os.path.abspath(a.out))
-    fd, tmp = tempfile.mkstemp(prefix=".render-plist.", dir=out_dir)
+    try:
+        fd, tmp = tempfile.mkstemp(prefix=".render-plist.", dir=out_dir)
+    except OSError as e:
+        refuse(f"cannot write in {out_dir} ({type(e).__name__}: {e})")
     try:
         with os.fdopen(fd, "wb") as f:
             plistlib.dump(job, f)
         os.chmod(tmp, 0o644)
         os.replace(tmp, a.out)
-    except BaseException:
+    except BaseException as e:
         os.unlink(tmp)
+        if isinstance(e, OSError):
+            refuse(f"cannot write {a.out} ({type(e).__name__}: {e})")
         raise
 
 

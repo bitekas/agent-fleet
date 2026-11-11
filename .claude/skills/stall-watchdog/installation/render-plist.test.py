@@ -80,9 +80,9 @@ def wrapper(d, target):
     return path
 
 
-def render(tmp, name, path_var, form="system", python=None):
+def render(tmp, name, path_var, form="system", python=None, out=None):
     python = python or os.path.join(tmp, "fleet-python", "python3")
-    out = os.path.join(tmp, name + ".plist")
+    out = out or os.path.join(tmp, name + ".plist")
     host = os.path.join(tmp, "host.json")
     env = {"PATH": path_var, "HOME": os.path.join(tmp, "home"), "FLEET_PYTHON": python,
            "FLEET_HOST_CONFIG": host, "PYTHONDONTWRITEBYTECODE": "1", "LANG": "C.UTF-8"}
@@ -112,8 +112,10 @@ def smoke_checks():
     check("S: a failed run prints the job's watchdog.log before the cleanup removes it",
           re.search(r'tail -n 20 "\$T/state/watchdog\.log"', body) is not None
           and body.find("tail -n 20") < body.find('rm -rf "$T"'), body[:300])
+    # The READ, not the word: the smoke's own ok line says "with no capture_error",
+    # so a bare mention would pass a smoke that only tests the file exists.
     check("S: the smoke's capture property reads capture_error, not the state file alone",
-          "capture_error" in code)
+          re.search(r'\.get\("capture_error"\)', code) is not None)
 
 
 def main():
@@ -187,6 +189,11 @@ def main():
         check("N: an interpreter that does not exist: refused naming it, nothing written",
               p.returncode == 1 and len(lines) == 1 and lines[0].startswith("NOT RENDERED:")
               and gone in lines[0] and not os.path.exists(out_g), f"rc={p.returncode} {lines!r}")
+        p, _ = render(tmp, "no-dir", tbin, out=os.path.join(tmp, "no-such-dir", "x.plist"))
+        lines = p.stdout.splitlines()
+        check("N: an --out in a directory that does not exist: ONE NOT RENDERED line, no traceback",
+              p.returncode == 1 and len(lines) == 1 and lines[0].startswith("NOT RENDERED: cannot write")
+              and "Traceback" not in p.stderr, f"rc={p.returncode} {lines!r} {p.stderr[-200:]!r}")
 
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

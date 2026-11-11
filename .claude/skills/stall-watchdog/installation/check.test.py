@@ -253,10 +253,11 @@ def main():
               f"rc={rc} last={last!r} watchdog stderr={p.stderr.strip()!r}")
         p = rig.once(os.path.dirname(tmux))
         rc, last, _ = rig.run()
-        check("a watchdog whose tmux RAN and found no server: exit 1 BLIND with tmux's own words and "
-              "the TMUX_TMPDIR hint",
-              rc == 1 and "BLIND" in last and "last capture failed" in last and rig.tmux_dir in last
-              and "Check the job's TMUX_TMPDIR" in last and "render-plist" not in last,
+        check("a watchdog whose tmux RAN and found no server: exit 1 BLIND with tmux's own words, "
+              "naming both causes (a session that is down, or the TMUX_TMPDIR hint)",
+              rc == 1 and "BLIND" in last and "last tmux call failed" in last and rig.tmux_dir in last
+              and "the session is not running" in last and "the job's TMUX_TMPDIR does not match" in last
+              and "render-plist" not in last,
               f"rc={rc} last={last!r} watchdog stderr={p.stderr.strip()!r}")
 
         # A job that has run longer than two polls (the rig's poll is 0.5 s; its pid

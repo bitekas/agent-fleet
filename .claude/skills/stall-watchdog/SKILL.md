@@ -288,6 +288,7 @@ Then confirm it is not merely running but **seeing**:
 ```bash
 systemctl show <unit name> -p ActiveEnterTimestamp
 ls -l <state.dir>/stall-watchdog.json
+cat <state.dir>/stall-watchdog.json     # a capture_error key here is a blind watchdog, with its cause
 ```
 
 **A state file whose mtime is newer than the service start, and that holds no

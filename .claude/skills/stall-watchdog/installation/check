@@ -685,13 +685,16 @@ def main() -> None:
     age = os.path.getmtime(state_file)
     if time.time() - age > ran_for:
         out(1, f"STALE: {state_file} predates this run of {unit} (started "
-               f"{ran_for:.0f}s ago). Nothing has been captured since it started: "
-               f"up and BLIND. See technical/watchdog.md section 11.")
+               f"{ran_for:.0f}s ago): it has not completed one poll since it started, so it "
+               f"is up and BLIND. A failed capture would have been recorded there, so read "
+               f"its log for the reason: {services.hint('log', unit, scope)}")
     # THE CAUSE, IN THE DAEMON'S OWN WORDS. A state file written by a poll whose
     # capture failed is fresh, so the legs above pass it: only its capture_error
-    # says the watchdog is blind. The TMUX_TMPDIR hint belongs to a tmux that RAN
-    # and failed; a tmux that cannot be started is the job's PATH, and pointing
-    # that reader at TMUX_TMPDIR sends them to the wrong file.
+    # says the watchdog is blind. Each kind gets its own line, and only the one
+    # whose cause it is: the TMUX_TMPDIR hint belongs to a tmux that RAN and failed,
+    # a tmux that cannot be started is the job's PATH, and pointing that reader at
+    # TMUX_TMPDIR sends them to the wrong file. A tmux that ran and found no server
+    # is ALSO what a session that is simply down looks like, so that line names both.
     try:
         with open(state_file, encoding="utf-8") as f:
             saved = json.load(f)
@@ -701,22 +704,28 @@ def main() -> None:
     if isinstance(cap, dict):
         when = cap.get("at")
         ago = f", {time.time() - when:.0f}s ago" if isinstance(when, (int, float)) else ""
-        if cap.get("kind") == "start":
+        kind = cap.get("kind")
+        if kind == "start":
             if backend == "launchd":
                 fix = ("Re-render the job with installation/render-plist.py (`/adding-an-agent` "
-                       "section 5 step 7 runs it), which puts the directory of the tmux the "
-                       "session runs on the job's PATH, and install it again with the root "
-                       "command that step prints")
+                       "section 5 step 7 runs it) with the directory of the tmux the session "
+                       "runs first on PATH: the renderer puts the tmux it finds on the job's "
+                       "PATH. Then install it again with the command that step prints")
             else:
                 fix = ("The unit runs with systemd's default PATH: install tmux as /usr/bin/tmux, "
                        "where the session unit runs it from")
             out(1, f"STALE: {unit} is up and BLIND: it cannot start tmux{ago} "
                    f"({cap.get('error')}). {fix}.")
-        where = ("the job's TMUX_TMPDIR" if backend == "launchd"
-                 else "the unit's Environment=TMUX_TMPDIR=")
-        out(1, f"STALE: {unit} is up and BLIND: its last capture failed{ago} "
-               f"({cap.get('error')}). Check {where}, and tmux.tmpdir against the live "
-               f"session.")
+        if kind == "exit":
+            where = ("the job's TMUX_TMPDIR" if backend == "launchd"
+                     else "the unit's Environment=TMUX_TMPDIR=")
+            out(1, f"STALE: {unit} is up and BLIND: its last tmux call failed{ago} "
+                   f"({cap.get('error')}). Either the session is not running (a stopped or "
+                   f"restarting agent: this clears at the first poll after it is back), or "
+                   f"{where} does not match tmux.tmpdir and the live session's.")
+        out(1, f"STALE: {unit} is up and BLIND: its last tmux call failed{ago} "
+               f"({cap.get('error')}). Its log has every failure: "
+               f"{services.hint('log', unit, scope)}")
 
     # Captures are landing. A watchdog the agent can switch off is still not the
     # service this skill installs: said before the version, which cannot change it.

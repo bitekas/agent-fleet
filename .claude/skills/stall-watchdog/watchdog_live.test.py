@@ -25,7 +25,10 @@ into it in raw mode, and the real watchdog.py with stall_secs 2 polling it.
            line, and installation/check can only guess the cause. The third has
            tmux back and must drop the record: a capture_error that outlived its
            cause would report a recovered watchdog blind for ever. The pane does
-           not change, so only an explicit drop removes it there.
+           not change, so only an explicit drop removes it there. A fourth
+           watchdog starts from a state file holding JSON null and must record its
+           failed poll and exit 0, not raise inside the loop's handler (which
+           under KeepAlive is a restart loop that never rewrites the file).
 
 Exit codes: 0 every case holds; 1 a case failed; 3 NO VERDICT (no tmux, the pane
 never showed the prompt, or the blind control did not capture, so nothing below
@@ -111,10 +114,10 @@ def main():
                f"{sys.executable} {pane_py} {text} {log}")
         return log, r
 
-    def config(name, target):
+    def config(name, target, stall_secs=2):
         cfg = json.loads(json.dumps(base))
         cfg["tmux"] = {"tmpdir": run, "target": f"{target}:0"}
-        cfg["stall"]["stall_secs"] = 2
+        cfg["stall"]["stall_secs"] = stall_secs
         cfg["stall"]["poll_secs"] = 0.5
         cfg["state"]["dir"] = os.path.join(tmp, f"state-{name}")
         cfg["owner"]["claude_config_dir"] = None
@@ -132,21 +135,31 @@ def main():
 
     configs = {}
 
-    def once(name, path_var):
+    def once(name, path_var, seed=None):
         """watchdog.py --once on the `fire` session with PATH=path_var and nothing
-        else changed -> (stderr, the saved state or None). A name used again reuses
-        its config and state directory: the next poll of the same watchdog."""
+        else changed -> (the process, the saved state or None). A name used again
+        reuses its config and state directory: the next poll of the same watchdog.
+        `seed` is written to the state file first.
+
+        ⚠️ stall_secs IS AN HOUR HERE, AND THAT IS WHAT KEEPS `fires` HONEST. These
+        polls read the same prompt pane `fires` is about; with the 2 s of the loop
+        cases, polls 2 s apart on a slow host answer that prompt themselves, and
+        `fires` then passes with the loop never having run (measured: polls 2.2 s
+        apart and a loop that never polls left `fires` green)."""
         if name not in configs:
-            configs[name] = config(name, "fire")
+            configs[name] = config(name, "fire", stall_secs=3600)
         cfg_path, state_file = configs[name]
+        if seed is not None:
+            with open(state_file, "w", encoding="utf-8") as f:
+                f.write(seed)
         p = subprocess.run([sys.executable, WATCHDOG, "--once"], capture_output=True, text=True,
                            env=dict(env, STALL_WATCHDOG_CONFIG=cfg_path, PATH=path_var),
                            stdin=subprocess.DEVNULL, cwd=tmp, timeout=60)
         try:
             with open(state_file, encoding="utf-8") as f:
-                return p.stderr, json.load(f)
+                return p, json.load(f)
         except FileNotFoundError:
-            return p.stderr, None
+            return p, None
 
     def keys(log):
         with open(log, "rb") as f:
@@ -176,7 +189,8 @@ def main():
         print("[PASS] blind control: with tmux's directory as the whole PATH, --once captures the live session")
         no_tmux = os.path.join(tmp, "no-tmux-bin")
         os.makedirs(no_tmux)
-        err, blind = once("blind", no_tmux)
+        p, blind = once("blind", no_tmux)
+        err = p.stderr
         cap = (blind or {}).get("capture_error") or {}
         check("blind: the failed poll records capture_error naming tmux, the PATH searched, and that tmux "
               "could not be started", cap.get("kind") == "start" and "tmux" in cap.get("error", "")
@@ -190,6 +204,12 @@ def main():
         check("blind recovers: the next poll that captures the same pane drops capture_error",
               isinstance(healed, dict) and healed.get("digest") == seen["digest"]
               and "capture_error" not in healed, repr(healed))
+        p, nulled = once("null-state", no_tmux, seed="null\n")
+        check("blind on a state file holding JSON null: the poll records the failure and exits 0, "
+              "no traceback (a non-object cursor is started afresh)",
+              p.returncode == 0 and "Traceback" not in p.stderr
+              and ((nulled or {}).get("capture_error") or {}).get("kind") == "start",
+              f"rc={p.returncode} state={nulled!r} stderr={p.stderr.strip()[-300:]!r}")
         procs = [watchdog("fire"), watchdog("idle")]
         fired = wait_for(lambda: notice[:40].encode() in keys(fire_log), 25)
         got = keys(fire_log)
