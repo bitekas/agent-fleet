@@ -279,8 +279,10 @@ python3 "${CLAUDE_SKILL_DIR}/../self-compact/compact.py" --message /exit --no-wa
   that is waiting on that very subagent.
 
 What follows is the service unit's own contract, which this skill relies on and
-does not change. On systemd the clean exit ends the tmux session,
-`Restart=always` starts the unit again after `RestartSec`, the pre-sleep runs,
+does not change. On systemd the clean exit ends the tmux session, the
+`tmux kill-server` at the end of the unit's command takes the tmux server - the
+unit's main process - with it, `Restart=always` starts the unit again after
+`RestartSec`, the pre-sleep runs,
 `claude --update` and then `claude ... --continue` start the session on the
 installed binary with this conversation restored, and the start handshake types
 the boot message. On macOS the session supervisor exits 1 when the session ends,
@@ -347,6 +349,19 @@ The session reading this after the restart does these in order, each once:
   read the pane and choose `1. Exit and stop tasks`, never `2. Move to background
   and exit`, which by its own label keeps the tasks running after the session that
   owned them is gone.
+- **The unsent-feedback-drafts dialog takes the `/exit`.** A session holding
+  feedback drafts (`<config dir>/feedback/drafts/`) meets the `/exit` with `You
+  have N unsent feedback drafts` / `Enter to review & send · Esc to discard and
+  exit` (Claude Code 2.1.286, measured 2026-11-13). Nothing answers it, so the
+  session sits there until somebody does. The health agent's remedy: copy the
+  draft files out, send Escape (never Enter, which sends the agent's reports to
+  Anthropic), and forward the drafts' titles to the agent once it is back.
+- **The unit's command has no `tmux kill-server`**: an installed unit older than
+  the template. The `/exit` ends the session but not the tmux server whenever
+  any other session lives in it (a dev server, an emulator), so the unit stays
+  active and never relaunches. The agent is simply gone. The fix is the
+  template's command in the installed unit, then a daemon-reload and a unit
+  restart by its administrator.
 - **The unit does not relaunch, or the new session stalls at a first-run or
   sign-in prompt**: the session cannot report this itself. The return time in the
   heads-up is what tells the requester something is wrong, and the health agent

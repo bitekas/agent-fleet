@@ -140,7 +140,18 @@ TimeoutStartSec=300
 # from its charter as the session's agent definition, not from a skill it may or
 # may not load. `bash -l` gives the session the user's login PATH, where `claude`
 # lives; the service manager's own PATH does not have it.
-ExecStart=/usr/bin/tmux new-session -d -s claude-<agent-name> "/bin/bash -lc 'claude --update; claude --dangerously-skip-permissions --name <agent-name> --agent <agent-name> --continue || claude --dangerously-skip-permissions --name <agent-name> --agent <agent-name>'"
+#
+# `tmux kill-server` after the last `claude` is what makes an exit restart the
+# agent. The unit's main process is the tmux SERVER, not the session, and the
+# server outlives the session while any other session in it is alive - a dev
+# server or an emulator the agent opened in its own tmux. Without it, a clean
+# exit (a soft-restart's /exit) closes the session, the server stays up, the
+# unit reads active, and Restart=always never fires: the agent is gone and
+# nothing brings it back. With it, the server dies with the session,
+# KillMode=control-group (the default) takes every other process the unit
+# started, and the relaunch happens. Whatever the agent left running in its tmux
+# dies on every restart; the agent brings it back.
+ExecStart=/usr/bin/tmux new-session -d -s claude-<agent-name> "/bin/bash -lc 'claude --update; claude --dangerously-skip-permissions --name <agent-name> --agent <agent-name> --continue || claude --dangerously-skip-permissions --name <agent-name> --agent <agent-name>; tmux kill-server'"
 #
 # Wait for the READY status bar, then type the boot message. A fixed sleep after
 # the start is a race: on a slow start the message lands in a dialog and the

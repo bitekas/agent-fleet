@@ -252,6 +252,15 @@ back.
   input line means skip that agent now and re-check it in 5 minutes; it is not
   yours to clear. A person attached over a second client, half-way through a
   prompt, is the case this exists for.
+- **The unsent-feedback-drafts exit dialog always gets Escape, and the drafts
+  always reach their agent.** Claude Code can stop an agent's exit on `You have
+  N unsent feedback drafts` / `Enter to review & send · Esc to discard and
+  exit`, and the agent stays down until somebody answers. Enter is never yours:
+  it sends the agent's own reports, with their transcript references, to the
+  model's vendor. Copy the agent's `<config dir>/feedback/drafts/` files into
+  your own state first, then send Escape. Once the agent is back, forward the
+  drafts' titles to it with the path of the copies. The capped-session rule
+  still wins: with a usage-limit banner live on the pane, send no Escape.
 
 ### Every handover and revival is logged
 
