@@ -8,6 +8,11 @@ from a prompt nobody is there to answer, and moved to another account before a
 usage cap stops it. The fleet ships the machinery and the shared rules; the
 organisation that runs the agents supplies its values.
 
+An agent can run on a Claude subscription instead of an API key. Its work then
+draws on the plan's usage limits rather than being billed per token, which in a
+measured Claude Opus 5.5 session is more than 50 times cheaper than the same
+tokens at API prices ("What a subscription saves", below).
+
 ## Install
 
 On your own computer, install Claude Code, open it - in a checkout of the
@@ -60,6 +65,29 @@ default, and `<tag>` the newest release. `SETUP.md` is the rest of the way.
   lessons.
 - **A commit gate**: hooks and CI that refuse private values, secrets and
   AI-attribution lines (`CONTRIBUTING.md`, `SECURITY.md`).
+
+## What a subscription saves
+
+One agent's 24 hours on Claude Opus 5.5, its subagents included, signed in to
+the $200-a-month Ultra plan:
+
+| Tokens | Count | API price per million | API cost |
+|---|---:|---:|---:|
+| input | 7 thousand | $4 | $0.03 |
+| cache writes, 5-minute | 6.76 million | $5 | $33.81 |
+| cache writes, 1-hour | 0.73 million | $8 | $5.83 |
+| cache reads | 873 million | $0.20 | $174.69 |
+| output | 2.59 million | $20 | $51.88 |
+| **total** | | | **$266.24** |
+
+The same 24 hours used 10% of the plan's weekly limit, which at $46.15 a week
+($200 x 12 / 52) is $4.62: 58 times less than the API price. The API cost
+prices every response in the session's transcripts, each counted once; the
+subscription cost is the share of the weekly limit the plan's usage screen
+shows consumed between the start and the end of the window. Prices read on
+2026-11-13. The ratio moves with the model and the workload: a day on a mix of
+Claude Fable 5.2 and Opus 5.5 measured about 30 times. Subscription use is
+subject to Anthropic's plan terms and usage limits.
 
 ## The fleet and the install
 
