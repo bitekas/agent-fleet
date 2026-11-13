@@ -11,7 +11,49 @@ organisation that runs the agents supplies its values.
 An agent can run on a Claude subscription instead of an API key. Its work then
 draws on the plan's usage limits rather than being billed per token, which in a
 measured Claude Opus 5.5 session is more than 50 times cheaper than the same
-tokens at API prices ("What a subscription saves", below).
+tokens at API prices.
+
+## What a subscription saves
+
+One agent's 24 hours on Claude Opus 5.5, from 2026-11-11 01:21Z to 2026-11-12
+01:21Z, its subagents included, signed in to the $200-a-month Ultra plan. Each
+token class is priced at its API list price per million tokens, read on
+2026-11-13:
+
+| Tokens | Count x price per million = API cost |
+|---|---|
+| input | 0.007 million x $4 = $0.03 |
+| cache writes, 5-minute | 6.762 million x $5 = $33.81 |
+| cache writes, 1-hour | 0.729 million x $8 = $5.83 |
+| cache reads | 873.464 million x $0.20 = $174.69 |
+| output | 2.594 million x $20 = $51.88 |
+| **total** | $0.03 + $33.81 + $5.83 + $174.69 + $51.88 = **$266.24** |
+
+The plan's usage screen read 6% of the weekly limit at the start of the window
+and 16% at the end: 10 points. The plan costs $200 x 12 / 52 = $46.15 a week,
+and 10% of $46.15 = $4.62. The same work cost $266.24 / $4.62 = 58 times less
+on the subscription than at API prices. The screen shows whole percents, so
+whether it rounds or truncates, the true difference lies between 9 and 11
+points: between 11% of $46.15 = $5.08 and 9% of $46.15 = $4.15, which puts the
+ratio between $266.24 / $5.08 = 52 and $266.24 / $4.15 = 64.
+
+The API cost prices every response in the window's transcripts, each counted
+once; the subscription cost is the weekly-limit points the window used times
+the weekly price. Every window measured that way:
+
+| Window | UTC | Model | Weekly-limit points | API cost | Subscription | Ratio |
+|---|---|---|---:|---:|---:|---:|
+| agent A, 24 hours (above) | 2026-11-11 01:21 to 2026-11-12 01:21 | Opus 5.5 | 6 to 16 = 10 | $266.24 | 10% of $46.15 = $4.62 | 58x |
+| agent A, 4.5 days | 2026-11-08 20:21 to 2026-11-13 09:21 | Opus 5.5 | 0 to 20 = 20 | $512.69 | 20% of $46.15 = $9.23 | 56x |
+| agent B, 44 hours | 2026-11-11 13:21 to 2026-11-13 09:21 | Opus 5.5 | 0 to 8 = 8 | $197.29 | 8% of $46.15 = $3.69 | 53x |
+| agent C, 24 hours | 2026-11-12 10:50 to 2026-11-13 10:54 | Fable 5.2 and Opus 5.5 | 21 to 36 = 15 | $198.29 | 15% of $46.15 = $6.92 | 29x |
+| agent C, 54 hours | 2026-11-11 05:12 to 2026-11-13 10:54 | Opus 5.5 and Fable 5.2 | 0 to 36 = 36 | $584.80 | 36% of $46.15 = $16.61 | 35x |
+
+The ratio is the API cost divided by the subscription cost, and agent C's
+54-hour window contains its 24-hour one. The ratio moves with the model and the
+workload: a day on a mix of Claude Fable 5.2 and Opus 5.5 measured about 30
+times (agent C, 24 hours). Subscription use is subject to Anthropic's plan terms
+and usage limits.
 
 ## Install
 
@@ -65,48 +107,6 @@ default, and `<tag>` the newest release. `SETUP.md` is the rest of the way.
   lessons.
 - **A commit gate**: hooks and CI that refuse private values, secrets and
   AI-attribution lines (`CONTRIBUTING.md`, `SECURITY.md`).
-
-## What a subscription saves
-
-One agent's 24 hours on Claude Opus 5.5, from 2026-11-11 01:21Z to 2026-11-12
-01:21Z, its subagents included, signed in to the $200-a-month Ultra plan. Each
-token class is priced at its API list price per million tokens, read on
-2026-11-13:
-
-| Tokens | Count x price per million = API cost |
-|---|---|
-| input | 0.007 million x $4 = $0.03 |
-| cache writes, 5-minute | 6.762 million x $5 = $33.81 |
-| cache writes, 1-hour | 0.729 million x $8 = $5.83 |
-| cache reads | 873.464 million x $0.20 = $174.69 |
-| output | 2.594 million x $20 = $51.88 |
-| **total** | $0.03 + $33.81 + $5.83 + $174.69 + $51.88 = **$266.24** |
-
-The plan's usage screen read 6% of the weekly limit at the start of the window
-and 16% at the end: 10 points. The plan costs $200 x 12 / 52 = $46.15 a week,
-and 10% of $46.15 = $4.62. The same work cost $266.24 / $4.62 = 58 times less
-on the subscription than at API prices. The screen shows whole percents, so
-whether it rounds or truncates, the true difference lies between 9 and 11
-points: between 11% of $46.15 = $5.08 and 9% of $46.15 = $4.15, which puts the
-ratio between $266.24 / $5.08 = 52 and $266.24 / $4.15 = 64.
-
-The API cost prices every response in the window's transcripts, each counted
-once; the subscription cost is the weekly-limit points the window used times
-the weekly price. Every window measured that way:
-
-| Window | UTC | Model | Weekly-limit points | API cost | Subscription | Ratio |
-|---|---|---|---:|---:|---:|---:|
-| agent A, 24 hours (above) | 2026-11-11 01:21 to 2026-11-12 01:21 | Opus 5.5 | 6 to 16 = 10 | $266.24 | 10% of $46.15 = $4.62 | 58x |
-| agent A, 4.5 days | 2026-11-08 20:21 to 2026-11-13 09:21 | Opus 5.5 | 0 to 20 = 20 | $512.69 | 20% of $46.15 = $9.23 | 56x |
-| agent B, 44 hours | 2026-11-11 13:21 to 2026-11-13 09:21 | Opus 5.5 | 0 to 8 = 8 | $197.29 | 8% of $46.15 = $3.69 | 53x |
-| agent C, 24 hours | 2026-11-12 10:50 to 2026-11-13 10:54 | Fable 5.2 and Opus 5.5 | 21 to 36 = 15 | $198.29 | 15% of $46.15 = $6.92 | 29x |
-| agent C, 54 hours | 2026-11-11 05:12 to 2026-11-13 10:54 | Opus 5.5 and Fable 5.2 | 0 to 36 = 36 | $584.80 | 36% of $46.15 = $16.61 | 35x |
-
-The ratio is the API cost divided by the subscription cost, and agent C's
-54-hour window contains its 24-hour one. The ratio moves with the model and the
-workload: a day on a mix of Claude Fable 5.2 and Opus 5.5 measured about 30
-times (agent C, 24 hours). Subscription use is subject to Anthropic's plan terms
-and usage limits.
 
 ## The fleet and the install
 
