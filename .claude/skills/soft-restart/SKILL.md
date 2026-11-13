@@ -351,7 +351,7 @@ The session reading this after the restart does these in order, each once:
   owned them is gone.
 - **The unsent-feedback-drafts dialog takes the `/exit`.** A session holding
   feedback drafts (`<config dir>/feedback/drafts/`) meets the `/exit` with `You
-  have N unsent feedback drafts` / `Enter to review & send · Esc to discard and
+  have N unsent feedback drafts` / `Enter to review & send {U+00B7} Esc to discard and
   exit` (Claude Code 2.1.286, measured 2026-11-13). Nothing answers it, so the
   session sits there until somebody does. The health agent's remedy: copy the
   draft files out, send Escape (never Enter, which sends the agent's reports to

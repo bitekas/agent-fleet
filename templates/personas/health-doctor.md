@@ -254,7 +254,7 @@ back.
   prompt, is the case this exists for.
 - **The unsent-feedback-drafts exit dialog always gets Escape, and the drafts
   always reach their agent.** Claude Code can stop an agent's exit on `You have
-  N unsent feedback drafts` / `Enter to review & send · Esc to discard and
+  N unsent feedback drafts` / `Enter to review & send {U+00B7} Esc to discard and
   exit`, and the agent stays down until somebody answers. Enter is never yours:
   it sends the agent's own reports, with their transcript references, to the
   model's vendor. Copy the agent's `<config dir>/feedback/drafts/` files into
