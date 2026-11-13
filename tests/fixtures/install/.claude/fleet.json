@@ -11,7 +11,7 @@
   "fleet": { "repo": "https://example.com/example/agent-fleet.git", "min_tag": "v1.0.0" },
   "skills": [
     "agent", "talking-to-humans", "self-compact", "scheduled-tasks", "restart",
-    "stall-watchdog", "slack-communication", "agent-revive", "agent-health",
+    "soft-restart", "stall-watchdog", "slack-communication", "agent-revive", "agent-health",
     "knowledge-base", "claude-skill", "web-hierarchy-server", "google-spreadsheet",
     "notion-workspace", "rate-graphic", "chat-transport", "adding-an-agent",
     "install-agent-fleet", "safe-box"

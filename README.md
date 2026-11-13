@@ -119,7 +119,8 @@ it is.
 - **Agent rules and writing:** `agent`, `talking-to-humans`, `knowledge-base`,
   `claude-skill`.
 - **Keeping a session running and reachable:** `scheduled-tasks`,
-  `stall-watchdog`, `self-compact`, `restart`.
+  `stall-watchdog`, `self-compact`, `restart`, `soft-restart` (restart one
+  agent's own session onto the Claude binary already installed).
 - **Chat:** `chat-transport` (the interface every transport implements, and
   the claim helper that decides which one agent acts on a request several
   could take); `slack-communication` (the working transport);

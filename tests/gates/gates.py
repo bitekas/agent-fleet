@@ -164,6 +164,7 @@ NOT_SKILLS = {
     "usage": "Claude Code built-in command",
     "schedule": "Claude Code built-in command (a cloud routine)",
     "loop": "Claude Code built-in command",
+    "exit": "Claude Code built-in command",
     "proc": "absolute filesystem path",
     "run": "absolute filesystem path",
 }

@@ -1,0 +1,19 @@
+● Monitor event: [Monitor expired after 30m with 2 events delivered. Re-arm it …
+● API Error: 529 Overloaded. This is a server-side issue, usually
+  temporary — try again in a moment. If it persists, check
+  https://status.claude.com.
+
+✻ Baked for 1m 32s · done 10:41 AM
+
+● Monitor event: [Monitor expired after 30m with 1 event delivered. Re-arm it i…
+● API Error: 529 Overloaded. This is a server-side issue, usually
+  temporary — try again in a moment. If it persists, check
+  https://status.claude.com.
+
+✻ Baked for 1m 37s · done 10:42 AM
+
+────────────────────────────────────────────────────────────────────────────────
+❯ an unsent reply a person typed and never submitted
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle)
+                                        new task? /clear to save 132.1k tokens

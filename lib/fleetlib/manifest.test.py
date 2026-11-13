@@ -19,7 +19,7 @@ from fleetlib._testkit import (FIXTURE_INSTALL, FIXTURE_TRANSPORTS, MINIMAL, REP
 
 FLEET_SKILLS = [
     "agent", "talking-to-humans", "self-compact", "scheduled-tasks", "restart",
-    "stall-watchdog", "slack-communication", "agent-revive", "agent-health",
+    "soft-restart", "stall-watchdog", "slack-communication", "agent-revive", "agent-health",
     "knowledge-base", "claude-skill", "web-hierarchy-server", "google-spreadsheet",
     "notion-workspace", "rate-graphic", "chat-transport", "adding-an-agent",
     "install-agent-fleet", "safe-box",

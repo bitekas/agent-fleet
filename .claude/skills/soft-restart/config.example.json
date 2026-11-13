@@ -1,0 +1,44 @@
+{
+  "_comment": [
+    "TEMPLATE. Copy to config.json in this skill's install context",
+    "(`fleet where soft-restart config.json` prints the path) and replace every placeholder.",
+    "",
+    "Every install-specific name the sequence needs. SKILL.md names none of them: it refers",
+    "to the keys below, so the same sequence serves a differently-wired fleet by editing",
+    "config.json alone.",
+    "",
+    "Nothing here is read by a script. pending_update.py takes no config, and the one",
+    "sender the sequence runs is self-compact's compact.py. Every value is read by the",
+    "AGENT and typed into a shell or a message, which is why a wrong one is expensive: a",
+    "wrong unit names the wrong service in the one message a watcher acts on, and a",
+    "checkpoint path outside the state directory is a file the returning session never finds.",
+    "",
+    "No credential appears here. JSON has no comments, so every _comment key is",
+    "documentation; keep or delete them in your config.json."
+  ],
+  "service": {
+    "_comment": "The agent's own service unit: what relaunches the session on the clean /exit, and the unit named in the heads-up and the health agent notice. This file is install-wide while 'unit' is per agent, so write it with the token <agent> where the agent's name goes: it is not a placeholder to fill in here, and the agent reading the value puts its own name in its place. The value below is the fleet's systemd unit; on macOS write the session job's launchd label, com.agent-fleet.session.<agent> (host.json launchd_prefix).",
+    "unit": "claude-agent-<agent>.service"
+  },
+  "checkpoint": {
+    "_comment": "The one-shot note the sequence writes for the returning session to read, act on and delete. A path RELATIVE TO THE AGENT'S OWN STATE DIRECTORY (the agent skill's 'state' row, section 3), never to the session's working directory, which can be a shared checkout nothing may write to, and never in the session scratchpad, which a subagent's cleanup can delete whole. Kept separate from the restart skill's handoff.file: the two resume contracts differ.",
+    "file": "soft-restart-checkpoint.md"
+  },
+  "handoff": {
+    "_comment": "The file name each in-flight subagent writes its handoff note under, at the root of its own worktree: what is done, what remains, the exact next step. It is never committed; the returning session deletes it once that work has resumed. Pick a name no repository the agents work in tracks.",
+    "note": "HANDOFF.md"
+  },
+  "stack": {
+    "_comment": "Bringing this session's local servers down - the SCOPED teardown only. 'teardown_command' stops the servers of the checkout it is run in, by PID file, and is run once per worktree whose servers the session started. soft-restart NEVER runs a machine-wide pkill (that is the restart skill's move, licensed by an imminent reboot), so there is deliberately no 'stray_process_patterns' key here. An install with no dev stack sets this to an empty string and step 3 skips the teardown, still recording each process the session started.",
+    "teardown_command": "./your-dev-script.sh down"
+  },
+  "return": {
+    "_comment": "The return time the heads-up and the health agent notice announce, in minutes from the /exit. Size it ABOVE the service's start timeout (systemd: TimeoutStartSec, which already covers the unit's pre-sleep and its ready-bar handshake; read the loaded value with `systemctl show -p TimeoutStartUSec --value <unit>`), plus the binary update's own download: a healthy start can take the whole timeout, and an announced time shorter than that tells everyone a healthy restart has failed.",
+    "expected_minutes": 10
+  },
+  "health_agent": {
+    "_comment": "The fleet's health agent, notified before the /exit and again on return. 'name' is that agent's name, so the health agent itself skips the notice. 'address' is where it takes messages, in the chat-transport address grammar (<transport>:<kind>:<conversation>), posted through the restarting agent's own transport. A channel address needs the restarting agent's bot to be a member of it: an install precondition its CONTEXT.md states. Leave the whole block out, or set 'address' to an empty string, when the fleet has no health agent: step 5 then posts the heads-up alone. The notice is a notification - nothing waits for an answer - so no value here can block a restart.",
+    "name": "your-health-agent",
+    "address": "slack:channel:C0EXAMPLE99"
+  }
+}

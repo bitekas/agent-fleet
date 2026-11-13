@@ -129,6 +129,10 @@ options are not read. An empty `--wake-message` is a refusal rather than a quiet
 `--no-wake`: an unset variable expanding to nothing would otherwise drop the one turn
 that re-arms the session, with nothing printed.
 
+**A second caller.** `/soft-restart` step 6 runs this sender as `--message /exit
+--no-wake`, after the same with `--dry-run`, so a change to those options or to what
+the dry run prints is a change to that skill too.
+
 **Then end the turn.** The delay is the margin for that, so a turn that runs on for
 another minute after the spawn defeats it. Spawn the sender as the last thing the turn
 does.

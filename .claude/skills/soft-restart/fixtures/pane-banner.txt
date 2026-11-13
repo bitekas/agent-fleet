@@ -1,0 +1,17 @@
+› Message from @reviewer (ctrl+o to expand)
+  ⎿   Message queued for delivery to a0example0000001 at its next tool round.
+
+  Read 1 file
+
+● The review is done and its notes are in the planner's docs folder. Waiting on your answer to question 2.
+
+✻ Waiting for 1 background agent to finish
+                                                                                ✔ Update installed · Restart to update
+────────────────────────────────────────────────────────────────────────────────────────────────── acme-corp-agent-ada ─
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on · 1 monitor · ← for agents · ↓ to manage
+
+  ● main
+  ◯ reviewer      Reading the settings page styles                                        2h 05m 13s · ↓ 120.4k tokens
+  ⧉  docs-sweep · notes-tidy

@@ -1,0 +1,12 @@
+● Bash(grep -n 'Update installed' fixtures/pane-banner.txt)
+  ⎿  9:                                                                                ✔ Update installed · Restart to update
+                                                                                ✔ Update installed · Restart to update
+
+● The banner sits on the line above the input box's top rule.
+
+✻ Baked for 1m 37s · done 10:42 AM
+
+────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle)

@@ -562,6 +562,11 @@ carries outside its `_comment` keys, one line per skill.
       `poll.sweep_secs`, `poll.sweep_budget`, `poll.rediscover_secs`,
       `poll.recent_join_window_secs`, `poll.dm_baseline_window_secs`,
       `slack.api_base`, `known_users.<user-id>`
+- [ ] `soft-restart` - `service.unit` (keeps its <agent> token, which the
+      reading agent fills), `checkpoint.file`, `handoff.note`,
+      `stack.teardown_command`, `return.expected_minutes`; for a fleet with
+      a health agent `health_agent.name` and `health_agent.address`, and
+      for one without, that block left out
 - [ ] `stall-watchdog`, one file per agent - `tmux.tmpdir`, `tmux.target`,
       `stall.stall_secs`, `stall.poll_secs`, `stall.idle_tail_lines`,
       `stall.known_prompts[].name`, `stall.known_prompts[].match`,
@@ -654,4 +659,4 @@ value there is a string such as `your-restart-command` or
 `<absolute path to the pool file>`, which no single pattern finds. An `<agent>`
 token that the example's comment says the reading script or agent fills
 (agent-revive's `fleet` block, restart's `service.unit` and
-`service.reattach_command`) stays.
+`service.reattach_command`, soft-restart's `service.unit`) stays.

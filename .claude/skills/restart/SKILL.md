@@ -15,6 +15,9 @@ Do the wind-down properly before pulling the trigger; an abrupt reboot mid-write
 is how work gets lost. Whether a reboot is authorized at all, and by whom, is the
 invoking agent's charter, not this document.
 
+A Claude binary update already installed under a running session needs no
+reboot: `/soft-restart` restarts that one session and leaves every other alone.
+
 Every concrete name below - the service unit, the two commands, the teardown, the
 handoff file - is a key in this skill's `config.json` in the install context
 (`fleet where restart config.json` prints its path), written as `` `service.unit` ``

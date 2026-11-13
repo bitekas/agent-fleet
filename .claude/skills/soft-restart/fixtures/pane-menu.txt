@@ -1,0 +1,14 @@
+ Sign in to Claude Code
+
+
+ Select login method:
+
+
+ ❯ 1. Claude account with subscription
+      Pro, Duo, Team, or Enterprise
+
+   2. Anthropic Console account
+      API usage billing
+
+
+ Enter to confirm · Esc to cancel

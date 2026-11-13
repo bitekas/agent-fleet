@@ -8,6 +8,7 @@
 .claude/skills/slack-communication/config.example.json:7e34eb1df7f3ce12e8abf85a72731260235dca06c5e47f82f2fbeea5eb4a1dfc
 .claude/skills/slack-communication/config.example.json:ef73fd90376996f4032aac17048323b8f900f017196d94cc10ca3a7ac9ce9cae
 .claude/skills/slack-communication/config.example.json:a311a2579d12fbaa37039e95e3793e1433745866c34c4504a285a5e9f4ba5859
+.claude/skills/soft-restart/config.example.json:03cb12d98ef9dcba4b0a610b7f89f79497d9b75e84465c8e69551e5748866d3e
 # agent-revive: Google's own verification-code senders, which the Gmail query must name.
 .claude/skills/agent-revive/read_recovery_code.py:60a67132f5876dc40061d73869791cfa282e49cf1022aa270808320099915540
 # agent-revive: an upstream package's deprecation notice that npm records in the lockfile.
