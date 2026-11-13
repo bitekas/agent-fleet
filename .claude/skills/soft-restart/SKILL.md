@@ -98,8 +98,8 @@ the new version, and that is step 7's proof that the restart took.
 - **Leave the daemons running.** The scheduler and the chat watcher are separate
   always-on units that keep running through the restart, and their lines wait in
   their logs for the returning session. Their followers - the Monitors that
-  carry those lines into your turns - end with the session, and step 7 re-arms
-  them. Stopping a daemon loses that buffering, which is what makes the restart
+  carry those lines into your turns - are stopped in step 6 and re-armed in step
+  7. Stopping a daemon loses that buffering, which is what makes the restart
   lose nothing.
 - **A claim you hold survives the restart**: the claim helper answers
   `ALREADY-YOURS` to the returning session (`/chat-transport`, *Claiming a
@@ -143,6 +143,18 @@ dev server, an emulator, a watch loop - each with **the exact command that
 started it, byte for byte, and the directory it ran in**, so the relaunch is a
 paste and not a reconstruction.
 
+**A process a client has been pointed at comes back on the SAME address.** A dev
+server whose host and port are baked into installed builds, a callback URL
+registered somewhere else: relaunched on another port, it breaks every client
+holding the old one, and nothing reports it. Record the address it serves, as its
+clients were given it. Before running the teardown, check whether the teardown
+removes what pins that address - a ports or slot file, a PID or lock file, a
+claim the next start reads - and if it does, record what the relaunch needs to
+take the same address again, or skip the teardown for that process and let the
+service's stop end it. A pin that holds only while its process is alive is gone
+either way, so for that one the record is the only route back. The install's
+`CONTEXT.md` says which applies to its stack.
+
 Then stop each one cleanly: run the scoped teardown (`stack.teardown_command`)
 in each worktree whose servers this session started. It stops that worktree's
 servers by their PID files and removes their runtime artifacts. A process ended
@@ -166,7 +178,8 @@ lines:
 - **The health agent notice**: the address of the message step 5 posts, so step
   7 answers it; `none` when step 5 skipped it.
 - **Processes to relaunch** (step 3), in the order to start them, each with its
-  exact command and its directory.
+  exact command, its directory, and the address its clients were given, with
+  whatever the relaunch needs to take that address again.
 - **Handed-off subagents** (step 2): each one's id or name, its brief in one
   line, its branch, its commit, and its note's path - or the note itself, for one
   with no worktree.
@@ -240,6 +253,13 @@ it must be your own session:
 python3 "${CLAUDE_SKILL_DIR}/../self-compact/compact.py" --message /exit --no-wake --dry-run
 ```
 
+Then stop every Monitor and background command the session still has running,
+your followers included, with the harness's task-stop tool (TaskStop), as the
+last thing before the real send: a session with background work running can
+meet the `/exit` with an exit dialog instead of exiting (*Failure modes*).
+Nothing is lost by it: the daemons behind the followers keep running and buffer
+their lines, and step 7 re-arms the followers.
+
 Then, as the LAST tool call of the turn, the real one:
 
 ```bash
@@ -283,9 +303,11 @@ The session reading this after the restart does these in order, each once:
 2. **Read the checkpoint** (`checkpoint.file` in your state directory). It holds
    every list the next steps work through.
 3. **Relaunch the listed processes**, in the checkpoint's order, each with its
-   recorded command in its recorded directory, and confirm each one is up. This
-   is the first work resumed, before any subagent and before "back": a requester
-   told "back" tries the server next.
+   recorded command in its recorded directory, and confirm each one is up on its
+   recorded address. This is the first work resumed, before any subagent and
+   before "back": a requester told "back" tries the server next. A process that
+   cannot get its recorded address back is named in the "back" message with the
+   address it is on now, never left for a client to discover.
 4. **Confirm the restart took**: step 0's check reads `NONE`, and its running
    version is the one the checkpoint was adopting, or newer (`claude --update`
    takes the latest at relaunch). `PENDING` means the old process is still
@@ -310,7 +332,21 @@ The session reading this after the restart does these in order, each once:
 - **The `/exit` did not take** - the session is still there at its next turn and
   step 0 still reads `PENDING`. Text already in the input box is prepended to the
   typed `/exit` (`/self-compact` section 4), and a dialog on screen takes the
-  keys. Read the pane, clear the cause, and send again; do not post "back".
+  keys. Re-arm your followers first, since step 6 stopped them; then read the
+  pane, clear the cause, and send again. Do not post "back".
+- **The exit dialog takes the `/exit`.** Claude Code asks before it exits a
+  session with background work running: the pane reads `Background work is
+  running`, lists what will stop (`1 monitor`), and offers `1. Exit and stop
+  tasks`, `2. Move to background and exit` and `3. Stay`, with the cursor on the
+  first. That is measured on the double-Ctrl-C exit path (Claude Code 2.1.266,
+  `/agent-revive` step 3 and its *Traps*); whether a typed `/exit` raises the same
+  dialog has not been measured, and step 6 stops every Monitor and background
+  command first so that it has nothing to ask about. Nothing answers the dialog on
+  its own, and a stall watchdog's automatic "no" can choose Stay: the restart then
+  silently does not happen while the requester waits for "back". The remedy is to
+  read the pane and choose `1. Exit and stop tasks`, never `2. Move to background
+  and exit`, which by its own label keeps the tasks running after the session that
+  owned them is gone.
 - **The unit does not relaunch, or the new session stalls at a first-run or
   sign-in prompt**: the session cannot report this itself. The return time in the
   heads-up is what tells the requester something is wrong, and the health agent
