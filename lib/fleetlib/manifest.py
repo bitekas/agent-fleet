@@ -205,6 +205,8 @@ def validate(m, *, skills_dir=None, source="install manifest"):
         if len(forms) != 1:
             c.fail(key, 'is not exactly one of {"skill": ...} or {"doc": ...}')
         c.string(v[forms[0]], f"{key}.{forms[0]}")
+        if forms[0] == "skill" and not _SKILL.fullmatch(v["skill"]):
+            c.fail(f"{key}.skill", f"is {v['skill']!r}, which is not a skill name ([a-z0-9-], never a path)")
         if "section" in v and not (isinstance(v["section"], (str, int))
                                    and not isinstance(v["section"], bool) and v["section"] != ""):
             c.fail(f"{key}.section", "is not a heading or a number")

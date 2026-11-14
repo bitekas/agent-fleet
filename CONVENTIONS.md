@@ -18,7 +18,7 @@ An install tells the fleet how it works through two parts of its install manifes
 
 A value is one of:
 
-- `{"skill": "<name>"}` - load that skill: the install's own `.claude/skills/<name>/SKILL.md`, or a fleet skill the manifest's `skills` lists, such as one of a group's; `fleet settings` refuses a name that is neither, saying which is missing (a fleet skill that `skills` does not list is not linked, which is where an install that declined a group but kept its value stands);
+- `{"skill": "<name>"}` - load that skill, `<name>` being a skill's directory name and never a path: the install's own `.claude/skills/<name>/SKILL.md`, or a fleet skill the manifest's `skills` lists, such as one of a group's; `fleet settings` refuses a name that is neither, saying which is missing (a fleet skill that `skills` does not list is not linked, which is where an install that declined a group but kept its value stands);
 - `{"doc": "<repo-relative path>"}` - read that file; `<placeholders>` such as `<feature-slug>` are allowed inside the path, filled in when it is read (a value that is one `<...>` as a whole with a space inside, such as `<Your Name>`, is the template's placeholder, and the manifest is refused naming its key); `fleet settings` refuses a doc path, placeholders aside, that names no file in the install;
 - either of the two with an optional `"section": "<heading or number>"` - read only that part;
 - `null`.

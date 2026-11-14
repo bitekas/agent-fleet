@@ -91,6 +91,13 @@ REFUSALS = [
     ("convention with two forms", [("conventions.release", {"skill": "a", "doc": "b"})], "conventions.release"),
     ("convention with no form", [("conventions.release", {"section": "2"})], "conventions.release"),
     ("convention empty skill", [("conventions.release", {"skill": ""})], "conventions.release.skill"),
+    # A convention's skill is a skill directory's name, as `skills` holds one, never a path.
+    ("convention skill a relative path", [("conventions.release", {"skill": "../skills/agent"})],
+     "conventions.release.skill"),
+    ("convention skill an absolute path", [("conventions.release", {"skill": "/abs/dir"})],
+     "conventions.release.skill"),
+    ("convention skill not a name", [("conventions.release", {"skill": "Release Skill"})],
+     "conventions.release.skill"),
     ("convention bool section", [("conventions.release", {"skill": "a", "section": True})],
      "conventions.release.section"),
     ("convention unknown field", [("conventions.release", {"skill": "a", "anchor": "x"})],
@@ -587,6 +594,7 @@ class SkillGroupsTest(unittest.TestCase):
     def test_every_group_skill_has_a_skill_md(self):
         for g, d in self.GROUPS.items():
             with self.subTest(g):
+                self.assertTrue(d["skills"], "a group with no skills")
                 self.assertEqual(len(set(d["skills"])), len(d["skills"]), "a skill listed twice")
                 missing = [n for n in d["skills"] if not (REPO / ".claude/skills" / n / "SKILL.md").is_file()]
                 self.assertEqual(missing, [], f"group {g}: these skills have no .claude/skills/<name>/SKILL.md")
