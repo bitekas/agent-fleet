@@ -221,8 +221,8 @@ and 9 are asked either way. In this order:
    file when asking, never from a list written here: its name and, in one
    line, what its `_comment` says it is, and that its skills fill conventions
    keys of question 7. Yes adds every name in the group's `skills` to the
-   manifest's `skills`; no adds nothing, and the manifest stays as the template
-   writes it. The proposal, when the request does not answer it: yes when
+   manifest's `skills`; no adds nothing to `skills`. The proposal, when the
+   request does not answer it: yes when
    `<project>` is a code repository the agents will change, no otherwise; the
    person decides.
 4. **Where credentials and the knowledge store live on the target** ->
@@ -598,8 +598,10 @@ release - is a change to the project, made, shown and committed as step 6 of
 the install makes one: in `.claude/fleet.json`, add every name in the group's
 `skills` (`<fleet>/templates/skill-groups.json`) to `skills`, set each key its
 `conventions` names to that value unless the person keeps the install's own,
-and raise `fleet.min_tag` to a release that carries the group. `fleet settings`
-in `<work>` exits 0 before the diff is shown. Once the commit is on the branch
-the agents track, `fleet link <agent-name>` for each agent [target], then each
-group skill's `installation/INSTRUCTION.md`, where it has one, and `fleet
-status`.
+and raise `fleet.min_tag` to a release that carries the group; then, as step 6
+item 5 does, run each group skill's install-wide steps in `<work>`, so its
+install context is part of the change. `fleet settings` in `<work>` exits 0
+before the diff is shown. Once the commit is on the branch the agents track,
+`fleet link <agent-name>` for each agent [target], then each group skill's
+per-agent and per-host steps (its `installation/INSTRUCTION.md` says which),
+and `fleet status`.

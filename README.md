@@ -120,7 +120,7 @@ names, ids, paths, people, and how that organisation builds and ships software.
 | In the fleet (COMMON) | In the install (SPECIFIC) |
 |---|---|
 | each skill's `SKILL.md`, scripts, tests, `config.example.json`, `installation/INSTRUCTION.md` and `installation/check` | each skill's `CONTEXT.md`, `config.json`, `installation/.install-state.json`, `override/` and `temporary/`, under `.claude/skills/<skill>/` |
-| the conventions vocabulary (`CONVENTIONS.md`), and the optional software-development group of skills that fills some of its keys | its development conventions - definition of done, branch naming, workspace, release, environments, feature checklist - each a skill of that group where the install takes it, a skill or document of its own, or none |
+| the conventions vocabulary (`CONVENTIONS.md`), and the optional software-development group of skills that fills some of its keys | its development conventions - definition of done, branch naming, workspace, release, environments, feature checklist - each a skill of that group where the install takes it and the group fills that key, a skill or document of its own, or none |
 | house-rule defaults | its house-rule values |
 | persona templates | its agents' charters, `.claude/agents/<agent-name>.md` |
 | the knowledge-store mechanism and an empty store root | its filled knowledge store |
@@ -135,10 +135,11 @@ and `fleet where <skill>` prints where a skill's SPECIFIC files live.
 
 **The fleet's development process is optional.** Where a skill needs one - when
 is a task done, how is a branch named - it reads a convention key. An install
-that takes the software-development group points those keys at the group's
-skills; one that does not points them at skills or documents of its own, or
-leaves a key `null`, and then has no such convention: the skill skips that step
-and says so.
+that takes the software-development group points the keys the group fills at
+the group's skills; any other key, and every key of an install that does not
+take it, points at a skill or document of the install's own, or is `null`, and
+then the install has no such convention: the skill skips that step and says
+so.
 
 ## The host-checkout model
 

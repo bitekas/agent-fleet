@@ -2,10 +2,12 @@
   "_comment": [
     "FIXTURE install manifest for the fleet's own tests (FLEET_CONTEXT_ROOT=tests/fixtures/install).",
     "Every value is synthetic. Every house rule differs from its fleet default, so a test can tell",
-    "a value read from here from a default; the conventions use all three value forms.",
+    "a value read from here from a default; the conventions use all three value forms, people_notes",
+    "being the explicit null.",
     "It takes the software-development skill group (templates/skill-groups.json): skills lists every",
     "skill of the group, and the conventions name the group's skills, except branch_naming, which",
-    "points at a document of the install's own, as an install that keeps one may.",
+    "points at a document of the install's own, as an install that keeps one may; workspace reads",
+    "only worktree-workflow's section 1, the rule that every write happens in a worktree.",
     "transports.enabled names slack: load it with the registry at tests/fixtures/transports",
     "(FLEET_TRANSPORTS_DIR, or the skills_dir argument) until the fleet tree carries the real",
     "slack-communication/transport.json; the fixture descriptor holds the same values."
@@ -26,9 +28,10 @@
     "definition_of_done": { "skill": "definition-of-done" },
     "feature_checklist": { "doc": "docs/checklists/<feature-slug>.md" },
     "branch_naming": { "doc": "docs/example-process.md", "section": "Branch names" },
-    "workspace": { "skill": "worktree-workflow", "section": 3 },
+    "workspace": { "skill": "worktree-workflow", "section": 1 },
     "release": { "skill": "release" },
-    "environments": { "skill": "repo-and-environments" }
+    "environments": { "skill": "repo-and-environments" },
+    "people_notes": null
   },
   "house_rules": {
     "questions_per_message": 2,

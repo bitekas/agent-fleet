@@ -255,7 +255,7 @@ choice: A, unless the person needs Remote Control or bills by API key.
    left in.
 3. **Conventions stay cited by slot key** - `definition_of_done`,
    `branch_naming`, `workspace`, `release`, `environments`,
-   `feature_checklist` - never by an install's skill or document. The agent
+   `feature_checklist` - never by the skill or document a key names. The agent
    resolves a key at run time with `fleet settings conventions.<key>`, so a
    change of process is one manifest edit, not an edit to every charter.
 4. **Prove no placeholder is left, with a check that is first seen to find

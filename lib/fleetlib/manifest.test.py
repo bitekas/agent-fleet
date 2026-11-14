@@ -346,8 +346,9 @@ class FleetSkillConventionTest(IsolatedTest):
 class OptionalConventionTest(IsolatedTest):
     """`conventions.people_notes` is optional, so a schema-1 manifest without it is
     still valid: it loads unchanged and reads the key as null (no such convention),
-    and one that sets it resolves in every value form. The fixture's conventions
-    object leaves the key out, so it is the case of an install that never set it."""
+    and one that sets it resolves in every value form. The first test removes the
+    key from the fixture (which sets it to an explicit null): the case of an install
+    that never set it."""
 
     def load(self, m):
         return manifest.load(make_install(self.tmp / "inst", m), skills_dir=FIXTURE_TRANSPORTS)
@@ -396,7 +397,9 @@ class FixtureTest(IsolatedTest):
         self.assertEqual([c["tz"] for c in hr["times"]["cities"]], ["Europe/Berlin", "Asia/Tokyo", "Asia/Kolkata"])
 
     def test_fixture_conventions_use_all_three_forms(self):
-        conv = manifest.settings(manifest.load(FIXTURE_INSTALL, skills_dir=FIXTURE_TRANSPORTS))["conventions"]
+        # The fixture's own values, not settings(): settings() fills an absent key with
+        # None, which would hide a fixture that wrote no explicit null.
+        conv = manifest.load(FIXTURE_INSTALL, skills_dir=FIXTURE_TRANSPORTS)["conventions"]
         forms = {("skill" if v and "skill" in v else "doc" if v else None) for v in conv.values()}
         self.assertEqual(forms, {"skill", "doc", None})
         self.assertTrue(any(v and "doc" in v and "section" in v for v in conv.values()))
