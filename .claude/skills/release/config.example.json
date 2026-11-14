@@ -1,0 +1,28 @@
+{
+  "_comment": [
+    "TEMPLATE. Copy to config.json in this skill's install context",
+    "(`fleet where release config.json` prints the path) and replace every placeholder.",
+    "",
+    "The five values the release procedure refers to. SKILL.md names none of them,",
+    "so the same twelve steps serve any two-branch release model; the install's",
+    "CONTEXT.md names its lane, its commands, its gaps and who authorizes the merge.",
+    "",
+    "Nothing here is read by a script - this skill owns none. Every value is read",
+    "by the AGENT. No credential here, ever: these are branch names and",
+    "repo-relative paths.",
+    "",
+    "JSON has no comments, so every _comment key here is documentation.",
+    "Leave them in your config.json or delete them; nothing reads them."
+  ],
+  "repo": {
+    "_comment": "landing_branch is where finished work merges and is pushed; release_branch is the branch the store lane deploys from. They must be DIFFERENT branches: the whole procedure is one merging into the other, and a config that points both at the same branch turns 'cut a release' into a no-op that still fires the release workflow. rc_branch_prefix is what step 1 cuts and step 11 merges away; give it a prefix nothing else in the repo uses, so an abandoned release candidate is findable and deletable by pattern. Git stores branches as nested refs, so the prefix's first segment is reserved as well: a branch named exactly that segment (an agent-named branch, say) blocks every release candidate under it, and the install's branch naming must never produce one.",
+    "landing_branch": "main",
+    "release_branch": "release",
+    "rc_branch_prefix": "release/rc-"
+  },
+  "release": {
+    "_comment": "version_file holds the build/version number and is the source of truth for it. 'Release the current version' means it is not bumped by hand; CI bumps it after a real upload and backmerges the result to the landing branch. design_packages_dir is where step 4 looks for a feature's design package - the authority on what a feature's branches and edge cases were INTENDED to be, against which the diff is the authority on what shipped. Point it at wherever design documents live, or set it to \"\" if this repo has none, in which case step 4 derives everything from the diff alone and says so.",
+    "version_file": "version.json",
+    "design_packages_dir": "docs/architecture"
+  }
+}
