@@ -167,6 +167,7 @@ NOT_SKILLS = {
     "exit": "Claude Code built-in command",
     "proc": "absolute filesystem path",
     "run": "absolute filesystem path",
+    "tmp": "absolute filesystem path",
 }
 # Skills an install keeps for its own development process. Fleet prose cites
 # the conventions key that points at one (CONVENTIONS.md), never the skill. A
