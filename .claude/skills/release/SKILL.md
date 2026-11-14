@@ -51,8 +51,28 @@ person and number of one install is in its `CONTEXT.md`.
 The install's `CONTEXT.md` for this skill (`fleet where release CONTEXT.md`)
 carries the install's values and, per step, the exact command lines to run -
 its section numbers match this file's, so section 7 here lands at section 7
-there. `config.json` (`fleet where release config.json`) carries the small
-structured subset; `config.example.json` beside this file names every key.
+there. **Ahead of its section 1 it carries five sections this file has no
+heading for**, and the steps below point at each of them, so an install writing
+its `CONTEXT.md` writes all five:
+
+- **section 0, the role table**: for every role this file says section 0
+  names - the UI evidence skill and the visual sweep it defines, the
+  design-source skill, the cloud-secret procedure and the release plan file -
+  the skill, procedure or file that plays it in the install, or that nothing
+  does (*What lives elsewhere* below says what a missing UI evidence skill or
+  design source changes);
+- *Who decides*: the person who specifies the twelve steps, authorizes section
+  11's merge into the release branch and approves each cherry-pick into the RC;
+- *The branches and the lane*: the landing, release and RC branch names, the
+  ref namespace the RC prefix reserves, and what a push to the release branch
+  queues;
+- *The tester account*: the shared account the release builds are tested on,
+  and where a build's install link is delivered for it;
+- *Where the literal UI strings are read*: the string catalog a QA row quotes
+  its labels from.
+
+`config.json` (`fleet where release config.json`) carries the small structured
+subset; `config.example.json` beside this file names every key.
 
 ---
 
