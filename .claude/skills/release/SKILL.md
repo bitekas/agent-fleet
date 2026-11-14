@@ -69,11 +69,16 @@ follow-up ticket.
 read-only on the host, so a correction goes to the layer that is wrong. A
 command, a flag, a file, a value or any other detail of this install is
 corrected in the install's `CONTEXT.md`, in the section with the same number. A
-correction to the mechanism itself, or to a vendor console sequence in section
-12, belongs in the fleet repository: make or propose it there in the same
-engagement, the way `/agent` section 8 says, and until it has landed write the
-correction at the top of the install's `CONTEXT.md` section with the same
-number, which outranks this file, so the next reader meets it.
+correction to the mechanism itself - this file, a file under `technical/`, or a
+vendor console sequence in section 12 - belongs in the fleet repository: make or
+propose it there in the same engagement, the way `/agent` section 8 says, and
+until it has landed write the correction as a note at the top of the install's
+`CONTEXT.md` section with the same number, which outranks this file, so the next
+reader meets it. **That note is deleted in the same change that takes up the
+fleet version carrying the fix** (the install's next fleet upgrade past it),
+because a note left behind outranks the corrected text and is the two-copies
+drift the rule below exists to prevent. If the fleet change is refused, the note
+either becomes this install's value, written as such, or is removed.
 
 **Two halves, and only one of them may change:**
 
@@ -221,12 +226,12 @@ same six rules, and they are stated once here rather than four times below.
 6. **The sequence opens by delivering the build to the tester account.** The
    release builds are installed and tested signed in to one shared tester
    account (`CONTEXT.md`, *The tester account*). When the requester starts a
-   sequence, and before its step 1, send that account, on the chat transport
-   `CONTEXT.md` names for it, the install link of every build the sequence
-   uses - the tester-distribution service's release link per platform, which
-   the upload prints - with the build's version, the commit it was built from,
-   and the on-screen check that proves it is the installed one. Step 1 then names
-   the same build. A sequence that names no build gets run on whatever happens
+   sequence, and before its step 1, send the install link of every build the
+   sequence uses - the tester-distribution service's release link per platform,
+   which the upload prints - to the address that section gives for delivering
+   builds to that account, with the build's version, the commit it was built
+   from, and the on-screen check that proves it is the installed one. Step 1
+   then names the same build. A sequence that names no build gets run on whatever happens
    to be installed, and its results describe that.
 
 ---
@@ -241,8 +246,8 @@ it. **This is the first act of a release, before any tester build of the
 candidate.**
 
 **How.** A fresh git worktree on a new RC branch (`repo.rc_branch_prefix`
-followed by the cut's date, `YYYY-MM-DD` - the only name shape the store lane
-accepts) cut from the **freshly fetched** tip of the landing branch, **pushed to
+followed by the cut's date, `YYYY-MM-DD` - the name shape the install's store
+lane accepts, `CONTEXT.md` section 11) cut from the **freshly fetched** tip of the landing branch, **pushed to
 origin at once** (a CI tester build is a workflow dispatch on it, and a fix
 branch is cut from it), in your own workspaces directory, with a real
 independent install of **every dependency root** (`/worktree-workflow` owns the
@@ -321,7 +326,7 @@ made to show what this release ships, and nothing else:
   the commit that wrote it, lie in the release range. A frame that passes is
   owed its un-marking on the current page, done first and then carried into the
   snapshot; a frame with no record and no citing commit cannot be verified from
-  the repository, keeps its mark, and goes to whoever froze it.
+  the repository, keeps its mark, and goes to whoever marked it.
 - **The shipped version of a screen stays until its successor lands.** A frame
   the design source marks for deletion is, until its successor lands, the
   shipped version, so the snapshot keeps it. Where such a frame has already been
@@ -342,7 +347,7 @@ and its backups.
 **The previous release's snapshot moves to the design archive now**, where the
 design file keeps only the current release's snapshot: move it, and delete it
 from the design file only after the move is proven (the design-source skill
-owns the move and that rule; `CONTEXT.md` section 1 has the command). Until
+owns the move and that rule; `CONTEXT.md` section 11 has the command). Until
 both are done, your report carries it as an open checklist line,
 `[ ] move <previous snapshot> to the design archive, then delete it from the design file`.
 
@@ -757,10 +762,12 @@ What the boot does, and every clause is part of the requirement:
 - **It builds the backend first.** Where the runtime serves compiled output, a
   stale build serves the previous commit and the whole regression test measures
   the wrong code.
-- **Dedicated ports outside every dev-stack slot range, and every auxiliary
-  service the runtime starts by default switched off** - an emulator's web UI,
-  say, whose committed port is a dev stack's - so this mode steals no port from
-  a colleague's running stack.
+- **Dedicated ports, outside every port a local development stack uses, for the
+  runtime and for every auxiliary service it starts by default: each auxiliary
+  service is switched off where it can be (an emulator's web UI, say, whose
+  committed port is a development stack's) and given a fixed port of its own
+  where it cannot** - so this mode steals no port from a colleague's running
+  stack.
 - **The runtime binds loopback only; a private-network HTTPS front is what
   makes it reachable.** A store-identity iOS build carries no cleartext-HTTP
   exception (App Transport Security refuses plain HTTP), so the tester's client
@@ -783,22 +790,31 @@ below). It verifies rather than assumes: it reports what is true after the
 kills - the process, its pid file, the generated config, the CLI's config
 directory, any debug log the CLI writes (which can record the secret store's
 responses, payloads included), the log streamer, the HTTPS front - and exits
-non-zero if the window may still be open. Some of its checks are deliberately
-machine-wide rather than scoped to the worktree that runs it, because a
-worktree-scoped verification run from the wrong directory finds nothing of its
-own and would report "window closed" over somebody else's live server.
+non-zero if the window may still be open. Two of its checks - a process census
+for another checkout's server of this kind, and a census of listeners on this
+mode's ports - are deliberately machine-wide and report-only rather than scoped
+to the worktree that runs it, because a worktree-scoped verification run from the
+wrong directory finds nothing of its own and would report "window closed" over
+somebody else's live server. The ports are the only evidence that does not
+depend on being in the right directory.
 
 ## What such a server SERVES, and what it does not
 
-**A serverless platform's local runtime dispatches background events only from
-the local emulators running beside it.** Pointed at the live project's data
-layer with none running, it serves the request-driven surface - callable
-functions and HTTP routes - and nothing else: nothing in it subscribes to the
-cloud project's event stream. The runtime's technical file says which classes
-it serves, and how that was established; check it before relying on this
-sentence for a runtime it does not cover.
+**Section 6 needs a runtime that, pointed at the live project's data layer,
+dispatches no background event and fires no schedule.** Such a runtime serves
+the request-driven surface - callable functions and HTTP routes - and nothing
+else. The Cloud Functions for Firebase emulator meets this as it stands: it
+dispatches background events only from local emulators running beside it, and
+with none running it subscribes to nothing (`technical/firebase-functions-emulator.md`
+section 1). **A runtime that consumes live event sources from a local process -
+a queue or storage trigger reading the live resource, a timer firing locally -
+does not meet it as it starts**: its triggers would run the RC's code against
+live events, in a race with the deployment. On such a runtime the triggers are
+disabled before it boots, and its technical file says how and how that was
+verified. `CONTEXT.md` section 6 names this install's runtime and its technical
+file.
 
-So with the live project's data layer in place of emulators:
+So, with a runtime that meets the requirement:
 
 - **Database triggers, storage triggers and scheduled jobs keep running on the
   LIVE deployment**, against the same live data, from the **previously
@@ -806,10 +822,10 @@ So with the live project's data layer in place of emulators:
   exercised by section 8 or 10, and every trigger side-effect a tester observes
   is the old code's. Say so when reporting the pass: it is the largest gap in
   what sections 8 and 10 cover, and it is invisible from the device.
-- **A scheduled job does not fire in such a runtime on any schedule.** There is
-  no clock in it.
-- **An auth hook that runs on sign-in stays live too**: a real sign-in runs the
-  deployed one.
+- **No scheduled job fires in it**: the deployed schedule keeps firing the
+  deployed code, and the RC's scheduled code runs nowhere.
+- **A hook the platform runs on sign-in stays live too**, unless the runtime's
+  technical file says otherwise: a real sign-in runs the deployed one.
 
 **The startup log is not evidence of what is armed.** A runtime can report a
 background function as initialized whether or not anything can ever dispatch to
@@ -869,7 +885,8 @@ as an empty string rather than throwing, the function runs, answers normally,
 and the **only** signal is the runtime's own error block in the log. The boot
 check greps for that block's exact text (the runtime's technical file has it),
 proved able to match under a negative control - a wrong credential produces it.
-A request would otherwise be served by a provider client holding an empty key.
+A request would otherwise be served by a third-party API client holding an
+empty key.
 A log streamer keeps watching for that text for the life of the server, because
 a function invoked an hour later fetches its secrets then.
 
@@ -1347,10 +1364,11 @@ evidence section 11's authorization rests on.
 
 **What it does.** Moves the release branch to the validated RC tip, which is
 what queues the store builds and closes the release window. **The store build is
-that commit and no other**: the deploy script's store target refuses every
-branch but an RC, and accepts the release branch only in CI, where this step's
-fast-forward has made its tip the RC's (`CONTEXT.md` section 11 has this
-install's rule).
+that commit and no other** where the store lane enforces it: the deploy script's
+store target refuses every branch but an RC, and accepts the release branch only
+in CI, where this step's fast-forward has made its tip the RC's (`CONTEXT.md`
+section 11 has this install's rule). Where the lane does not enforce it, the
+checks below are the only guard, and the report says so.
 
 **It is authorized by a person, not by a green gate.** Section 5a's
 contract-changes lines and section 10's completed checklist are the evidence;
@@ -1551,8 +1569,9 @@ install's lane automates and how it is configured today.
 **Where the iOS lane does not wait for App Store Connect to finish processing,
 the build is normally still `Processing` when you arrive at this step, and the
 wait for `Processed` is yours to perform.** fastlane's pilot returns as soon as
-the build row appears when it is told to skip that wait, and a lane that
-attaches no external tester group usually is. Two consequences to carry into
+the build row appears when its `skip_waiting_for_build_processing` option is
+set; `CONTEXT.md` section 12 says whether this install's lane sets it. Two
+consequences to carry into
 12a: the build may not be listed as selectable for minutes after a green
 release run, and a processing REJECTION surfaces only here - the release run
 went green, the build number is already burned, and the version file has

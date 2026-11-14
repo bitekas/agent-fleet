@@ -6,8 +6,10 @@ Functions for Firebase and whose section 6 server is the functions emulator
 the live project. `SKILL.md` section 6 states the requirement in terms any
 serverless runtime meets; this file says how this runtime behaves under it.
 A fact carries the date or the tool versions it was measured on where one was
-recorded, and that is when to re-check it: re-read the emulator source named
-below after any firebase-tools major.
+recorded, and that is when to re-check it: after any firebase-tools or
+firebase-functions major, re-read the source files named in sections 1 and 2
+(firebase-tools' `lib/emulator/functionsEmulator.js`, firebase-functions'
+`lib/common/providers/https.js`).
 
 ## 1. What it serves against a live project, and what it does not
 
@@ -20,7 +22,8 @@ Read 2026-09-04, from two sources of different strength.
   trigger registration (Firestore, Realtime Database, Auth, Storage, Pub/Sub) is
   gated on the corresponding emulator's registry entry and delivered by that
   emulator, and no registration path targets a cloud project's event stream.
-  That source was read on `master`, not on a pinned build.
+  That source (`lib/emulator/functionsEmulator.js` and the registry it
+  consults) was read on `master`, not on a pinned build.
 - **HTTPS callables (`onCall`) and `onRequest` routes are the one class with no
   such gate**: they are always served, at a real local URL,
   `http://127.0.0.1:<port>/<project id>/<region>/<function name>`.
@@ -39,21 +42,29 @@ serves the callables and the HTTP routes and nothing else:
 
 **The startup log over-counts.** Auth and Storage trigger registrations report
 the function as initialized (`auth function initialized`) whether or not
-anything can ever dispatch to it; Firestore and database registrations, and the
-Pub/Sub registrations schedules are, print that the function was ignored,
-naming the absent emulator. A census of
-what the server serves therefore reads the log's `http function initialized`
-lines as served, its `ignored` lines as not served, and every other
-`... function initialized` line as not served either. A boot census taken this
-way confirmed the source reading: every Firestore and Pub/Sub trigger reported
-ignored, and an Auth `user().onCreate` trigger reported initialized with nothing
-able to dispatch to it. The census counts what the BOOTED source exports, not
-what the live project has deployed, so it is re-taken on every release's boot.
+anything can ever dispatch to it. Firestore and database registrations print
+that the function was ignored, naming the absent emulator, and so do Pub/Sub
+registrations, which is what a schedule is. A census of what the server serves
+therefore reads the log's `http function initialized` lines as served, its
+`ignored` lines as not served, and its `auth function initialized` lines as not
+served either. Any other line kind is unmeasured, not "not served": read the
+source before counting it (a task-queue function, say, with the Cloud Tasks
+emulator this mode starts). A boot census taken this way (2026-10-06) confirmed
+the source reading: every Firestore and Pub/Sub trigger reported ignored, and an
+Auth `user().onCreate` trigger reported initialized with nothing able to
+dispatch to it. The census counts what the BOOTED source exports, not what the
+live project has deployed, so it is re-taken on every release's boot.
+
+**The served set cannot be narrowed per function.** A per-function
+`--only functions:<name>` filter is a deploy-time feature: the emulator ignores
+it and serves every function the source exports (established 2026-09-04). A
+server of this kind therefore serves the whole request-driven surface, whichever
+client each function was written for.
 
 **Keeping emulator hosts out.** The Admin SDK reaches an emulator whenever its
 host variable is set: `FIRESTORE_EMULATOR_HOST`, `FIREBASE_AUTH_EMULATOR_HOST`
-and `FIREBASE_STORAGE_EMULATOR_HOST`. The boot scrubs all three from the
-emulator's environment, and the generated `firebase.json` it starts from has no
+and `FIREBASE_STORAGE_EMULATOR_HOST`. So a boot scrubs all three from the
+emulator's environment, and generates the `firebase.json` it starts from with no
 `emulators.firestore`, `emulators.auth`, `emulators.storage` or
 `emulators.pubsub` block at all, so nothing can start one.
 
@@ -64,8 +75,12 @@ emulator pointed at a live project, which then performed a live Firestore read
 as the uid in the token.
 
 - **The emulator sets a debug feature that makes the functions SDK's `onCall`
-  wrapper decode the bearer token without verifying it.** The same feature
-  disables App Check verification and identity-blocking verification. It is
+  wrapper decode the bearer token without verifying it.** firebase-tools'
+  `lib/emulator/functionsEmulator.js` starts every runtime with
+  `FIREBASE_DEBUG_FEATURES={"skipTokenVerification":true,"enableCors":true}`,
+  and firebase-functions' `lib/common/providers/https.js` then calls
+  `unsafeDecodeIdToken` in place of `verifyIdToken`. The same feature disables
+  App Check verification and identity-blocking verification. It is
   unconditional emulator behaviour and cannot be turned off without patching the
   SDK.
 - **An `onRequest` route that calls the Admin SDK's `verifyIdToken` in its own
@@ -88,12 +103,17 @@ wrote.
   emulator's own error block, whose text contains
   `Unable to access secret environment variables`. A wrong credential produces
   it, which is the negative control that proves a grep for it can match.
+- **A callable's `onCall` wrapper rejects an empty body (HTTP 400) before any
+  user code runs.** So a warm can `POST {}` to every callable that declares a
+  secret: the worker starts and fetches its secrets, and no handler code runs.
+  An `onRequest` route has no such wrapper; a warm calls one only where its
+  handler has been read to reject a missing credential before touching data.
 - **A local secrets file (`.secret.local` in the functions directory)
   satisfies the parameters from disk**, which disconnects a secret check from
   the credential it claims to measure: a check that finds one present reports
   INCONCLUSIVE.
 - **`firebase-debug.log`, written at the project root, records every Secret
-  Manager response, payloads included.** The boot deletes a previous copy and
+  Manager response, payloads included.** So a boot deletes a previous copy, and
   the teardown deletes this one and reports it.
 
 ## 4. The one-hour credential, and the worker that crashes the server
@@ -106,8 +126,8 @@ Measured on firebase-tools 15.25 through 15.31.
   worker that fetches a secret after the token's hour takes the whole emulator
   down, and the emulator's own output then says only
   `An unexpected error has occurred.`: the real error is in
-  `firebase-debug.log`, so a boot that sees the emulator exit prints that log's
-  last `TypeError` / `Error:` lines before the teardown deletes it.
+  `firebase-debug.log`, so a boot that sees the emulator exit should print that
+  log's last `TypeError` / `Error:` lines before the teardown deletes it.
 - **A worker keeps its secrets for its life.** A warmed function keeps its
   worker until a file under the functions source directory changes: the
   emulator watches it, and a change (a build, a pull, a test run) drops every
@@ -121,10 +141,12 @@ Measured on firebase-tools 15.25 through 15.31.
 ## 5. Ports, the UI, and the warning that names no project
 
 - **The Emulator UI starts under a functions-only run unless the generated
-  config disables it** (`emulators.ui.enabled: false`), and its committed port
-  is usually a dev stack's. The hub, functions, Eventarc, Cloud Tasks and
+  config disables it** (`emulators.ui.enabled: false`; measured 2026-09-04: the
+  banner printed the UI's address and its port was bound, and a boot with the
+  flag off printed no banner and bound no UI port). Its committed port is
+  usually a local development stack's. The hub, functions, Eventarc, Cloud Tasks and
   logging emulators each take a port too; give every one of them a fixed port
-  outside the dev stack's range.
+  outside every port a local development stack uses.
 - **The CLI's warning that "calls to these services will affect production"
   names no project**, so it is identical whichever project the emulator was
   started against.
