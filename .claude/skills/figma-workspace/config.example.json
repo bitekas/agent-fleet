@@ -35,7 +35,7 @@
     "connector_name": "example.ai Figma"
   },
   "tokens": {
-    "_comment": "PATHS to personal access tokens, one token per file, mode 600, each file holding the token and nothing else. Each token acts as the PERSON who generated it, on every file that person can open, and lives at most 90 days. read: scope file_comments:read, REQUIRED. write: scope file_comments:write, or null for a READ-ONLY install - with null every write verb refuses before building a request. content: scope file_content:read, for anchor names, or null. ${VAR:-default}, $VAR and a leading ~ are expanded. Keep them OUTSIDE any checkout.",
+    "_comment": "PATHS to personal access tokens, one token per file, mode 600, each file holding the token and nothing else. Each token acts as the PERSON who generated it, on every file that person can open, and lives at most 90 days. read: scope file_comments:read, REQUIRED. write: scope file_comments:write, or null for a READ-ONLY install - with null every write verb refuses before building a request. content: scope file_content:read, for anchor names, or null. ${VAR:-default}, $VAR and a leading ~ are expanded, and a path still relative after that resolves against the directory holding this config.json (the config-directory base of /claude-skill section 2); an absolute path is the usual form. Keep them OUTSIDE any checkout.",
     "read": { "path": "${FLEET_SECRETS_DIR:-$HOME/.fleet-secrets}/figma-comments-read.token" },
     "write": { "path": null },
     "content": { "path": null }
@@ -50,7 +50,7 @@
     "prefix": "{Agent} (via Jane's account): "
   },
   "state": {
-    "_comment": "Where the cursor (`new`) and the name cache live: per agent, in the agent's own state directory. {home} is the calling agent's home, the parent of CLAUDE_CONFIG_DIR. A path inside a git work tree is refused.",
+    "_comment": "Where the cursor (`new`) and the name cache live: per agent, in the agent's own state directory. {home} is the calling agent's home, the parent of CLAUDE_CONFIG_DIR; ${VAR:-default}, $VAR and a leading ~ are expanded, and a path still relative after that resolves against the directory holding this config.json (the config-directory base of /claude-skill section 2). A path inside a git work tree is refused.",
     "dir": "{home}/state/figma-workspace"
   }
 }

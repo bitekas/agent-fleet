@@ -210,9 +210,11 @@ def expand(value, local=True):
 
 def repo_path(value):
     """A config value that names a file in the install's repository, as that
-    file's path: fleetlib.paths.resolve_repo_path, against the install root this
-    check resolved (/claude-skill section 2: repository paths resolve against the
-    install root, every other relative path against config.json's directory)."""
+    file's path: fleetlib.paths.resolve_repo_path against the install root this
+    check resolved, which is resolve_repo_path's own default root. That is the
+    install-root base of /claude-skill section 2, the base config.example.json's
+    comments name for every repository path key. The one config-directory key
+    this check reads, device_e2e.driver_path, goes through resolve_config_path."""
     from fleetlib import paths
     return str(paths.resolve_repo_path(value, root=REPO))
 
