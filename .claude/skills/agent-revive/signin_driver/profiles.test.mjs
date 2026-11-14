@@ -45,7 +45,9 @@
 //     message, and paired with the first browser's page count staying 1 - a losing
 //     launch adds a window to the winner (measured, profile.mjs `profileInUse`);
 //   - the storage refusal is first shown a directory it must ACCEPT, so a function
-//     that refused everything could not pass the refusals.
+//     that refused everything could not pass the refusals;
+//   - "no stealth scratch profile is left" is asserted only after the plugin's
+//     scratch profile was FOUND while the first driver ran, wherever it was made.
 // Delete a control and the assertion beside it can no longer fail.
 
 import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync, existsSync, statSync, chmodSync, symlinkSync, readdirSync, realpathSync } from 'node:fs';
@@ -358,6 +360,16 @@ async function halfB(browsers) {
   const base = `http://127.0.0.1:${server.address().port}`;
   const freePort = await new Promise(r => { const s = net.createServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => r(p)); }); });
   const run = (agent, rd, args, opts) => client([agent, ...args, '--run-dir', rd, '--log', join(T, `${agent}.log`)], { env, ...opts });
+  // THE STEALTH PLUGIN'S SCRATCH PROFILE. Its user-data-dir dependency mkdtemps a
+  // puppeteer_dev_profile-* directory at every launch and never removes it
+  // (driver.mjs, setDependencyDefaults). The driver must make it inside its run dir,
+  // which every exit it can observe removes, never in the temp dir, where each
+  // launch would leave one. Found by name, in the run dir and among the temp dir's
+  // entries that are NEW since half B began - so another process's entries already
+  // there are not this run's.
+  const scratch = d => { try { return readdirSync(d).filter(n => n.startsWith('puppeteer_dev_profile-')).map(n => join(d, n)); } catch { return []; } };
+  const tmpBefore = new Set(scratch(tmpdir()));
+  const newInTmp = () => scratch(tmpdir()).filter(p => !tmpBefore.has(p));
   const quitAndWait = async (agent, rd, pid) => {
     const r = await run(agent, rd, ['quit']);
     const deadline = Date.now() + 20000;
@@ -381,11 +393,15 @@ async function halfB(browsers) {
     ok('throwaway start: the reply carries exactly the keys it always has', Object.keys(s.json || {}).join(','), 'ok,started,pid,sock,run_dir,log,xvfb');
     ok('throwaway start: its profile is inside the run dir', existsSync(join(ra, 'profile')), true);
     ok('throwaway start: no profiles dir is made', existsSync(PROFILES), false);
+    const made = [...scratch(ra), ...newInTmp()];
+    control("the stealth plugin's scratch profile was found while the driver runs (so its absence below means something)", made.length, 1);
+    ok("throwaway start: that scratch profile is inside the run dir, which the driver's cleanup removes", made.length === 1 && dirname(made[0]) === ra, true);
     await run('sipt-a', ra, ['goto', `${base}/set`]);
     await typePassword('sipt-a', ra);
     let q = await quitAndWait('sipt-a', ra, s.json?.pid);
     ok("throwaway quit: the reply carries exactly the keys it always has", Object.keys(q.json?.result || {}).join(','), 'bye,removing');
     ok('throwaway quit: the run dir, profile included, is gone', existsSync(ra), false);
+    ok("throwaway quit: the stealth plugin's scratch profile is gone too", made.some(p => existsSync(p)), false);
     s = await run('sipt-a', ra, ['start', '--config', CONFIG]);
     ok('throwaway restart: exit 0', s.status, 0);
     control('a throwaway restart does NOT bring the cookie back (so the stored-profile cookie below is the profile, not the server)',
@@ -467,6 +483,7 @@ async function halfB(browsers) {
     ok('profiles-check --profile <an account with none>: absent', pcAbsent.json?.profiles?.['beta@example.com']?.status, 'absent');
     ok('...exit 0', pcAbsent.status, 0);
     ok('...and it did not create one', existsSync(join(PROFILES, 'beta@example.com')), false);
+    ok("no driver of half B left a stealth scratch profile (puppeteer_dev_profile-*) in the temp dir", newInTmp().join(', '), '');
   } finally {
     server.close();
   }

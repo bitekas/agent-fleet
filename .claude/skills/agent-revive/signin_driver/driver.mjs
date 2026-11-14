@@ -265,6 +265,21 @@ process.on('uncaughtException', e => { cleanup(); console.error('driver.mjs: unc
 process.on('unhandledRejection', e => { cleanup(); console.error('driver.mjs: unhandled rejection', redact(String(e && e.message ? e.message : e))); process.exit(1); });
 
 chromium.use(StealthPlugin());
+// THE STEALTH PLUGIN MAKES A PROFILE DIRECTORY OF ITS OWN AT EVERY LAUNCH AND NEVER
+// REMOVES IT, SO IT IS MADE INSIDE THE RUN DIR. Its user-agent-override evasion
+// depends on puppeteer-extra-plugin-user-preferences, which depends on
+// puppeteer-extra-plugin-user-data-dir. That plugin's beforeLaunch finds no
+// userDataDir in the launch options (launchPersistentContext takes the profile as
+// its first argument), so it makes <folderPath>/puppeteer_dev_profile-XXXXXX and
+// writes Default/Preferences into it: a directory Chromium never opens, which holds
+// only that file. Its delete runs on onDisconnected, and playwright-extra dispatches
+// that for a persistent context only when context.browser() is null; Playwright
+// returns a Browser there (playwright 1.63.0, playwright-extra 4.3.6, measured
+// 2026-11-14), so the delete never runs, on quit, on a signal or on a crash.
+// folderPath defaults to the system temp dir, where each launch left one; in the run
+// dir, the cleanup above removes it on every exit this process observes. What
+// Chromium is launched with does not change.
+chromium.plugins.setDependencyDefaults('user-data-dir', { folderPath: runDir });
 const launchArgs = ['--no-sandbox'];
 if (port) launchArgs.push(`--remote-debugging-port=${port}`, '--remote-debugging-address=127.0.0.1');
 // The app window (share.mjs, APP_START). Measured 2026-11-01: a window.open() popup
