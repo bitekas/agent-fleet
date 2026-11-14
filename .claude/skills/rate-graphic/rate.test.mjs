@@ -53,7 +53,10 @@
  * at files containing `{}`, which the cloud SDK rejects locally as a malformed
  * key - so those cases assert only what rate.mjs printed BEFORE it shelled out,
  * and they hold identically on a machine with no cloud SDK at all, where the
- * spawn fails with ENOENT instead. Neither reaches a network call.
+ * spawn fails with ENOENT instead. Neither reaches a network call. Section 4b
+ * puts a fake cloud SDK first on the child's PATH instead, and its one case that
+ * gets a key points GEMINI_API_BASE at a file: URL, which fetch refuses before
+ * opening any connection.
  *
  * WHAT IT COVERS, and why each part is here:
  *
@@ -87,6 +90,11 @@
  *      one. The multi-match branch matters because choosing among several key
  *      files is a decision, and the wrong one authenticates as the wrong
  *      principal against the right API.
+ *   4b. THE ISOLATED gcloud CONFIG DIRECTORY never outlives resolveKey(): on
+ *      every way out (key fetched, fetch failed, fetch empty, activation
+ *      refused) no rate-graphic-gcloud-* directory is left in the child's
+ *      TMPDIR. It holds the activated account's credentials, and an exit taken
+ *      inside the try that made it skips the finally that removes it.
  *   5. THE JSONL RECORD SHAPE, via --record-pick, the one record rate.mjs can
  *      write without a model call.
  *   6. THE PROMPT'S IDENTITY. PROMPT_SHA is sha256 over the prompt text and the
@@ -238,6 +246,17 @@ function run(argv, { configFile = null, cwd = TMP, env = {} } = {}) {
   });
   return { status: r.status, stdout: r.stdout || '', stderr: r.stderr || '' };
 }
+
+/**
+ * A TMPDIR of the case's own. rate.mjs makes its gcloud config directory under
+ * os.tmpdir(), which is TMPDIR, so the census below is exact for that one run.
+ */
+function caseTmpdir(dir) {
+  const t = path.join(dir, 'tmpdir');
+  fs.mkdirSync(t);
+  return t;
+}
+const gcloudDirsIn = (t) => fs.readdirSync(t).filter((n) => n.startsWith('rate-graphic-gcloud-'));
 
 /** A file rate.mjs will accept as "exists" without ever reading it as an image. */
 function touchImage(dir, name) {
@@ -543,11 +562,14 @@ for (const key of ['ratings_log.path', 'credentials.service_account_key_path',
     c.credentials.service_account_key_path = path.join(dir, 'keys', 'sa-*.json');
   });
   const img = touchImage(one.dir, 'a.png');
-  const r = run([img], { configFile: one.file });
+  const tmp = caseTmpdir(one.dir);
+  const r = run([img], { configFile: one.file, env: { TMPDIR: tmp } });
   check('glob ONE MATCH: the not-found branch is not taken',
     !/no service-account key matched/.test(r.stderr), r.stderr.split('\n')[0]);
   check('glob ONE MATCH: no ambiguity warning is printed',
     !/files matched/.test(r.stderr), 'a single match is not a decision');
+  check('glob ONE MATCH: the failed cloud SDK call leaves no gcloud config directory behind',
+    r.status === 2 && gcloudDirsIn(tmp).length === 0, `status=${r.status} left=${JSON.stringify(gcloudDirsIn(tmp))}`);
 }
 {
   const many = makeConfig((c, dir) => {
@@ -557,12 +579,113 @@ for (const key of ['ratings_log.path', 'credentials.service_account_key_path',
     c.credentials.service_account_key_path = path.join(dir, 'keys', 'sa-*.json');
   });
   const img = touchImage(many.dir, 'a.png');
-  const r = run([img], { configFile: many.file });
+  const tmp = caseTmpdir(many.dir);
+  const r = run([img], { configFile: many.file, env: { TMPDIR: tmp } });
+  check('glob MULTI-MATCH: the failed cloud SDK call leaves no gcloud config directory behind',
+    r.status === 2 && gcloudDirsIn(tmp).length === 0, `status=${r.status} left=${JSON.stringify(gcloudDirsIn(tmp))}`);
   check('glob MULTI-MATCH: warns, naming the count',
     /2 files matched/.test(r.stderr), r.stderr.split('\n')[0]);
   check('glob MULTI-MATCH: names the file it chose, and it is the sorted first',
     r.stderr.includes(`using ${path.join(many.dir, 'keys', 'sa-a.json')}`),
     'silence here would authenticate as the wrong principal against the right API');
+}
+
+// ===========================================================================
+// 4b. The isolated gcloud config directory never outlives resolveKey()
+// ===========================================================================
+// resolveKey() activates the service account in a config directory of its own
+// (mkdtemp under os.tmpdir(), named rate-graphic-gcloud-*), so that directory
+// holds the activated account's credentials. It must be gone on EVERY way out:
+// the key fetched, the fetch failed, the fetch returned nothing. A process.exit
+// inside the try skips its finally, so an exit taken there leaves the directory
+// behind - one per failed run, with real credentials in it on a real install.
+//
+// A FAKE gcloud, first on the child's PATH, stands in for the cloud SDK: it
+// appends its CLOUDSDK_CONFIG, a tab and its arguments to a log, writes a stand-in
+// credential file into CLOUDSDK_CONFIG on `auth` (so the directory is never
+// empty, as it is not with a real SDK), and answers `secrets` as the case
+// says. Each case gives the child a TMPDIR of its own, so the census of
+// rate-graphic-gcloud-* there is exact; the log is the positive evidence that
+// the directory was made in that TMPDIR and populated, without which "none
+// left" would also be the answer of a run that never made one. The one case
+// that gets a key points GEMINI_API_BASE at a file: URL, which fetch refuses
+// before opening any connection, so no case reaches a network call.
+{
+  const FAKE_DIR = path.join(TMP, 'fake-gcloud-bin');
+  fs.mkdirSync(FAKE_DIR);
+  const FAKE = path.join(FAKE_DIR, 'gcloud');
+  fs.writeFileSync(FAKE, [
+    '#!/bin/sh',
+    'printf \'%s\\t%s\\n\' "$CLOUDSDK_CONFIG" "$*" >> "$FAKE_GCLOUD_LOG"',
+    'case "$1" in',
+    '  auth)',
+    '    [ "$FAKE_GCLOUD_AUTH" = fail ] && { echo FAKE-AUTH-REFUSED >&2; exit 1; }',
+    '    mkdir -p "$CLOUDSDK_CONFIG/legacy_credentials" && echo stand-in > "$CLOUDSDK_CONFIG/legacy_credentials/adc.json"',
+    '    exit 0 ;;',
+    '  secrets)',
+    '    [ "$FAKE_GCLOUD_SECRET" = fail ] && { echo FAKE-SECRET-DENIED >&2; exit 1; }',
+    '    printf \'%s\' "$FAKE_GCLOUD_SECRET"',
+    '    exit 0 ;;',
+    'esac',
+    'exit 64',
+    '',
+  ].join('\n'));
+  fs.chmodSync(FAKE, 0o755);
+  const selfLog = path.join(TMP, 'fake-gcloud-self.log');
+  const self = spawnSync(FAKE, ['secrets', 'self-check'], { encoding: 'utf8', env: {
+    ...process.env, FAKE_GCLOUD_LOG: selfLog, FAKE_GCLOUD_SECRET: 'self-check-out', CLOUDSDK_CONFIG: '/self' } });
+  const fakeRuns = !self.error && self.status === 0 && self.stdout === 'self-check-out' &&
+    fs.existsSync(selfLog) && read(selfLog) === '/self\tsecrets self-check\n';
+  if (!fakeRuns) {
+    console.log(`[NO VERDICT] the fake gcloud does not run here (${self.error?.code || `exit ${self.status}`}); ` +
+      'section 4b measured nothing and issues no verdict about rate.mjs');
+    failures.push('section 4b: NO VERDICT, the fake gcloud does not run');
+  } else {
+    const viaGcloud = (name, { auth = 'ok', secret, base = null }) => {
+      const c = makeConfig((cf, dir) => {
+        fs.mkdirSync(path.join(dir, 'keys'));
+        fs.writeFileSync(path.join(dir, 'keys', 'sa-only.json'), '{}');
+        cf.credentials.service_account_key_path = path.join(dir, 'keys', 'sa-*.json');
+      });
+      const img = touchImage(c.dir, 'a.png');
+      const tmp = caseTmpdir(c.dir);
+      const log = path.join(c.dir, 'gcloud-calls.log');
+      const env = { TMPDIR: tmp, PATH: `${FAKE_DIR}${path.delimiter}${process.env.PATH}`,
+        FAKE_GCLOUD_LOG: log, FAKE_GCLOUD_AUTH: auth, FAKE_GCLOUD_SECRET: secret };
+      if (base) env.GEMINI_API_BASE = base;
+      const r = run([img, '--no-log'], { configFile: c.file, env });
+      const calls = fs.existsSync(log) ? read(log).trim().split('\n').filter(Boolean) : [];
+      const configDirs = [...new Set(calls.map((l) => l.split('\t')[0]))];
+      const madeHere = configDirs.length === 1 &&
+        path.dirname(configDirs[0]) === tmp && path.basename(configDirs[0]).startsWith('rate-graphic-gcloud-');
+      check(`${name}: the fake gcloud ran with a CLOUDSDK_CONFIG made in the case's TMPDIR (positive control)`,
+        madeHere, JSON.stringify(calls));
+      check(`${name}: no rate-graphic-gcloud-* directory is left in the TMPDIR`,
+        madeHere && gcloudDirsIn(tmp).length === 0 && !fs.existsSync(configDirs[0]),
+        `left=${JSON.stringify(gcloudDirsIn(tmp))}`);
+      return { ...r, calls };
+    };
+
+    const denied = viaGcloud('secret access FAILS', { secret: 'fail' });
+    check('secret access FAILS: exit 2, naming the secret and relaying the SDK\'s error',
+      denied.status === 2 && /could not fetch EXAMPLE_API_KEY via the service account: FAKE-SECRET-DENIED/.test(denied.stderr),
+      denied.stderr.split('\n')[0]);
+    check('secret access FAILS: activation and access both ran', denied.calls.length === 2, JSON.stringify(denied.calls));
+
+    const empty = viaGcloud('secret access returns NOTHING', { secret: '' });
+    check('secret access returns NOTHING: exit 2, saying the secret came back empty',
+      empty.status === 2 && /Secret Manager returned nothing for EXAMPLE_API_KEY/.test(empty.stderr),
+      empty.stderr.split('\n')[0]);
+
+    const refused = viaGcloud('activation FAILS', { auth: 'fail', secret: 'unused' });
+    check('activation FAILS: exit 2, relaying the SDK\'s error, and the secret is never asked for',
+      refused.status === 2 && /FAKE-AUTH-REFUSED/.test(refused.stderr) && refused.calls.length === 1,
+      `${refused.stderr.split('\n')[0]} calls=${refused.calls.length}`);
+
+    const fetched = viaGcloud('key FETCHED', { secret: 'stand-in', base: 'file:///rate-graphic-test-no-model' });
+    check('key FETCHED: the run goes on to the model probe (and fails there, offline)',
+      fetched.status === 2 && /fetch failed/.test(fetched.stderr), fetched.stderr.split('\n')[0]);
+  }
 }
 
 // ===========================================================================

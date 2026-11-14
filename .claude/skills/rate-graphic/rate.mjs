@@ -592,8 +592,13 @@ function resolveKey() {
   const keyFile = matches[0];
 
   // Isolated CLOUDSDK_CONFIG - activating the SA in the shared config would
-  // repoint this whole machine's gcloud auth. See header (b).
+  // repoint this whole machine's gcloud auth. See header (b). The directory then
+  // holds the activated account's credentials, so it is removed on every way
+  // out. die2() is process.exit, and an exit inside the try skips the finally:
+  // a failure is RECORDED inside, and die2 runs only after the finally removed
+  // the directory.
   const cfg = mkdtempSync(path.join(tmpdir(), 'rate-graphic-gcloud-'));
+  let failure;
   try {
     const env = { ...process.env, CLOUDSDK_CONFIG: cfg };
     execFileSync('gcloud', ['auth', 'activate-service-account', `--key-file=${keyFile}`, '-q'], {
@@ -605,14 +610,14 @@ function resolveKey() {
       ['secrets', 'versions', 'access', 'latest', `--secret=${SECRET_NAME}`, `--project=${SECRET_PROJECT}`],
       { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
     ).trim();
-    if (!key) die2(`Secret Manager returned nothing for ${SECRET_NAME}`);
-    return { key, source: `secret-manager:${SECRET_PROJECT}/${SECRET_NAME}` };
+    if (key) return { key, source: `secret-manager:${SECRET_PROJECT}/${SECRET_NAME}` };
+    failure = `Secret Manager returned nothing for ${SECRET_NAME}`;
   } catch (e) {
-    if (e && e.__rate_graphic_die) throw e;
-    die2(`could not fetch ${SECRET_NAME} via the service account: ${String(e.stderr || e.message || e).trim()}`);
+    failure = `could not fetch ${SECRET_NAME} via the service account: ${String(e.stderr || e.message || e).trim()}`;
   } finally {
     rmSync(cfg, { recursive: true, force: true });
   }
+  return die2(failure);
 }
 
 // ── Model ────────────────────────────────────────────────────────────────────
