@@ -54,11 +54,20 @@ Security > Personal access tokens > Generate new token**, choosing its scopes
 and its expiry. It acts as that person on every file that person can open, and
 it lives **at most 90 days**. Up to three, one per role (`SKILL.md` section 3):
 
-- **read** - scope File comments: read (`file_comments:read`). Required.
+- **read** - scope File comments: read (`file_comments:read`), and NOT File
+  comments: write. Required.
 - **write** - scope File comments: write (`file_comments:write`). Only if agents
   of this install may post; leave it out and the install is read-only.
-- **content** - scope File content: read (`file_content:read`). Only for anchor
-  names. Instead, the read token may be issued with this scope too.
+- **content** - scope File content: read (`file_content:read`), and NOT File
+  comments: write. Only for anchor names. Instead, the read token may be issued
+  with this scope too.
+
+**The read and content tokens never carry the write scope**, and each lives in a
+file of its own. That is what makes a read-only install unable to post: the
+helper refuses to post without a write token, but a read token that could post
+would still be one leak away from posting. `check` refuses a read or content
+path equal to the write path; it cannot see a token's scopes, so issuing them
+right is this step's job.
 
 Each goes in a file of its own, outside every checkout, in the organization
 secrets directory (`/claude-skill` section 4), mode 600, holding the token and
@@ -71,8 +80,10 @@ install -m 600 /dev/null <token path>
 cat > <token path>
 ```
 
-`check` refuses a token file that is not mode 600, is empty, or does not hold a
-personal access token (`figd_` prefix).
+`check` refuses a token file that is not mode 600, is empty, holds more than the
+token on one line (a second line, a space, a control character), or does not
+hold a personal access token (`figd_` prefix), and it names the file, never the
+value.
 
 **Record each token's expiry date** in `CONTEXT.md` (step 4) and schedule its
 renewal before then through `/scheduled-tasks`: an expired token answers every

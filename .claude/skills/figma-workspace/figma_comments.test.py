@@ -42,17 +42,38 @@ WHAT EACH SECTION IS FOR, AND WHAT BREAKS IF IT IS DELETED
  9. CLI and fleet lookups: --file takes an alias, a key or a URL (a branch URL
     gives the branch key); several files need --file; with no --config the
     install context's config.json (the fixture install) is the one read.
+10. Hostile input and faults. A token file with a second line, a space or a
+    control character is refused naming the path, never the value - driven
+    through http.client's own header validation, which quotes the value in its
+    error (the leak this guards). The exact-value scrub, with a token that has
+    no figd_ shape. Every transport failure (a header rejection, a timeout, a
+    truncated body, a reset) is exit 4 and scrubbed; in the name lookup it
+    degrades the names, never the listing. A successful POST exits 0 with its
+    id whatever the cursor does afterwards; a POST whose outcome is unknown
+    exits 5; a 4xx is not posted. No bare node id with names ON. The names
+    reason printed once. A scope 403 names the scope the call needs. The name
+    cache: a scope refusal is cached; an incremental nodes read keeps the
+    depth-2 time (a fake clock), and a node it finds is "page not resolved",
+    never "nested".
+
+The temp root is a realpath (macOS's $TMPDIR is a symlink) and is removed at
+exit, a failing or crashing run included.
 """
+import atexit
 import contextlib
 import copy
+import datetime
 import email.message
+import http.client
 import io
 import importlib.util
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
+import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -66,7 +87,10 @@ FIX = os.path.join(HERE, "fixtures")
 # The web root, split so that a synthetic link in this file does not match the
 # public `figma-url` leak pattern, which is written for real file links.
 WEB = "https://www.fig" + "ma.com"
-TMP = tempfile.mkdtemp(prefix="figma-comments-test-")
+# realpath: on macOS $TMPDIR is under /var, a symlink to /private/var, and every
+# path the helper returns is a realpath, so an unresolved root never compares equal.
+TMP = os.path.realpath(tempfile.mkdtemp(prefix="figma-comments-test-"))
+atexit.register(shutil.rmtree, TMP, True)  # removed on a failing or crashing run too
 for var in ("FLEET_SECRETS_DIR", "FIGMA_WORKSPACE_CONFIG", "FIGMA_STATE_DIR", "GIT_DIR",
             "GIT_WORK_TREE"):
     os.environ.pop(var, None)
@@ -162,6 +186,8 @@ class Fake:
         self.log = []
         self.errors = {}  # path prefix -> (status, body, headers)
         self.next_id = 2000000000
+        self.depth2 = load("file-depth2.json")
+        self.nodes = load("nodes.json")["nodes"]
 
     def __call__(self, req, timeout=None):
         url = urllib.parse.urlsplit(req.full_url)
@@ -187,9 +213,11 @@ class Fake:
         if url.path.endswith("/comments"):
             return Resp(json.dumps({"comments": self.comments}).encode())
         if url.path.endswith("/nodes"):
-            return Resp(json.dumps(load("nodes.json")).encode())
+            asked = urllib.parse.parse_qs(url.query)["ids"][0].split(",")
+            return Resp(json.dumps({"name": self.depth2["name"],
+                                    "nodes": {i: self.nodes.get(i) for i in asked}}).encode())
         if url.path.startswith("/v1/files/") and "depth=2" in url.query:
-            return Resp(json.dumps(load("file-depth2.json")).encode())
+            return Resp(json.dumps(self.depth2).encode())
         raise AssertionError(f"the fake has no route for {req.get_method()} {req.full_url}")
 
 
@@ -259,6 +287,9 @@ def run(argv, fake=None, stdin=None):
                 code = fc.main(argv)
             except SystemExit as e:
                 code = e.code
+            except Exception as e:  # noqa: BLE001 - a crash is a result, and its traceback is output
+                code = f"crash: {type(e).__name__}"
+                err.write(traceback.format_exc())
     finally:
         sys.stdin = old_stdin
         fc._urlopen = _forbidden
@@ -377,8 +408,8 @@ check(paths[1:] == [("/v1/files/EXAMPLEFILEKEY000", "depth=2"),
       f"one depth-2 read, then one nodes read for the leftover ids only ({paths})")
 check(by["1000000001"]["anchor"]["name"] == "Checkout" and by["1000000001"]["anchor"]["page"] == "Screens",
       "a top-level frame gets its name and page")
-check(by["1000000005"]["anchor"]["status"] == "nested" and by["1000000005"]["anchor"]["name"] == "Avatar",
-      "a nested node gets its name and no page")
+check(by["1000000005"]["anchor"]["status"] == "name_only" and by["1000000005"]["anchor"]["name"] == "Avatar",
+      "a node outside the depth-2 read gets its name and no page (name_only)")
 check(by["1000000006"]["anchor"]["status"] == "deleted", "a node the file no longer has is 'deleted'")
 check(doc["file"]["name"] == "Example Design File", "the file name comes from the content read")
 check(all(r["token"] == READ_TOKEN for r in fake.log), "names.token read: every call uses the read token")
@@ -417,7 +448,10 @@ check("file_content:read" in (doc.get("names_note") or "") and "file_content:rea
       "the names note carries Figma's scope message")
 check(all(t["anchor"].get("status") in ("unavailable", None) for t in doc.get("threads", [])),
       "every anchor is 'unavailable', none guessed")
-check(state_files() == [], "a failed lookup caches nothing")
+with open(os.path.join(HOME_ADA, "state", "figma-workspace", "names-EXAMPLEFILEKEY000.json")) as f:
+    neg = json.load(f)
+check("file_content:read" in neg.get("scope_missing", "") and neg.get("nodes") == {},
+      "a scope failure caches the refusal and no names")
 
 cfg_content = config(names__token="content", tokens__content={"path": CT})
 fake = Fake()
@@ -583,7 +617,7 @@ section("8. errors")
 cases = [
     (401, '{"status":401,"err":"Invalid token"}', None, 3, "invalid"),
     (403, '{"status":403,"err":"Invalid scope(s): x. This endpoint requires the file_comments:read scope"}',
-     None, 3, "lacks the scope"),
+     None, 3, "this call needs file_comments:read"),
     (403, '{"error":true,"status":403,"message":"Invalid scope: [\\"x\\"]. This endpoint requires the '
           'current_user:read scope.","i18n":null}', None, 3, "current_user:read"),
     (403, '{"status":403,"err":"Forbidden"}', None, 3, "cannot open"),
@@ -644,7 +678,226 @@ code, out, err = run(["list"], Fake())
 check(code == 1 and "FIGMA_WORKSPACE_CONFIG" in err, "an install context that does not resolve is a config error")
 os.environ["FLEET_CONTEXT_ROOT"] = FIXTURE_INSTALL
 
-shutil.rmtree(TMP, ignore_errors=True)
+
+# ----------------------------------------------------------------- 10. hostile input, faults, outcomes
+
+section("10. hostile token files, transport faults, the write outcome, the name cache")
+
+
+def header_checking(req, timeout=None):
+    """The real transport's header validation, offline: http.client.putheader
+    rejects an illegal header value with a ValueError that quotes the value,
+    before any connection is made (nothing listens on the port)."""
+    conn = http.client.HTTPConnection("127.0.0.1", 9)
+    conn.putrequest(req.get_method(), "/")
+    for k, v in req.header_items():
+        conn.putheader(k, v)
+    raise AssertionError("the header passed validation; this fake only validates")
+
+
+# B2: a token file holds ONE line of printable non-space ASCII, or it is refused,
+# naming the path and never the value. The newline case is the measured leak: the
+# transport quotes the value in its error, where the exact-token scrub cannot see it.
+for label, value, frags in (
+        ("an embedded newline", "figd_HEAD-sentinel-0004\nTAILSECRET-sentinel-0005",
+         ["HEAD-sentinel-0004", "TAILSECRET-sentinel-0005"]),
+        ("an embedded space", "plainSECRET-sentinel-0006 more", ["plainSECRET-sentinel-0006"]),
+        ("a control character", "plainSECRET-sentinel-0007\x07x", ["plainSECRET-sentinel-0007"])):
+    p = token_file("hostile-" + re.sub(r"\W", "", label) + ".token", value)
+    for fake in (Fake(), header_checking):
+        code, out, err = run(["list", "--config", config(tokens__read={"path": p})], fake)
+        check(code == 2 and p in err, f"{label}: refused as a credential, naming the path ({code})")
+        check(not [f for f in frags if f in out + err], f"{label}: no part of the value is printed")
+    check(not Fake().log, "control: a fresh fake has logged nothing")
+
+# S3a: the exact-token pass of scrub(), with a token that has no figd_ shape, so the
+# shape regex cannot be what removes it.
+plain = token_file("plain.token", "plainREAD-sentinel-0008")
+for status in (403, 500):
+    fake = Fake()
+    fake.errors["/v1/files/"] = (status, "echo plainREAD-sentinel-0008 back", None)
+    code, out, err = run(["list", "--config", config(tokens__read={"path": plain})], fake)
+    check(fake.log and fake.log[0]["token"] == "plainREAD-sentinel-0008", f"control: sent ({status})")
+    check("plainREAD-sentinel-0008" not in out + err and "[redacted]" in err,
+          f"a token of any shape is scrubbed by its exact value ({status})")
+
+
+class Raises(Fake):
+    """Raises EXC (or calls it with the request) for requests whose method is in ON."""
+
+    def __init__(self, exc, on=("GET",), path=""):
+        super().__init__()
+        self.exc, self.on, self.path = exc, on, path
+
+    def __call__(self, req, timeout=None):
+        if req.get_method() in self.on and self.path in req.full_url:
+            self.log.append({"method": req.get_method(), "path": req.full_url})
+            raise self.exc(req) if callable(self.exc) and not isinstance(self.exc, type) else self.exc
+        return super().__call__(req, timeout)
+
+
+class Truncated(Resp):
+    def read(self, *a):
+        raise http.client.IncompleteRead(b"partial")
+
+
+class TruncatedFake(Fake):
+    def __call__(self, req, timeout=None):
+        super().__call__(req, timeout)
+        return Truncated(b"")
+
+
+# B2 and S2: every transport failure is an ApiError, exit 4, scrubbed.
+echo = lambda req: ValueError(f"Invalid header value {req.get_header('X-figma-token')!r}")  # noqa: E731
+for label, fake, needle in (
+        ("a header the transport rejects", Raises(echo), "Invalid header value"),
+        ("a read timeout", Raises(TimeoutError("timed out")), "timed out"),
+        ("a truncated body", TruncatedFake(), "IncompleteRead"),
+        ("a connection reset", Raises(ConnectionResetError(104, "reset by peer")), "reset by peer")):
+    code, out, err = run(["list", "--config", config()], fake)
+    check(code == 4 and needle in err, f"{label}: ApiError, exit 4 ({code}: {err.strip()[:90]})")
+    check(READ_TOKEN not in out + err, f"{label}: the token is not printed")
+
+# S2: a fault in the NAME lookup degrades the names, never the listing.
+for label, fake in (("a timeout", Raises(TimeoutError("timed out"), path="depth=2")),
+                    ("a header rejection", Raises(echo, path="depth=2"))):
+    reset_state()
+    code, out, err = run(["list", "--json", "--config", config(names__token="read")], fake)
+    doc = json.loads(out) if code == 0 else {}
+    check(code == 0 and all(t["anchor"].get("status") in ("unavailable", None) for t in doc.get("threads", [])),
+          f"{label} in the name lookup: the listing still exits 0, names unavailable ({code})")
+
+# S1: once the POST succeeded, the id is printed and the exit is 0, whatever the cursor does.
+cfg_w = config(tokens__write={"path": WT})
+reset_state()
+run(["new", "--config", cfg_w], Fake())
+cur = os.path.join(HOME_ADA, "state", "figma-workspace", "cursor-EXAMPLEFILEKEY000.json")
+with open(cur, "w") as f:
+    f.write("{not json")
+fake = Fake()
+code, out, err = run(["reply", "1000000001", "--message", "x", "--config", cfg_w], fake)
+check(len([r for r in fake.log if r["method"] == "POST"]) == 1 and code == 0 and "2000000001" in out
+      and "warning" in err.lower(), f"a corrupt cursor after a successful post: exit 0, id printed, warned ({code}: {err.strip()[:80]})")
+code, out, err = run(["new", "--config", cfg_w], Fake())
+check(code == 1 and cur in err, f"new with a corrupt cursor names the cursor file ({err.strip()[:90]})")
+reset_state()
+run(["new", "--config", cfg_w], Fake())
+sdir_ro = os.path.dirname(cur)
+os.chmod(sdir_ro, 0o500)  # an OSError on the cursor write, not a ConfigError
+try:
+    if os.access(sdir_ro, os.W_OK):
+        check(False, "NO VERDICT: this user can write a mode-500 directory (root?), so the unwritable case is unmeasured")
+    else:
+        fake = Fake()
+        code, out, err = run(["reply", "1000000001", "--message", "x", "--config", cfg_w], fake)
+        check(len([r for r in fake.log if r["method"] == "POST"]) == 1 and code == 0 and "2000000001" in out
+              and "warning" in err.lower(),
+              f"an unwritable state dir after a successful post: exit 0, id printed, warned ({code}: {err.strip()[:80]})")
+finally:
+    os.chmod(sdir_ro, 0o700)
+reset_state()
+
+for label, exc, want in (
+        ("a timeout after sending", TimeoutError("timed out"), 5),
+        ("a connection reset", ConnectionResetError(104, "reset by peer"), 5),
+        ("a 502", urllib.error.HTTPError("u", 502, "bad gateway", email.message.Message(),
+                                         io.BytesIO(b'{"status":502,"err":"Bad gateway"}')), 5),
+        ("a 400", urllib.error.HTTPError("u", 400, "bad", email.message.Message(),
+                                         io.BytesIO(b'{"status":400,"err":"Bad request"}')), 4),
+        ("a 403", urllib.error.HTTPError("u", 403, "no", email.message.Message(),
+                                         io.BytesIO(b'{"status":403,"err":"Forbidden"}')), 3)):
+    code, out, err = run(["reply", "1000000001", "--message", "x", "--config", cfg_w], Raises(exc, on=("POST",)))
+    unknown = "may have been posted" in err
+    check(code == want and unknown == (want == 5),
+          f"POST failing with {label}: exit {want}{', outcome unknown' if want == 5 else ', not posted'} ({code}: {err.strip()[:90]})")
+
+
+class Unparseable(Fake):
+    def __call__(self, req, timeout=None):
+        r = super().__call__(req, timeout)
+        return Resp(b"<html>ok</html>") if req.get_method() == "POST" else r
+
+
+code, out, err = run(["reply", "1000000001", "--message", "x", "--config", cfg_w], Unparseable())
+check(code == 0 and "posted" in out and "warning" in err.lower(),
+      f"a 2xx POST whose body does not parse is posted: exit 0, warned ({code})")
+
+# S3b: no bare node id in the readable output with names ON: ok, name_only and deleted lines.
+reset_state()
+_, out, _ = run(["list", "--config", config(names__token="read")], Fake())
+check("frame \"Checkout\" on page \"Screens\"" in out and "(page not resolved)" in out and "deleted" in out,
+      "control: the names-on render carries an ok, a name_only and a deleted anchor")
+check(not [n for n in ("1:2", "3:4", "5:6", "7:8") if n in out], "no bare node id with names on")
+
+# N2: with names unavailable the reason is printed once, and each anchor carries a short marker.
+_, out, _ = run(["list", "--config", config()], Fake())
+check(out.count("file_content:read") == 1 and out.count("<name unavailable>") == 4,
+      f"the names reason once, a short marker per anchor ({out.count('file_content:read')})")
+
+# N8: a 403 for a scope names the scope THIS call needs, whatever Figma's text says.
+for argv, path, scope in ((["list"], "/v1/files/", "file_comments:read"),
+                          (["list", "--refresh-names"], "/v1/files/EXAMPLEFILEKEY000?", "file_content:read")):
+    class OneScope(Fake):
+        def __call__(self, req, timeout=None, _p=path):
+            if _p.endswith("?") and "depth=2" not in req.full_url:
+                return super().__call__(req, timeout)
+            raise urllib.error.HTTPError(req.full_url, 403, "x", email.message.Message(),
+                                         io.BytesIO(b'{"status":403,"err":"Invalid scope(s)"}'))
+    reset_state()
+    code, out, err = run(argv + ["--config", config(names__token="read")], OneScope())
+    check(f"this call needs {scope}" in err, f"a scope 403 on {path} names {scope} ({err.strip()[:100]})")
+
+# N9 and S4: the name cache.
+reset_state()
+def tier1(fake):
+    return [r for r in fake.log if "/comments" not in r["path"]]
+
+
+sf = ScopeFake()
+run(["list", "--config", cfg_read], sf)
+sf2 = ScopeFake()
+code, out, err = run(["list", "--config", cfg_read], sf2)
+check(len(tier1(sf)) == 1 and not tier1(sf2), "a scope failure is cached: the next run makes no Tier 1 call")
+check("cached" in out and "file_content:read" in out, "the cached refusal still names the scope")
+sf3 = ScopeFake()
+run(["list", "--refresh-names", "--config", cfg_read], sf3)
+check(len(tier1(sf3)) == 1, "--refresh-names retries after a cached scope failure")
+
+UTC = datetime.timezone.utc
+T0 = datetime.datetime(2026, 1, 20, 12, 0, tzinfo=UTC)
+real_now = fc._now
+names_file = os.path.join(HOME_ADA, "state", "figma-workspace", "names-EXAMPLEFILEKEY000.json")
+try:
+    reset_state()
+    cfg1 = config(names__token="read", names__cache_hours=1)
+    fc._now = lambda: T0
+    run(["list", "--config", cfg1], Fake())
+    with open(names_file) as f:
+        stamp0 = json.load(f)["fetched_at"]
+    fc._now = lambda: T0 + datetime.timedelta(minutes=50)
+    fake = Fake()
+    fake.comments.insert(0, dict(fake.comments[-1], id="1000000010", order_id="6",
+                                 created_at="2026-01-20T12:40:00.000Z",
+                                 client_meta={"node_id": "11:12", "node_offset": {"x": 1, "y": 1}}))
+    fake.nodes["11:12"] = {"document": {"id": "11:12", "name": "Settings", "type": "FRAME"}}
+    code, out, err = run(["list", "--config", cfg1], fake)
+    paths = [(r["path"], r["query"]) for r in fake.log]
+    check(paths[1:] == [("/v1/files/EXAMPLEFILEKEY000/nodes", "ids=11:12&depth=1")],
+          f"a new anchor inside the window: one nodes read for it alone ({paths})")
+    check("frame \"Settings\" (page not resolved)" in out and "nested" not in out,
+          "a node the depth-2 read did not cover is 'page not resolved', never 'nested'")
+    with open(names_file) as f:
+        check(json.load(f)["fetched_at"] == stamp0, "an incremental nodes read keeps the depth-2 timestamp")
+    fc._now = lambda: T0 + datetime.timedelta(minutes=70)
+    fake = Fake()
+    fake.depth2["document"]["children"][0]["children"][0]["name"] = "Checkout v2"
+    code, out, err = run(["list", "--config", cfg1], fake)
+    check("/v1/files/EXAMPLEFILEKEY000" in [r["path"] for r in fake.log] and "\"Checkout v2\"" in out,
+          "past cache_hours from the depth-2 read, names are read again and a rename shows")
+finally:
+    fc._now = real_now
+reset_state()
+
 print()
 if FAILED:
     print(f"{len(FAILED)} of {CHECKS} checks FAILED")

@@ -34,6 +34,17 @@ THREE LOAD-BEARING PROPERTIES
    scope; only a post would, and a check never posts. The line says so.
 3. THE EXIT CODE IS LOSSY; THE PRINTED LINE IS THE VERDICT.
 
+NEGATIVE CONTROLS, one per leg, each a case in check.test.py that must go red:
+    config        a config missing a key                      -> NOT INSTALLED
+    token file    missing, mode 644, empty, a second line, no figd_ prefix -> NOT INSTALLED
+    token roles   the read or content path equal to the write path -> NOT INSTALLED
+    MCP record    the record without the connector -> NOT INSTALLED; without its list -> NO VERDICT
+    online        a refused token -> STALE; a 404 -> NOT INSTALLED; the network down or any
+                  unexpected fault -> NO VERDICT, never a pass, and no token in the line
+    version       no record, another host's only, older, NEWER -> STALE
+If one of those cases PASSES, this check cannot fail for that reason, and the
+test reports it.
+
 Environment, so the three states can be tested without a real install:
     FIGMA_WORKSPACE_CONFIG       an alternate config.json (the helper reads it too)
     FIGMA_SKILL_INSTALL_STATE    an alternate .install-state.json
@@ -129,10 +140,31 @@ def online_leg(cfg):
             n = len(fc.fetch_comments(cfg, f["key"]))
         except fc.AuthError as e:
             out(1, f"STALE: the read token was refused for file {f['alias']!r}: {fc.scrub(e)}")
-        except (fc.ApiError, fc.CredentialError) as e:
+        except fc.ApiError as e:
+            if e.status == 404:
+                out(2, f"NOT INSTALLED: file {f['alias']!r} ({f['key']}) is not found for the read "
+                       f"token's owner: a wrong key in config.json, or a file that person cannot "
+                       f"open")
             out(1, f"NO VERDICT on the online leg: file {f['alias']!r}: {fc.scrub(e)}")
+        except Exception as e:  # noqa: BLE001 - never a traceback: one could quote a token
+            out(1, f"NO VERDICT on the online leg: file {f['alias']!r}: {type(e).__name__}: "
+                   f"{fc.scrub(e)}")
         notes.append(f"{f['alias']}: {n} comments")
     return "read token reads " + ", ".join(notes)
+
+
+def separate_roles(cfg):
+    """Exit 2 when the read or content token IS the write token's file. The
+    helper would still refuse to post, but the install would then hold a token
+    that can post where it set out to hold only one that reads."""
+    write = fc.token_path(cfg, "write")
+    if not write:
+        return
+    for role in ("read", "content"):
+        p = fc.token_path(cfg, role)
+        if p and os.path.realpath(p) == os.path.realpath(write):
+            out(2, f"NOT INSTALLED: tokens.{role}.path names the write token's file ({p}). The "
+                   f"{role} token is issued WITHOUT file_comments:write, in a file of its own")
 
 
 def main():
@@ -144,12 +176,18 @@ def main():
         cfg = fc.load_config(config)
     except fc.ConfigError as e:
         out(2, f"NOT INSTALLED: {e}")
+    separate_roles(cfg)
     notes = [token_leg(cfg, "read")]
     for role in ("write", "content"):
         notes.append(token_leg(cfg, role) or f"no {role} token"
                      + (" (read-only install)" if role == "write" else ""))
     if fc.token_path(cfg, "write"):
         notes.append("write scope not measured (only a post proves it)")
+    if cfg["names"]["token"] == "content":
+        notes.append("content scope not measured (the first name lookup proves it)")
+    elif cfg["names"]["token"] == "read":
+        notes.append("the read token's file_content:read not measured (the first name lookup "
+                     "proves it)")
 
     name = (cfg.get("mcp") or {}).get("connector_name")
     if name:

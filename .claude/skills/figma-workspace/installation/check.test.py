@@ -23,10 +23,19 @@ WHAT THIS PINS, and what removing each case would let through:
     Figma refuses; online, the network down (NO VERDICT, never a pass).
   - mcp.connector_name null skips that leg, and the line says so.
   - bash check is python3 check (the shell hand-off line).
+  - A token file with a second line is NOT INSTALLED and no part of it is
+    printed, offline and --online (through http.client's own header
+    validation, which quotes the value). The read or content path equal to the
+    write path is NOT INSTALLED. A NEWER recorded version is STALE. Online, a
+    404 is NOT INSTALLED naming the alias, and an unexpected fault is NO
+    VERDICT with the token scrubbed. With a content token the OK line says its
+    scope is not measured.
 
 Run: python3 .claude/skills/figma-workspace/installation/check.test.py
 """
+import atexit
 import contextlib
+import http.client
 import importlib.machinery
 import importlib.util
 import io
@@ -38,6 +47,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import traceback
 import urllib.error
 
 sys.dont_write_bytecode = True
@@ -51,7 +61,9 @@ ME = socket.gethostname()
 with open(os.path.join(SKILL, "SKILL.md"), encoding="utf-8") as f:
     VERSION = int(re.search(r"^version:\s*(\d+)\s*$", f.read(), re.M).group(1))
 
-TMP = tempfile.mkdtemp(prefix="figma-check-test-")
+# realpath: on macOS $TMPDIR is a symlink (/var -> /private/var).
+TMP = os.path.realpath(tempfile.mkdtemp(prefix="figma-check-test-"))
+atexit.register(shutil.rmtree, TMP, True)  # removed on a failing or crashing run too
 FAILED = []
 
 
@@ -151,6 +163,38 @@ code, text = run(install("twohosts", state={"some-other-host": {"version": VERSI
 check("another host's record beside this one's leaves this one current", code == 0, text)
 code, text = run(install("old", state={ME: {"version": VERSION - 1}}))
 check("an older recorded version is STALE", code == 1 and "declares" in text, text)
+code, text = run(install("newer", state={ME: {"version": VERSION + 1}}))
+check("a NEWER recorded version is STALE (the checkout is behind)", code == 1 and "NEWER" in text, text)
+
+# A token file holds one line of printable non-space ASCII; anything else is refused
+# naming the path, never the value.
+TWO_LINES = "figd_HEAD-chk-0001" + "\n" + "TAIL-chk-0002"  # synthetic: a pasted second line
+nl = install("newline", TWO_LINES)
+code, text = run(nl)
+check("a token file with an embedded newline is NOT INSTALLED, naming the path",
+      code == 2 and "newline-read.token" in text, f"{code}: {text}")
+check("... and no part of its value is printed", "HEAD-chk-0001" not in text and "TAIL-chk-0002" not in text, text)
+
+# The read and content tokens are never the write token's file.
+same = install("samepath", edit=lambda c: c["tokens"].__setitem__("write", {"path": c["tokens"]["read"]["path"]}))
+code, text = run(same)
+check("tokens.read.path equal to tokens.write.path is NOT INSTALLED", code == 2 and "write token" in text
+      and "read" in text, f"{code}: {text}")
+same_c = install("samecontent", edit=lambda c: (c["tokens"].__setitem__("write", {"path": c["tokens"]["read"]["path"] + ".w"}),
+                                                c["tokens"].__setitem__("content", {"path": c["tokens"]["read"]["path"] + ".w"}),
+                                                c["names"].__setitem__("token", "content")))
+for suffix in (".w",):
+    src = os.path.join(TMP, "samecontent-read.token")
+    shutil.copy(src, src + suffix)
+    os.chmod(src + suffix, 0o600)
+code, text = run(same_c)
+check("tokens.content.path equal to tokens.write.path is NOT INSTALLED", code == 2 and "content" in text,
+      f"{code}: {text}")
+withc = install("withcontent", edit=lambda c: (c["tokens"].__setitem__("content", {"path": c["tokens"]["read"]["path"]}),
+                                               c["names"].__setitem__("token", "content")))
+code, text = run(withc)
+check("with a content token, the OK line says its scope is not measured",
+      code == 0 and "content scope not measured" in text, f"{code}: {text}")
 
 
 # --online, in-process with a fake transport
@@ -167,12 +211,15 @@ def online(root, fake):
     old_argv = sys.argv
     sys.argv = [CHECK, "--online"]
     try:
-        with contextlib.redirect_stdout(out):
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
             try:
                 mod.main()
                 code = 0
             except SystemExit as e:
                 code = e.code
+            except Exception:  # noqa: BLE001 - a crash is a result, and its traceback is output
+                code = "crash"
+                out.write(traceback.format_exc())
     finally:
         sys.argv = old_argv
         os.environ.clear()
@@ -213,7 +260,37 @@ check("--online with a refused token is STALE", code == 1 and "STALE" in text an
 code, text = online(good, down)
 check("--online with the network down is NO VERDICT, never a pass", code == 1 and "NO VERDICT" in text, text)
 
-shutil.rmtree(TMP, ignore_errors=True)
+
+def gone(req, timeout=None):
+    raise urllib.error.HTTPError(req.full_url, 404, "x", {}, io.BytesIO(b'{"status":404,"err":"Not found"}'))
+
+
+code, text = online(good, gone)
+check("--online with a 404 (wrong file key) is NOT INSTALLED, naming the alias",
+      code == 2 and "'main'" in text, f"{code}: {text}")
+
+
+def quoting(req, timeout=None):
+    raise RuntimeError(f"unexpected transport fault {req.get_header('X-figma-token')}")
+
+
+code, text = online(good, quoting)
+check("--online with an unexpected fault is NO VERDICT, and the token is not printed",
+      code == 1 and "NO VERDICT" in text and "fixture-token-0001" not in text, f"{code}: {text}")
+
+
+def header_checking(req, timeout=None):
+    conn = http.client.HTTPConnection("127.0.0.1", 9)
+    conn.putrequest(req.get_method(), "/")
+    for k, v in req.header_items():
+        conn.putheader(k, v)  # the real transport's validation: quotes an illegal value
+    raise AssertionError("passed validation")
+
+
+code, text = online(nl, header_checking)
+check("--online with a newline token prints no part of it", "HEAD-chk-0001" not in text
+      and "TAIL-chk-0002" not in text and code == 2, f"{code}: {text}")
+
 print()
 if FAILED:
     print(f"{len(FAILED)} FAILED: " + "; ".join(FAILED))

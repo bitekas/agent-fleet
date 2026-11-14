@@ -33,7 +33,9 @@ file only makes the call possible and refuses when the install withheld it.
 A TOKEN NEVER REACHES ARGV, STDOUT, STDERR OR A LOG
 ================================================================================
 Tokens are read from their files inside this process and only ever placed in
-the request header. Every error text goes through scrub(), which removes every
+the request header. A token file holds ONE line of printable non-space ASCII;
+anything else is refused naming the path, because the HTTP layer rejects such a
+header value and quotes it, escaped, where an exact-value scrub cannot see it. Every error text goes through scrub(), which removes every
 token this process loaded and anything shaped like a Figma personal access
 token (`figd_...`), because an error body is server text this code does not
 control. figma_comments.test.py section 6 proves it with a fake server that
@@ -50,22 +52,31 @@ fails on any other method or path.
 ================================================================================
 EXIT CODES
 ================================================================================
-    0  ok
-    1  usage or configuration error (nothing was attempted)
-    2  a token file is missing, unreadable, empty or over-permissive, or the
-       write token is not configured for a write verb
+    0  ok; for a write, POSTED (a cursor that could not be updated afterwards,
+       or a response that did not parse, is only a warning on stderr)
+    1  usage, configuration or local state (nothing was posted)
+    2  a token file is missing, unreadable, empty, not one line or
+       over-permissive, or the write token is not configured for a write verb
     3  Figma refused the token: invalid, expired or revoked (401), a missing
-       scope, or no access to the file (403)
-    4  any other API failure: not found, rate limited (429), server error, network
+       scope (the message names the scope that call needs), or no access (403)
+    4  any other API failure, every transport failure included: not found, rate
+       limited (429), a timeout, a truncated body, server error, network
+    5  a write whose outcome is UNKNOWN: it was sent and the answer was lost (a
+       timeout or a broken connection after sending, or a 5xx). Read the thread
+       before retrying, or the retry posts the comment twice.
 
 2, 3 and 4 are three repairs by three different people: the machine's
-operator, the token's owner, and nobody (wait, or fix the key).
+operator, the token's owner, and nobody (wait, or fix the key). 0 and 5 exist
+because a write reported as failed is retried, and a retry of a write that
+landed posts twice under a person's name.
 """
 import argparse
 import datetime
+import http.client
 import json
 import os
 import re
+import socket
 import stat
 import sys
 import tempfile
@@ -100,6 +111,8 @@ _urlopen = urllib.request.urlopen
 # text, whatever its shape.
 _LOADED = set()
 _PAT = re.compile(r"figd_[A-Za-z0-9_\-]+")
+# A token as an HTTP header value can carry it: one run of printable, non-space ASCII.
+_TOKEN = re.compile(r"[\x21-\x7e]+")
 _KEY = re.compile(r"[0-9A-Za-z]+")
 _URL = re.compile(r"figma\.com/(?:design|file|board|slides|proto)/([0-9A-Za-z]+)"
                   r"(?:/branch/([0-9A-Za-z]+))?")
@@ -121,9 +134,18 @@ class AuthError(Exception):
 class ApiError(Exception):
     exit_code = 4
 
-    def __init__(self, message, status=None):
+    def __init__(self, message, status=None, maybe_sent=False):
         super().__init__(message)
         self.status = status
+        # True when the request may have reached Figma before the failure: a
+        # timeout or a broken connection after sending, or a 5xx. Only a write
+        # cares, because retrying a write that did land posts it twice.
+        self.maybe_sent = maybe_sent
+
+
+class WriteUnknown(Exception):
+    """A write whose outcome is unknown: it may have been posted."""
+    exit_code = 5
 
 
 def scrub(text):
@@ -256,11 +278,22 @@ def read_token(cfg, role):
     except OSError as e:
         raise CredentialError(f"the {role} token at {path} cannot be read "
                               f"({e.strerror or e})") from None
+    # Every line of the file is a candidate secret: remember them all for scrub()
+    # before any check can fail, so no later message can carry one.
+    _LOADED.update(part for part in re.split(r"\s+", value) if len(part) >= 8)
     if mode & 0o077:
         raise CredentialError(f"the {role} token at {path} is mode {mode:04o}; a credential is "
                               f"600 (chmod 600 {path}). Refused before use")
     if not value:
         raise CredentialError(f"the {role} token file at {path} is empty")
+    if not _TOKEN.fullmatch(value):
+        # The value is never quoted here. A second line or a pasted space is how
+        # a token leaks: the transport rejects the header and quotes the whole
+        # value, escaped, where the exact-value scrub cannot recognise it.
+        raise CredentialError(f"the {role} token file at {path} does not hold one line of "
+                              f"printable ASCII with no spaces (a second line, a space or a "
+                              f"control character is in it). Refused before use; rewrite the "
+                              f"file with the token alone")
     _LOADED.add(value)
     return value
 
@@ -281,32 +314,39 @@ def _figma_message(body):
     return body[:300]
 
 
-def api(cfg, role, path, method="GET", body=None):
+def api(cfg, role, path, method="GET", body=None, need=None):
     """One call to Figma's REST API with ROLE's token. Returns the parsed JSON.
 
-    Raises AuthError (401/403), ApiError (anything else), CredentialError (the
-    token file). Every message is scrubbed.
+    NEED is the scope this call needs (default: ROLE's), named in a scope 403.
+    Raises AuthError (401/403), ApiError (anything else, every transport
+    failure included), CredentialError (the token file). Every message is
+    scrubbed. A 2xx POST whose body does not parse returns {"_unparsed": True}:
+    the write happened, and reporting it as a failure invites a duplicate.
     """
+    need = need or SCOPE[role]
     token = read_token(cfg, role)
     data = None if body is None else json.dumps(body).encode("utf-8")
     headers = {"X-Figma-Token": token}
     if data is not None:
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(API + path, data=data, method=method, headers=headers)
+    where = f"{method} {path.split('?')[0]}"
     try:
         with _urlopen(req, timeout=60) as resp:
             raw = resp.read()
     except urllib.error.HTTPError as e:
-        text = scrub(e.read().decode("utf-8", "replace"))
+        try:
+            text = scrub(e.read().decode("utf-8", "replace"))
+        except Exception:  # noqa: BLE001 - an unreadable error body is still this status
+            text = ""
         msg = scrub(_figma_message(text))
-        where = f"{method} {path.split('?')[0]}"
         if e.code == 401:
             raise AuthError(f"Figma refused the {role} token as invalid ({where}: HTTP 401 "
                             f"{msg}): it is expired, revoked or mistyped. A personal access "
                             f"token lives at most 90 days; its owner generates a new one") from None
         if e.code == 403 and "scope" in msg.lower():
-            raise AuthError(f"the {role} token lacks the scope this call needs ({where}: HTTP 403 "
-                            f"{msg})") from None
+            raise AuthError(f"the {role} token lacks a scope: this call needs {need} ({where}: "
+                            f"HTTP 403 {msg})") from None
         if e.code == 403:
             raise AuthError(f"Figma refused the {role} token for this file ({where}: HTTP 403 "
                             f"{msg}): the token's owner cannot open it, or the token was "
@@ -322,13 +362,26 @@ def api(cfg, role, path, method="GET", body=None):
             raise ApiError(f"rate limited ({where}: HTTP 429; {extra or 'no rate-limit headers'}). "
                            f"Retry after the Retry-After seconds; the budget is the token "
                            f"owner's, per plan, shared with every other use of it", 429) from None
-        raise ApiError(f"{where}: HTTP {e.code} {msg}", e.code) from None
+        raise ApiError(f"{where}: HTTP {e.code} {msg}", e.code, maybe_sent=e.code >= 500) from None
     except urllib.error.URLError as e:
-        raise ApiError(f"could not reach {API} ({scrub(e.reason)})") from None
+        # A refused connection or an unknown host never sent anything; any other
+        # URLError (a timeout waiting for the answer) may have.
+        unsent = isinstance(e.reason, (ConnectionRefusedError, socket.gaierror))
+        raise ApiError(f"could not reach {API} ({where}: {scrub(e.reason)})",
+                       maybe_sent=not unsent) from None
+    except ValueError as e:
+        # http.client rejects an illegal header value before anything is sent,
+        # quoting the value; read_token keeps a token from being one.
+        raise ApiError(f"{where}: the request could not be built ({scrub(e)})") from None
+    except (http.client.HTTPException, OSError) as e:
+        raise ApiError(f"{where}: the transport failed ({type(e).__name__}: {scrub(e)})",
+                       maybe_sent=True) from None
     try:
         return json.loads(raw) if raw else {}
     except ValueError:
-        raise ApiError(f"{method} {path.split('?')[0]}: the response is not JSON") from None
+        if method == "POST":
+            return {"_unparsed": True}
+        raise ApiError(f"{where}: the response is not JSON") from None
 
 
 def fetch_comments(cfg, key):
@@ -448,12 +501,19 @@ def state_dir(cfg, given=None):
     return d
 
 
-def _read_json(path, default):
+def _read_json(path, default, strict=True):
+    """The JSON at PATH, or DEFAULT when it is absent. A file that does not parse
+    is a ConfigError naming it (strict), or DEFAULT (a cache, which is re-read)."""
     try:
         with open(path, encoding="utf-8") as f:
             return json.load(f)
     except FileNotFoundError:
         return default
+    except ValueError as e:
+        if not strict:
+            return default
+        raise ConfigError(f"{path} does not parse ({e}). It is state this helper wrote: repair "
+                          f"it, or remove it and the next `new` reports every comment as new") from None
 
 
 def _write_json(path, doc):
@@ -475,37 +535,52 @@ def _stamp(t):
 
 
 def resolve_names(cfg, key, node_ids, sdir, refresh=False, enabled=True):
-    """({node_id: {"name", "type", "page", "status"}}, file_name, note).
+    """({node_id: {"name", "type", "page", "status"}}, file_name, note, failed).
 
-    status is "ok" (a top-level node: name and page), "nested" (name only; the
-    nodes endpoint returns no ancestors), "deleted" (the file has no such node)
-    or "unavailable" (no lookup was possible; note says why and which scope
-    would supply it). A failed lookup never fails the listing.
+    status is "ok" (a top-level node of the depth-2 read: name and page),
+    "name_only" (found by the nodes read, which returns no ancestors: its page is
+    not resolved, whether it is nested or a top-level node newer than the cache),
+    "deleted" (the file has no such node) or "unavailable" (no lookup was
+    possible; NOTE says why and which scope would supply it). FAILED is True when
+    a lookup was tried in this run and failed. A failed lookup never fails the
+    listing.
+
+    The cache's `fetched_at` is the time of the last depth-2 read and is never
+    moved by an incremental nodes read, so names are re-read at most
+    `names.cache_hours` after that read. A scope refusal is cached too, so a token
+    without file_content:read costs one Tier 1 call per cache window, not one per
+    run; --refresh-names retries at once.
     """
     who = cfg["names"]["token"]
-    unavailable = lambda why: ({n: {"status": "unavailable"} for n in node_ids}, None, why)  # noqa: E731
+
+    def unavailable(why, failed=False):
+        return {n: {"status": "unavailable"} for n in node_ids}, None, why, failed
     if not enabled:
         return unavailable("name lookup turned off (--no-names)")
     if who is None:
         return unavailable(f"names.token is null; a token with {SCOPE['content']} supplies names")
     cache_file = None if sdir is None else Path(sdir) / f"names-{key}.json"
-    cache = _read_json(cache_file, {}) if cache_file else {}
+    cache = _read_json(cache_file, {}, strict=False) if cache_file else {}
     fresh = False
     if cache and not refresh:
         try:
             age = (_now() - parse_time(cache["fetched_at"])).total_seconds() / 3600
             fresh = age <= cfg["names"]["cache_hours"]
-        except (KeyError, ValueError):
+        except (KeyError, TypeError, ValueError):
             fresh = False
-    nodes = dict(cache.get("nodes", {})) if fresh else {}
+    if fresh and cache.get("scope_missing"):
+        return unavailable(f"{cache['scope_missing']} (cached; --refresh-names retries)")
+    nodes = dict(cache.get("nodes") or {}) if fresh else {}
     file_name = cache.get("file_name") if fresh else None
+    fetched_at = cache.get("fetched_at") if fresh else None
     wanted = [n for n in node_ids if n not in nodes]
     if not wanted:
-        return nodes, file_name, None
+        return nodes, file_name, None, False
     try:
         if not fresh:
             # Pages and the top-level nodes on each page, with names: one Tier 1 call.
-            doc = api(cfg, who, f"/v1/files/{key}?depth=2")
+            doc = api(cfg, who, f"/v1/files/{key}?depth=2", need=SCOPE["content"])
+            fetched_at = _stamp(_now())
             file_name = doc.get("name")
             nodes = {}
             for page in (doc.get("document") or {}).get("children") or []:
@@ -514,25 +589,37 @@ def resolve_names(cfg, key, node_ids, sdir, refresh=False, enabled=True):
                                                   "page": page.get("name"), "status": "ok"}
             wanted = [n for n in node_ids if n not in nodes]
         if wanted:
-            # The rest are nested or gone. A null entry is a node the file does not have.
+            # The rest: a null entry is a node the file does not have.
             doc = api(cfg, who, f"/v1/files/{key}/nodes?ids="
-                      + urllib.parse.quote(",".join(wanted), safe=",:;") + "&depth=1")
+                      + urllib.parse.quote(",".join(wanted), safe=",:;") + "&depth=1",
+                      need=SCOPE["content"])
             got = doc.get("nodes") or {}
             for n in wanted:
                 entry = got.get(n)
                 doc_n = (entry or {}).get("document") if isinstance(entry, dict) else None
                 if doc_n:
                     nodes[n] = {"name": doc_n.get("name"), "type": doc_n.get("type"),
-                                "page": None, "status": "nested"}
+                                "page": None, "status": "name_only"}
                 else:
                     nodes[n] = {"name": None, "type": None, "page": None, "status": "deleted"}
-    except (AuthError, ApiError, CredentialError) as e:
+    except Exception as e:  # noqa: BLE001 - any failure degrades the names, never the listing
+        why = f"names unavailable: {scrub(e)}"
+        if cache_file is not None and not fresh and isinstance(e, AuthError) and "scope" in str(e):
+            try:
+                _write_json(cache_file, {"fetched_at": _stamp(_now()), "scope_missing": why,
+                                         "nodes": {}, "file_name": None})
+            except OSError:
+                pass
         out = {n: nodes.get(n, {"status": "unavailable"}) for n in node_ids}
-        return out, file_name, f"names unavailable: {e}"
+        return out, file_name, why, True
     if cache_file is not None:
-        _write_json(cache_file, {"fetched_at": _stamp(_now()), "file_name": file_name,
-                                 "nodes": nodes})
-    return nodes, file_name, None
+        try:
+            _write_json(cache_file, {"fetched_at": fetched_at, "file_name": file_name,
+                                     "nodes": nodes})
+        except OSError as e:
+            print(f"warning: the name cache {cache_file} was not written ({e.strerror or e})",
+                  file=sys.stderr)
+    return nodes, file_name, None, False
 
 
 # --------------------------------------------------------------------------
@@ -665,17 +752,19 @@ def _where(key, anchor, names, note):
     st = v["status"]
     if st == "ok":
         return f"{(v['type'] or 'node').lower()} \"{v['name']}\" on page \"{v['page']}\"  {v['link']}"
-    if st == "nested":
-        return f"{(v['type'] or 'node').lower()} \"{v['name']}\" (nested; page not resolved)  {v['link']}"
+    if st == "name_only":
+        return f"{(v['type'] or 'node').lower()} \"{v['name']}\" (page not resolved)  {v['link']}"
     if st == "deleted":
         return f"a node that is no longer in the file (deleted)  {v['link']}"
-    return f"<name unavailable: {note or 'no lookup'}>  {v['link']}"
+    return f"<name unavailable>  {v['link']}"
 
 
 def render(key, file_name, threads, names, note, new_ids=(), total=None):
     new_ids = set(new_ids)
     lines = [f"{file_name or key}: {len(threads)} thread(s)"
              + (f" of {total}" if total is not None else "")]
+    if note:
+        lines.append(f"anchor names: {note}")  # once; each anchor then carries a short marker
     for t in threads:
         r = t["root"]
         state = ("RESOLVED " + _short(r["resolved_at"])) if r.get("resolved_at") else "OPEN"
@@ -706,7 +795,7 @@ def render(key, file_name, threads, names, note, new_ids=(), total=None):
 def _names_for(cfg, key, threads, args, sdir):
     ids = sorted({t["anchor"]["node_id"] for t in threads if t["anchor"]["kind"] == "node"})
     if not ids:
-        return {}, None, None
+        return {}, None, None, False
     return resolve_names(cfg, key, ids, sdir, refresh=args.refresh_names,
                          enabled=not args.no_names)
 
@@ -726,10 +815,10 @@ def cmd_list(cfg, args):
     comments = fetch_comments(cfg, key)
     threads = build_threads(comments)
     sdir = _sdir_or_none(cfg, args)
-    names, fname, note = _names_for(cfg, key, threads, args, sdir)
+    names, fname, note, failed = _names_for(cfg, key, threads, args, sdir)
     kept = select(threads, names, args.unresolved, args.since, args.author or (), args.anchor)
-    if note and note.startswith("names unavailable:"):
-        print(note, file=sys.stderr)  # a lookup was tried and failed
+    if failed:
+        print(f"warning: {note}", file=sys.stderr)  # a lookup was tried in this run and failed
     if args.json:
         print(json.dumps(to_json(key, fname, kept, names, note), indent=1))
     else:
@@ -744,14 +833,14 @@ def cmd_new(cfg, args):
     comments = fetch_comments(cfg, key)
     threads = build_threads(comments)
     unseen = {c["id"] for c in comments} - set(cursor.get("seen", []))
-    names, fname, note = _names_for(cfg, key, threads, args, sdir)
+    names, fname, note, failed = _names_for(cfg, key, threads, args, sdir)
     kept = select(threads, names, args.unresolved, args.since, args.author or (), args.anchor,
                   unseen=unseen)
     shown = [c["id"] for t in kept for c in [t["root"]] + t["replies"] if c.get("_match")]
     resolved, reopened = resolution_changes(comments, cursor)
     filtered = bool(args.unresolved or args.since or args.author or args.anchor)
-    if note and note.startswith("names unavailable:"):
-        print(note, file=sys.stderr)  # a lookup was tried and failed
+    if failed:
+        print(f"warning: {note}", file=sys.stderr)  # a lookup was tried in this run and failed
     path = str(cursor_path(sdir, key))
     if not args.peek:
         # With a filter, only what was shown is marked seen, so a filtered run
@@ -807,20 +896,34 @@ def _write(cfg, args, key, body):
     if args.dry_run:
         print(json.dumps({"method": "POST", "url": API + path, "body": body}, indent=1))
         return 0
-    made = api(cfg, "write", path, method="POST", body=body)
+    try:
+        made = api(cfg, "write", path, method="POST", body=body)
+    except ApiError as e:
+        if e.maybe_sent:
+            raise WriteUnknown(f"{e}. The comment may have been posted: read the thread (list or "
+                               f"new) before retrying, or a retry posts it twice under the token "
+                               f"owner's name") from None
+        raise
+    # POSTED. From here on nothing may turn this into a failure: an exit that
+    # says "not posted" after a post is how a retry posts it a second time.
     cid = made.get("id")
+    if args.json:
+        print(json.dumps(made, indent=1))
+    else:
+        print(f"posted comment {cid or '(id unknown)'}")
+    sys.stdout.flush()
+    if made.get("_unparsed"):
+        print("warning: the post succeeded but its response did not parse, so its id is unknown",
+              file=sys.stderr)
     try:
         sdir = state_dir(cfg, args.state_dir)
         cur = load_cursor(sdir, key)
         if cur.get("updated_at") is not None and cid:
             cur["seen"] = sorted(set(cur.get("seen", [])) | {cid})
             _write_json(cursor_path(sdir, key), cur)
-    except ConfigError:
-        pass  # no cursor to keep: nothing to mark
-    if args.json:
-        print(json.dumps(made, indent=1))
-    else:
-        print(f"posted comment {cid}")
+    except Exception as e:  # noqa: BLE001 - the post stands; the cursor is a convenience
+        print(f"warning: posted, but the cursor was not updated ({scrub(e)}); the next `new` "
+              f"reports this comment as new", file=sys.stderr)
     return 0
 
 
@@ -895,11 +998,13 @@ def main(argv=None):
     try:
         cfg = load_config(args.config)
         return VERBS[args.verb](cfg, args)
-    except (ConfigError, CredentialError, AuthError, ApiError) as e:
+    except (ConfigError, CredentialError, AuthError, ApiError, WriteUnknown) as e:
         print(f"{type(e).__name__}: {scrub(e)}", file=sys.stderr)
         return e.exit_code
-    except (OSError, ValueError) as e:
-        print(f"ConfigError: {scrub(e)}", file=sys.stderr)
+    except Exception as e:  # noqa: BLE001 - never a traceback: one could quote a token
+        # Local only: every API failure is an ApiError, and a write that may have
+        # landed is WriteUnknown, so nothing was posted when this is reached.
+        print(f"Error: {type(e).__name__}: {scrub(e)}", file=sys.stderr)
         return 1
 
 

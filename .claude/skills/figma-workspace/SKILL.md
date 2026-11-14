@@ -69,18 +69,24 @@ Organization and Enterprise plans, is outside this skill.)
 its docs read 2026-11-14:
 
 - **MCP tool calls:** a View or Collab seat gets up to 20 a month on every plan;
-  a Full or Dev seat gets a daily and a per-minute budget that grows with the
-  plan. `whoami` and a few write-side tools are exempt.
+  a Full or Dev seat on a paid plan gets a daily and a per-minute budget that
+  grows with the plan (the Starter plan lists none for it). `whoami` and a few
+  write-side tools are exempt.
 - **REST:** the comments endpoints are Tier 2 (up to 5 a minute on a View or
-  Collab seat); reading file content (`GET /v1/files/<key>`, `.../nodes`) is
-  Tier 1, **up to 20 a month on a View or Collab seat**.
-- **Writing to the canvas** through the MCP outside the person's drafts needs a
-  Full seat.
+  Collab seat). Reading file content (`GET /v1/files/<key>`, `.../nodes`) is
+  Tier 1, and for a View or Collab seat **the rate-limits page contradicts
+  itself**: its table says "Up to 20/month", while its own prose examples say
+  "up to 6 per month" and "a maximum of 6 requests monthly". Plan for 6.
+- **Writing to the canvas** through the MCP: the MCP overview page says it
+  "requires the remote Figma MCP server and a Full seat to write outside your
+  drafts"; the write-to-canvas page says it "Requires edit access to the
+  file", on Professional, Education, Organization and Enterprise plans, and is
+  in beta.
 
 So the seat of the person behind each path is a fact the install records in
 `CONTEXT.md`: an agent on a View seat that loops over file reads spends the
-month's Tier 1 budget in its first twenty calls, and the symptom is a 429 on a
-call that worked an hour ago.
+month's Tier 1 budget within its first few calls, and the symptom is a 429 on
+a call that worked an hour ago.
 
 **A comment posted with a token appears under its owner's name.** A reader
 cannot tell an agent wrote it unless the text says so; `post.prefix` puts that
@@ -129,8 +135,17 @@ the MCP's monthly one.
 
 **Read and write are separate tokens on purpose.** An install that only reads
 holds no token that can post, so no bug, prompt or mistyped verb can post for
-it. Whether an agent may post at all is still its charter's call; the separate
-token only makes "it cannot" true where the install wants it.
+it. That holds only if the read and content tokens are issued WITHOUT
+`file_comments:write`, each in a file of its own: `installation/check` refuses
+a read or content path equal to the write path, and nothing can see a token's
+scopes before a call. Whether an agent may post at all is still its charter's
+call; the separate token only makes "it cannot" true where the install wants
+it.
+
+**A token file holds one line**: the token, and nothing else that is not
+printable non-space ASCII. A second line, a pasted space or a control
+character is refused before use, naming the file and never the value: such a
+value is rejected by the HTTP layer, whose error quotes it.
 
 - **A token is never printed, never put in argv, never logged.** The helper
   reads it from its file inside the process and sends it only as the
@@ -139,8 +154,8 @@ token only makes "it cannot" true where the install wants it.
   server text. There is no command-line option that takes a token.
 - **A token is named by path, under the organization secrets variable**
   (`/claude-skill` section 4): `${FLEET_SECRETS_DIR:-<fallback>}/<file>`.
-- **A token lives at most 90 days**; since 2025-04-28 Figma no longer issues
-  one that does not expire (its changelog). `CONTEXT.md` records each token's
+- **A token lives at most 90 days**, and none is issued without an expiry
+  (Figma's changelog entry 2025-04-28). `CONTEXT.md` records each token's
   expiry date, and a reminder through `/scheduled-tasks` renews it before
   then. An expired token answers 401 `Invalid token` (section 6).
 - **A token reaches every file its owner can open.** `files` in `config.json`
@@ -192,8 +207,15 @@ gives the branch key; may be left out when `files` has one entry), `--json`,
   (`{agent}` is the posting agent's name, its home directory's, `{Agent}` the
   same capitalised), send it with the WRITE token, print the new comment's id,
   and mark it seen in the cursor. `--dry-run` prints the request (method, URL,
-  body; never a token) and sends nothing. With no write token configured they
-  refuse before anything is read or built.
+  body; never a token) and sends no POST (`reply` still reads the comments to
+  find the thread). With no write token configured they refuse before anything
+  is read or built.
+- **Once the POST succeeded, the verb exits 0 and prints the id**, whatever
+  happens next: a cursor that cannot be updated, or a response that does not
+  parse, is a warning on stderr. An exit that said "not posted" after a post is
+  how a retry posts it twice under a person's name. A write whose outcome is
+  UNKNOWN - the request may have been sent and the answer was lost (a timeout,
+  a broken connection, a 5xx) - exits `5`: read the thread before retrying.
 
 **Nothing resolves a thread.** The REST API has no call that resolves or
 reopens one (per Figma's docs, read 2026-11-14): resolving is a person's act in
@@ -202,17 +224,21 @@ delete, though the API has one for a token owner's own comments.
 
 `--json` output: `{"file": {"key", "name"}, "names_note", "threads": [...]}`,
 each thread `{"id", "number", "resolved", "resolved_at", "created_at",
-"author": {"id", "handle"}, "message", "match", "new", "orphan", "anchor":
-{"kind", "node_id", "offset", "name", "type", "page", "status", "link"},
-"replies": [...]}`. `new` adds `resolved_since_last`, `reopened_since_last` and
+"author": {"id", "handle"}, "message", "match", "new", "orphan", "parent_id"
+(an orphan's missing parent, else null), "anchor": {"kind", "link", and for a
+node "node_id", "offset", "name", "type", "page", "status"; for the canvas
+"x", "y"}, "replies": [...]}`. `new` adds `resolved_since_last`, `reopened_since_last` and
 `cursor` (`path`, `advanced`, `first_look`).
 
-**Exit codes:** `0` ok; `1` usage or configuration (nothing was attempted); `2`
-a token file missing, unreadable, empty or not mode 600, or no write token for
-a write verb; `3` Figma refused the token (401 invalid or expired, 403 missing
-scope or no access to the file); `4` any other API failure (404, 429, 5xx,
-network). Three codes for three repairs by three different people: the
-machine's operator, the token's owner, and nobody.
+**Exit codes:** `0` ok (for a write: posted); `1` usage, configuration or
+local state (nothing was posted); `2` a token file missing, unreadable, empty,
+not one line, or not mode 600, or no write token for a write verb; `3` Figma
+refused the token (401 invalid or expired, 403 a missing scope - the message
+names the scope that call needs - or no access to the file); `4` any other
+API failure, every transport failure included (404, 429, a timeout, a
+truncated body, network), with nothing posted; `5` a write whose outcome is
+unknown. 2, 3 and 4 are three repairs by three different people: the
+machine's operator, the token's owner, and nobody. 5 is never retried blind.
 
 ## 4. Anchors and their names
 
@@ -222,7 +248,8 @@ A root comment is pinned one of two ways (Figma's comment types, read
 - **to a node** - `client_meta` carries `node_id` (the frame it is pinned to)
   and `node_offset` (`x`, `y` inside it); a region comment adds
   `region_width`, `region_height` and `comment_pin_corner`;
-- **to the canvas** - `client_meta` carries `x`, `y` only, and nothing names
+- **to the canvas** - `client_meta` is a Vector (`x`, `y`) or a Region (`x`,
+  `y`, `region_width`, `region_height`, `comment_pin_corner`), and nothing names
   the page.
 
 **A reply carries no anchor of its own** (measured: `client_meta` is null on
@@ -240,21 +267,32 @@ its readable output (the id stays in `--json` for agents).
 also carries `file_content:read`), or `null` (no lookup). The lookup is:
 
 1. `GET /v1/files/<key>?depth=2` - the file's name, every page, and every
-   top-level node on each page, with their names. One Tier 1 call.
+   top-level node on each page, with their names (status `ok`).
 2. Only for the anchors that call did not name: `GET /v1/files/<key>/nodes?ids=...&depth=1`.
-   An entry there is a NESTED node (its name, no page: this endpoint returns
-   no ancestors); a null entry is a node the file no longer has - the
-   comment's anchor was DELETED, and the comment still carries the old id.
+   An entry there has its name and no page, because this endpoint returns no
+   ancestors (status `name_only`, printed "page not resolved"): a nested node,
+   or a top-level one newer than the cached depth-2 read. A null entry is a node
+   the file no longer has (status `deleted`): the comment still carries the
+   old id.
+
+**So one lookup is up to TWO Tier 1 calls**, and on a View or Collab seat
+Tier 1 is a handful a month (section 1). `GET /v1/files/<key>?ids=...` returns
+"everything between the root node and the listed nodes", which could name a
+nested anchor's page in one call; it also returns each listed node's whole
+subtree, and it is not measured, so the helper does not use it.
 
 **Names are cached** in the agent's state directory (`names-<key>.json`) for
-`names.cache_hours`, because each lookup is Tier 1: on a View or Collab seat
-that is one of 20 a month (section 1). A renamed frame shows its new name after
-at most that long; `--refresh-names` reads again now.
+`names.cache_hours` after the depth-2 read; a nodes read for a new anchor adds
+to the cache without moving that time, so a renamed frame shows its new name
+at most `names.cache_hours` after the read that named it. A scope refusal is
+cached the same way, so a token without `file_content:read` costs one Tier 1
+call per window, not one per run. `--refresh-names` reads again now.
 
-**A failed lookup degrades the names, never the listing.** With no lookup, or
-a token that lacks the scope, each anchor prints as `<name unavailable: ...>`
-with its link, and the reason names the scope that would supply it. A lookup
-that was tried and failed also says so on stderr.
+**A failed lookup degrades the names, never the listing**, whatever failed:
+a missing scope, a timeout, a 429. The reason is printed once, in the
+listing's header (and on stderr when the lookup was tried in this run), with
+the scope that would supply the names; each anchor then prints as
+`<name unavailable>` with its link.
 
 ## 5. The cursor and the state directory
 
@@ -271,6 +309,12 @@ another place; a state directory inside a git work tree is refused, because a
 cursor in a checkout is a different file in every worktree and one `git add`
 from a commit. **Deleting a cursor is not cleanup**: the next `new` reports
 every comment on the file as new.
+
+**Two runs at once can lose a cursor update, never a comment.** The cursor is
+read, changed and replaced whole (atomically, but without a lock), so of two
+interleaved runs on one file the last to write wins: a comment the other one
+showed, or a resolution it recorded, is reported again by the next `new`. Run
+one `new` per agent per file at a time when a repeat matters.
 
 ## 6. Traps
 
@@ -330,7 +374,9 @@ pages under `https://developers.figma.com/docs/rest-api/` - and is marked
 | `AuthError: ... HTTP 401 Invalid token` | Expired (90 days at most), revoked or mistyped. The token's owner generates a new one; `CONTEXT.md` names the owner and the expiry. |
 | `AuthError: ... lacks the scope` | The token was issued without the scope Figma's message names. A new token with it, from its owner. |
 | Every anchor `<name unavailable ...>` | `names.token` is null, or its token lacks `file_content:read`: the reason says which. |
-| `ApiError: rate limited ... Retry-After N` | The token owner's budget for that tier is spent; on a View or Collab seat Tier 1 is up to 20 a month. Wait, or raise `names.cache_hours`. |
+| `ApiError: rate limited ... Retry-After N` | The token owner's budget for that tier is spent; on a View or Collab seat Tier 1 is a handful a month (section 1). Wait, or raise `names.cache_hours`. |
+| `WriteUnknown: ... may have been posted` (exit 5) | The POST was sent and its answer lost. Read the thread with `list` or `new` before posting again. |
+| `CredentialError: ... does not hold one line` | The token file carries a second line, a space or a control character. Rewrite it with the token alone. |
 | `new` reports every comment at once | First look, or the cursor was deleted. Expected once. |
 | `ConfigError: ... not an agent home` | `CLAUDE_CONFIG_DIR` is not under the host's agents root: run as the agent, or pass `--state-dir`. |
 | An MCP call refused or throttled | Run the connector's `whoami`: wrong account, or a View or Collab seat out of its month. |
