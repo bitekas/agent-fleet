@@ -175,6 +175,14 @@ check("a token file with an embedded newline is NOT INSTALLED, naming the path",
       code == 2 and "newline-read.token" in text, f"{code}: {text}")
 check("... and no part of its value is printed", "HEAD-chk-0001" not in text and "TAIL-chk-0002" not in text, text)
 
+undec = install("undecodable")
+with open(os.path.join(TMP, "undecodable-read.token"), "wb") as f:
+    f.write(b"\xff\xfefigd_UNDECODABLE-chk-0003\n")
+code, text = run(undec)
+check("an invalid-UTF-8 token file is NOT INSTALLED, with no traceback",
+      code == 2 and "undecodable-read.token" in text and "Traceback" not in text
+      and "UNDECODABLE-chk-0003" not in text, f"{code}: {text[-300:]}")
+
 # The read and content tokens are never the write token's file.
 same = install("samepath", edit=lambda c: c["tokens"].__setitem__("write", {"path": c["tokens"]["read"]["path"]}))
 code, text = run(same)

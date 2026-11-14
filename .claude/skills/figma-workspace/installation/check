@@ -36,7 +36,7 @@ THREE LOAD-BEARING PROPERTIES
 
 NEGATIVE CONTROLS, one per leg, each a case in check.test.py that must go red:
     config        a config missing a key                      -> NOT INSTALLED
-    token file    missing, mode 644, empty, a second line, no figd_ prefix -> NOT INSTALLED
+    token file    missing, mode 644, empty, a second line, not text, no figd_ prefix -> NOT INSTALLED
     token roles   the read or content path equal to the write path -> NOT INSTALLED
     MCP record    the record without the connector -> NOT INSTALLED; without its list -> NO VERDICT
     online        a refused token -> STALE; a 404 -> NOT INSTALLED; the network down or any

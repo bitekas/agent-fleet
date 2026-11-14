@@ -103,9 +103,21 @@ WEB = "https://www.figma.com"
 SCOPE = {"read": "file_comments:read", "write": "file_comments:write",
          "content": "file_content:read"}
 
-# The seam every network call goes through. Tests replace this attribute;
-# nothing else in this file may call urlopen.
-_urlopen = urllib.request.urlopen
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse every redirect: the 3xx reaches the caller as an HTTPError.
+
+    urllib's default handler re-sends the request's headers - X-Figma-Token
+    among them - to the redirect target, on any host and any scheme. Figma's
+    REST API never answers with a redirect, so following one can only hand the
+    token to somebody else."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+# The seam every network call goes through: an opener that follows no
+# redirect. Tests replace this attribute; nothing else in this file may open a URL.
+_urlopen = urllib.request.build_opener(_NoRedirect).open
 
 # Every token value loaded by this process, so scrub() can remove it from any
 # text, whatever its shape.
@@ -268,9 +280,11 @@ def read_token(cfg, role):
                 "read-only, so nothing was posted")
         raise CredentialError(f"tokens.{role}.path is null in {cfg['_path']}")
     try:
-        with open(path, encoding="utf-8") as f:
+        with open(path, "rb") as f:
             mode = stat.S_IMODE(os.fstat(f.fileno()).st_mode)
-            value = f.read().strip()
+            # Bytes, decoded with replacement: a file that is not text reaches the
+            # one-line check below as non-ASCII and is refused like any other.
+            value = f.read().decode("utf-8", "replace").strip()
     except FileNotFoundError:
         raise CredentialError(f"no {role} token at {path} (tokens.{role}.path). Its owner "
                               f"generates a personal access token with {SCOPE[role]} and it is "
@@ -291,9 +305,9 @@ def read_token(cfg, role):
         # a token leaks: the transport rejects the header and quotes the whole
         # value, escaped, where the exact-value scrub cannot recognise it.
         raise CredentialError(f"the {role} token file at {path} does not hold one line of "
-                              f"printable ASCII with no spaces (a second line, a space or a "
-                              f"control character is in it). Refused before use; rewrite the "
-                              f"file with the token alone")
+                              f"printable ASCII with no spaces (a second line, a space, a "
+                              f"control character or a byte that is not ASCII is in it). Refused "
+                              f"before use; rewrite the file with the token alone")
     _LOADED.add(value)
     return value
 
@@ -351,6 +365,10 @@ def api(cfg, role, path, method="GET", body=None, need=None):
             raise AuthError(f"Figma refused the {role} token for this file ({where}: HTTP 403 "
                             f"{msg}): the token's owner cannot open it, or the token was "
                             f"revoked") from None
+        if 300 <= e.code < 400:
+            raise ApiError(f"{where}: HTTP {e.code}, a redirect, not followed: the REST API never "
+                           f"redirects, and following one would send the token to its target",
+                           e.code) from None
         if e.code == 404:
             raise ApiError(f"not found ({where}: HTTP 404 {msg}): a wrong file key, or a file or "
                            f"comment the token's owner cannot see", 404) from None
@@ -617,8 +635,7 @@ def resolve_names(cfg, key, node_ids, sdir, refresh=False, enabled=True):
             _write_json(cache_file, {"fetched_at": fetched_at, "file_name": file_name,
                                      "nodes": nodes})
         except OSError as e:
-            print(f"warning: the name cache {cache_file} was not written ({e.strerror or e})",
-                  file=sys.stderr)
+            _warn(f"warning: the name cache {cache_file} was not written ({e.strerror or e})")
     return nodes, file_name, None, False
 
 
@@ -792,6 +809,31 @@ def render(key, file_name, threads, names, note, new_ids=(), total=None):
 # Verbs
 # --------------------------------------------------------------------------
 
+def _emit(text):
+    """Print TEXT to stdout, scrubbed: comment text is Figma's, and a token pasted
+    into a comment must not be printed back. False when stdout is closed (the
+    reader went away); stdout is then pointed at the null device, so the
+    interpreter's own flush at exit cannot fail a second time."""
+    try:
+        print(scrub(text))
+        sys.stdout.flush()
+        return True
+    except BrokenPipeError:
+        try:
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        except (OSError, ValueError, AttributeError):
+            pass  # not a real file descriptor (a test's stream): nothing left to flush
+        return False
+
+
+def _warn(text):
+    """A line on stderr that cannot raise: a warning never changes an outcome."""
+    try:
+        print(scrub(text), file=sys.stderr)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _names_for(cfg, key, threads, args, sdir):
     ids = sorted({t["anchor"]["node_id"] for t in threads if t["anchor"]["kind"] == "node"})
     if not ids:
@@ -805,8 +847,7 @@ def _sdir_or_none(cfg, args):
         return state_dir(cfg, args.state_dir)
     except ConfigError as e:
         if cfg["names"]["token"] and not args.no_names:
-            print(f"warning: no name cache ({e}); every run repeats the name lookup",
-                  file=sys.stderr)
+            _warn(f"warning: no name cache ({e}); every run repeats the name lookup")
         return None
 
 
@@ -818,11 +859,11 @@ def cmd_list(cfg, args):
     names, fname, note, failed = _names_for(cfg, key, threads, args, sdir)
     kept = select(threads, names, args.unresolved, args.since, args.author or (), args.anchor)
     if failed:
-        print(f"warning: {note}", file=sys.stderr)  # a lookup was tried in this run and failed
+        _warn(f"warning: {note}")  # a lookup was tried in this run and failed
     if args.json:
-        print(json.dumps(to_json(key, fname, kept, names, note), indent=1))
+        _emit(json.dumps(to_json(key, fname, kept, names, note), indent=1))
     else:
-        print(render(key, fname, kept, names, note, total=len(threads)))
+        _emit(render(key, fname, kept, names, note, total=len(threads)))
     return 0
 
 
@@ -840,29 +881,37 @@ def cmd_new(cfg, args):
     resolved, reopened = resolution_changes(comments, cursor)
     filtered = bool(args.unresolved or args.since or args.author or args.anchor)
     if failed:
-        print(f"warning: {note}", file=sys.stderr)  # a lookup was tried in this run and failed
+        _warn(f"warning: {note}")  # a lookup was tried in this run and failed
     path = str(cursor_path(sdir, key))
-    if not args.peek:
-        # With a filter, only what was shown is marked seen, so a filtered run
-        # never swallows comments it did not display. Resolution changes are
-        # advanced only by an unfiltered run, for the same reason.
-        advance_cursor(sdir, key, cursor, shown, comments, resolved_shown=not filtered)
     if args.json:
         doc = to_json(key, fname, kept, names, note, new_ids=shown)
         doc.update({"resolved_since_last": resolved, "reopened_since_last": reopened,
                     "cursor": {"path": path, "advanced": not args.peek,
                                "first_look": cursor.get("updated_at") is None}})
-        print(json.dumps(doc, indent=1))
-        return 0
-    first = " (first look: everything is new)" if cursor.get("updated_at") is None else ""
-    print(f"new since {cursor.get('updated_at') or 'never'}{first}; cursor {path}"
-          + ("" if not args.peek else " (peek: not advanced)"))
-    print(render(key, fname, kept, names, note, new_ids=shown))
-    by_id = {c["id"]: c for c in comments}
-    for label, ids in (("resolved since last look", resolved), ("reopened since last look", reopened)):
-        for i in ids:
-            c = by_id[i]
-            print(f"{label}: #{c.get('order_id') or '-'} [id {i}] by {_who(c)['handle']}")
+        text = json.dumps(doc, indent=1)
+    else:
+        first = " (first look: everything is new)" if cursor.get("updated_at") is None else ""
+        lines = [f"new since {cursor.get('updated_at') or 'never'}{first}; cursor {path}"
+                 + ("" if not args.peek else " (peek: not advanced)"),
+                 render(key, fname, kept, names, note, new_ids=shown)]
+        by_id = {c["id"]: c for c in comments}
+        for label, ids in (("resolved since last look", resolved),
+                           ("reopened since last look", reopened)):
+            for i in ids:
+                c = by_id[i]
+                lines.append(f"{label}: #{c.get('order_id') or '-'} [id {i}] by {_who(c)['handle']}")
+        text = "\n".join(lines)
+    # The cursor advances only once the output was written: a reader that went
+    # away has not seen these comments, so they stay new.
+    if not _emit(text):
+        _warn("warning: stdout was closed before the output was written; the cursor was not "
+              "advanced")
+        return 1
+    if not args.peek:
+        # With a filter, only what was shown is marked seen, so a filtered run
+        # never swallows comments it did not display. Resolution changes are
+        # advanced only by an unfiltered run, for the same reason.
+        advance_cursor(sdir, key, cursor, shown, comments, resolved_shown=not filtered)
     return 0
 
 
@@ -894,7 +943,7 @@ def _write(cfg, args, key, body):
     read_token(cfg, "write")  # refuses on a read-only install before anything is built
     path = f"/v1/files/{key}/comments"
     if args.dry_run:
-        print(json.dumps({"method": "POST", "url": API + path, "body": body}, indent=1))
+        _emit(json.dumps({"method": "POST", "url": API + path, "body": body}, indent=1))
         return 0
     try:
         made = api(cfg, "write", path, method="POST", body=body)
@@ -904,26 +953,27 @@ def _write(cfg, args, key, body):
                                f"new) before retrying, or a retry posts it twice under the token "
                                f"owner's name") from None
         raise
-    # POSTED. From here on nothing may turn this into a failure: an exit that
-    # says "not posted" after a post is how a retry posts it a second time.
-    cid = made.get("id")
-    if args.json:
-        print(json.dumps(made, indent=1))
-    else:
-        print(f"posted comment {cid or '(id unknown)'}")
-    sys.stdout.flush()
-    if made.get("_unparsed"):
-        print("warning: the post succeeded but its response did not parse, so its id is unknown",
-              file=sys.stderr)
+    # POSTED. Every path from here returns 0: an exit that says "not posted"
+    # after a post is how a retry posts it a second time under a person's name.
     try:
+        if not isinstance(made, dict):
+            made = {"_unparsed": True}  # valid JSON that is not an object: no id to read
+        cid = made.get("id")
+        shown = _emit(json.dumps(made, indent=1) if args.json
+                      else f"posted comment {cid or '(id unknown)'}")
+        if made.get("_unparsed"):
+            _warn("warning: the post succeeded but its response is not a comment object, so its "
+                  "id is unknown")
+        if not shown:
+            _warn(f"warning: stdout is closed; the comment WAS posted (id {cid or 'unknown'})")
         sdir = state_dir(cfg, args.state_dir)
         cur = load_cursor(sdir, key)
         if cur.get("updated_at") is not None and cid:
             cur["seen"] = sorted(set(cur.get("seen", [])) | {cid})
             _write_json(cursor_path(sdir, key), cur)
-    except Exception as e:  # noqa: BLE001 - the post stands; the cursor is a convenience
-        print(f"warning: posted, but the cursor was not updated ({scrub(e)}); the next `new` "
-              f"reports this comment as new", file=sys.stderr)
+    except Exception as e:  # noqa: BLE001 - the post stands; output and cursor are conveniences
+        _warn(f"warning: posted, but the cursor was not updated ({type(e).__name__}: {e}); the "
+              f"next `new` reports this comment as new")
     return 0
 
 
@@ -938,8 +988,7 @@ def cmd_reply(cfg, args):
     if target.get("parent_id"):
         # Figma accepts a reply only to a ROOT comment; a reply's thread is its parent's.
         root = target["parent_id"]
-        print(f"note: {args.comment_id} is a reply; replying in its thread, to root {root}",
-              file=sys.stderr)
+        _warn(f"note: {args.comment_id} is a reply; replying in its thread, to root {root}")
     return _write(cfg, args, key, {"message": _prefixed(cfg, _message(args)), "comment_id": root})
 
 
@@ -999,12 +1048,13 @@ def main(argv=None):
         cfg = load_config(args.config)
         return VERBS[args.verb](cfg, args)
     except (ConfigError, CredentialError, AuthError, ApiError, WriteUnknown) as e:
-        print(f"{type(e).__name__}: {scrub(e)}", file=sys.stderr)
+        _warn(f"{type(e).__name__}: {e}")
         return e.exit_code
     except Exception as e:  # noqa: BLE001 - never a traceback: one could quote a token
-        # Local only: every API failure is an ApiError, and a write that may have
-        # landed is WriteUnknown, so nothing was posted when this is reached.
-        print(f"Error: {type(e).__name__}: {scrub(e)}", file=sys.stderr)
+        # Nothing was posted when this is reached: every API failure is an
+        # ApiError, a write that may have landed is WriteUnknown, and once a POST
+        # has succeeded _write returns 0 on every path, catching all after it.
+        _warn(f"Error: {type(e).__name__}: {e}")
         return 1
 
 

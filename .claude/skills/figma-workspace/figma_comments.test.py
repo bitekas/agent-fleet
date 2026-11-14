@@ -55,6 +55,13 @@ WHAT EACH SECTION IS FOR, AND WHAT BREAKS IF IT IS DELETED
     cache: a scope refusal is cached; an incremental nodes read keeps the
     depth-2 time (a fake clock), and a node it finds is "page not resolved",
     never "nested".
+11. After a POST, every path is exit 0: a 2xx that is JSON but not an object,
+    and a closed stdout (in-process, and end to end in a child whose stdout pipe
+    is closed, so the interpreter's exit-time flush counts). `new` with a closed
+    stdout does not advance the cursor. The module's opener refuses a redirect
+    (two loopback servers: the token never reaches the target), and a 3xx is an
+    ApiError. Rendered output, both forms, scrubs a token pasted into a
+    comment. An invalid-UTF-8 token file is exit 2 with no traceback.
 
 The temp root is a realpath (macOS's $TMPDIR is a symlink) and is removed at
 exit, a failing or crashing run included.
@@ -151,6 +158,9 @@ def _forbidden(*_a, **_kw):
     raise NetworkReached("a test reached the real network")
 
 
+# The module's own opener, kept for section 11, which drives it against two
+# loopback servers to prove a redirect is refused. Nothing else may use it.
+REAL_OPEN = fc._urlopen
 urllib.request.urlopen = _forbidden
 fc._urlopen = _forbidden
 
@@ -273,11 +283,11 @@ def config(**edits):
     return path
 
 
-def run(argv, fake=None, stdin=None):
+def run(argv, fake=None, stdin=None, stdout=None):
     """(exit code, stdout, stderr) of the CLI with FAKE as the network."""
     fc._urlopen = fake if fake is not None else _forbidden
     fc._LOADED.clear()
-    out, err = io.StringIO(), io.StringIO()
+    out, err = (stdout if stdout is not None else io.StringIO()), io.StringIO()
     old_stdin = sys.stdin
     if stdin is not None:
         sys.stdin = io.StringIO(stdin)
@@ -896,6 +906,155 @@ try:
           "past cache_hours from the depth-2 read, names are read again and a rename shows")
 finally:
     fc._now = real_now
+reset_state()
+
+
+# ----------------------------------------------------------------- 11. after a POST, redirects, output
+
+section("11. after a POST, redirects, rendered text, undecodable token files")
+import http.server  # noqa: E402
+import subprocess  # noqa: E402
+import threading  # noqa: E402
+
+cfg_w = config(tokens__write={"path": WT})
+reset_state()
+
+
+# R-S1 (a): a 2xx POST whose body is JSON but not an object is posted: exit 0, id unknown.
+class NonObject(Fake):
+    def __init__(self, body):
+        super().__init__()
+        self.body = body
+
+    def __call__(self, req, timeout=None):
+        r = super().__call__(req, timeout)
+        return Resp(self.body) if req.get_method() == "POST" else r
+
+
+for body in (b"null", b"[]", b'"ok"'):
+    fake = NonObject(body)
+    code, out, err = run(["reply", "1000000001", "--message", "x", "--config", cfg_w], fake)
+    check(len([r for r in fake.log if r["method"] == "POST"]) == 1 and code == 0 and "id unknown" in out,
+          f"a 2xx POST answering {body.decode()} is posted: exit 0, id unknown ({code}: {err.strip()[:80]})")
+
+
+# R-S1 (b): a closed stdout after the POST does not turn it into a failure.
+class Closed(io.StringIO):
+    def write(self, s):
+        raise BrokenPipeError(32, "Broken pipe")
+
+
+fake = Fake()
+code, out, err = run(["reply", "1000000001", "--message", "x", "--config", cfg_w], fake, stdout=Closed())
+check(len([r for r in fake.log if r["method"] == "POST"]) == 1 and code == 0,
+      f"a closed stdout after the POST: exit 0 ({code}: {err.strip()[:80]})")
+
+# `new` with a closed stdout: the reader never saw the comments, so they stay new.
+reset_state()
+code, out, err = run(["new", "--config", cfg_w], Fake(), stdout=Closed())
+code2, out2, err2 = run(["new", "--json", "--config", cfg_w], Fake())
+newc = [c["id"] for t in json.loads(out2)["threads"] for c in [t] + t["replies"] if c["new"]] if code2 == 0 else []
+check(code == 1 and "not advanced" in err and len(newc) == 8,
+      f"new with a closed stdout exits 1 and leaves the cursor where it was ({code}, {len(newc)} still new)")
+reset_state()
+
+# ... and end to end, in a child process whose stdout is a pipe already closed at
+# the reading end, so the interpreter's own exit-time flush is part of the result.
+CHILD = r"""
+import importlib.util, io, json, sys
+spec = importlib.util.spec_from_file_location("figma_comments", sys.argv[1])
+fc = importlib.util.module_from_spec(spec); spec.loader.exec_module(fc)
+class R(io.BytesIO):
+    def __enter__(self): return self
+    def __exit__(self, *a): self.close()
+def fake(req, timeout=None):
+    if req.get_method() == "POST":
+        return R(b'{"id": "3000000001"}')
+    return R(json.dumps({"comments": [{"id": "1000000001", "parent_id": "", "user": {"id": "1", "handle": "Ada"},
+             "created_at": "2026-01-10T09:00:00.000Z", "resolved_at": None, "message": "m",
+             "client_meta": None, "order_id": "1"}]}).encode())
+fc._urlopen = fake
+sys.exit(fc.main(["reply", "1000000001", "--message", "x", "--config", sys.argv[2]]))
+"""
+rfd, wfd = os.pipe()
+os.close(rfd)  # closed before the child starts: its first write to stdout fails
+proc = subprocess.run([sys.executable, "-B", "-c", CHILD, os.path.join(HERE, "figma_comments.py"), cfg_w],
+                      stdout=wfd, stderr=subprocess.PIPE, text=True, env=dict(os.environ))
+os.close(wfd)
+check(proc.returncode == 0 and "Traceback" not in proc.stderr,
+      f"end to end, a posted comment with stdout closed exits 0 ({proc.returncode}: {proc.stderr.strip()[:120]})")
+
+# Redirects are refused: urllib's default would send X-Figma-Token to the target.
+SEEN = []
+
+
+class Quiet(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+
+
+class Sink(Quiet):
+    def do_GET(self):
+        SEEN.append(self.headers.get("X-Figma-Token"))
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(b'{"comments": []}')
+
+
+sink = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Sink)
+
+
+class Redirect(Quiet):
+    def do_GET(self):
+        self.send_response(302)
+        self.send_header("Location", f"http://127.0.0.1:{sink.server_address[1]}/elsewhere")
+        self.end_headers()
+
+
+redir = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Redirect)
+for srv in (sink, redir):
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+try:
+    req = urllib.request.Request(f"http://127.0.0.1:{redir.server_address[1]}/v1/files/K/comments",
+                                 headers={"X-Figma-Token": "figd_REDIRECT-sentinel-0009"})
+    try:
+        with REAL_OPEN(req, timeout=10) as resp:
+            resp.read()
+        status = "followed"
+    except urllib.error.HTTPError as e:
+        status = e.code
+    check(status == 302 and not SEEN, f"the module's opener refuses a redirect and sends the token nowhere "
+          f"({status}; tokens at the target: {len(SEEN)})")
+finally:
+    for srv in (sink, redir):
+        srv.shutdown()
+        srv.server_close()
+fake = Fake()
+fake.errors["/v1/files/"] = (302, "", {"Location": "https://elsewhere.example/x"})
+code, out, err = run(["list", "--config", config()], fake)
+check(code == 4 and "302" in err and "redirect" in err.lower() and "not followed" in err,
+      f"a redirect is an ApiError naming its status, never followed ({code}: {err.strip()[:100]})")
+
+# Rendered output is scrubbed: a token pasted into a comment is not printed back.
+for argv in (["list"], ["list", "--json"], ["new", "--peek"], ["new", "--peek", "--json"]):
+    reset_state()
+    fake = Fake()
+    fake.comments[-1] = dict(fake.comments[-1],
+                             message=f"my token is {READ_TOKEN} and figd_PASTED-sentinel-0010")
+    code, out, err = run(argv + ["--config", config()], fake)
+    check(code == 0 and READ_TOKEN not in out + err and "PASTED-sentinel-0010" not in out + err
+          and "my token is" in out, f"{' '.join(argv)}: a token in a comment's text is scrubbed ({code})")
+
+# An undecodable token file: the same scrubbed refusal, exit 2, no traceback.
+bad = os.path.join(SECRETS, "undecodable.token")
+with open(bad, "wb") as f:
+    f.write(b"\xff\xfefigd_UNDECODABLE-sentinel-0011\n")
+os.chmod(bad, 0o600)
+fake = Fake()
+code, out, err = run(["list", "--config", config(tokens__read={"path": bad})], fake)
+check(code == 2 and bad in err and "Traceback" not in err and "UNDECODABLE" not in out + err and not fake.log,
+      f"an invalid-UTF-8 token file is refused as a credential, exit 2 ({code}: {err.strip()[:100]})")
 reset_state()
 
 print()

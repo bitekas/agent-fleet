@@ -143,15 +143,22 @@ call; the separate token only makes "it cannot" true where the install wants
 it.
 
 **A token file holds one line**: the token, and nothing else that is not
-printable non-space ASCII. A second line, a pasted space or a control
-character is refused before use, naming the file and never the value: such a
-value is rejected by the HTTP layer, whose error quotes it.
+printable non-space ASCII. A second line, a pasted space, a control character
+or a byte that is not ASCII (a file that is not text at all) is refused before
+use, naming the file and never the value: such a value is rejected by the HTTP
+layer, whose error quotes it.
 
 - **A token is never printed, never put in argv, never logged.** The helper
   reads it from its file inside the process and sends it only as the
-  `X-Figma-Token` header; every error it prints is scrubbed of the loaded
-  token and of anything shaped like one (`figd_...`), because an error body is
-  server text. There is no command-line option that takes a token.
+  `X-Figma-Token` header. Everything it prints - errors, warnings, and the
+  listing itself - is scrubbed of the loaded tokens and of anything shaped like
+  one (`figd_...`), because an error body is server text and a comment's text
+  is whatever a person pasted into it. There is no command-line option that
+  takes a token.
+- **A redirect is never followed.** urllib's default handler re-sends a
+  request's headers, the token among them, to the redirect target on any host
+  and any scheme. The REST API never redirects, so the helper's opener refuses
+  every redirect and reports the 3xx as an API error, exit 4.
 - **A token is named by path, under the organization secrets variable**
   (`/claude-skill` section 4): `${FLEET_SECRETS_DIR:-<fallback>}/<file>`.
 - **A token lives at most 90 days**, and none is issued without an expiry
@@ -196,7 +203,9 @@ gives the branch key; may be left out when `files` has one entry), `--json`,
   resolved or reopened since. It advances the cursor unless `--peek`. With a
   filter it marks seen only what it showed, and leaves resolution changes for
   an unfiltered run, so a filtered look never swallows what it did not
-  display. The FIRST `new` reports everything; run it once to set a baseline.
+  display. It advances only once its output is written: with stdout closed,
+  it exits `1` and the comments stay new. The FIRST `new` reports everything;
+  run it once to set a baseline.
 - **`reply`** posts into a thread. Figma accepts a reply only to a ROOT
   comment, so a reply id given here is followed to its root, and the helper
   says so. It reads the comments first (read token) to find the thread.
@@ -211,8 +220,9 @@ gives the branch key; may be left out when `files` has one entry), `--json`,
   find the thread). With no write token configured they refuse before anything
   is read or built.
 - **Once the POST succeeded, the verb exits 0 and prints the id**, whatever
-  happens next: a cursor that cannot be updated, or a response that does not
-  parse, is a warning on stderr. An exit that said "not posted" after a post is
+  happens next: a cursor that cannot be updated, a response that does not
+  parse or is not a comment object (the id is then "unknown"), or a closed
+  stdout, is a warning on stderr. An exit that said "not posted" after a post is
   how a retry posts it twice under a person's name. A write whose outcome is
   UNKNOWN - the request may have been sent and the answer was lost (a timeout,
   a broken connection, a 5xx) - exits `5`: read the thread before retrying.
