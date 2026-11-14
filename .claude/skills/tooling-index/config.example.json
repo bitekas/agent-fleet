@@ -1,0 +1,40 @@
+{
+  "_comment": [
+    "TEMPLATE. Copy to config.json in this skill's install context",
+    "(`fleet where tooling-index config.json` prints the path) and replace every placeholder.",
+    "",
+    "This skill owns no script, so nothing here is read by a program: the keys",
+    "are read by the AGENT while it is following SKILL.md. They are config",
+    "rather than CONTEXT.md prose because each is a single command or path that",
+    "either works or does not - a wrong value fails loudly at the terminal.",
+    "Everything that fails SILENTLY when wrong - which tools exist, what each is",
+    "for, where its real documentation lives - is CONTEXT.md's job, and",
+    "CONTEXT.md, beside config.json in the install context, is where the index",
+    "itself lives.",
+    "",
+    "The INDEX is not in here and never will be. Only a value that differs per",
+    "install is a config key.",
+    "",
+    "If your repository is not built on a framework that ships its own package",
+    "set, set packages.ecosystem and the three commands to null and say so in",
+    "CONTEXT.md; SKILL.md section 7 then does not apply to you. Do NOT leave a",
+    "plausible-looking installer command in place for a framework you do not use.",
+    "",
+    "This skill owns no credential. No token, key or secret is ever a value in",
+    "this file.",
+    "",
+    "JSON has no comments, so every _comment key here is documentation. Leave",
+    "them in your config.json or delete them; nothing parses this but a reader."
+  ],
+  "packages": {
+    "_comment": "The framework whose packages must be added through its OWN installer, and the three commands SKILL.md section 7 refers to. 'ecosystem' is the name a reader will recognise on a package that belongs to it (usually the dependency prefix or the CLI's name). 'add_command' is the installer that consults the framework's compatibility table - the ONLY sanctioned way to add or bump one of these packages; <pkg> is where the package name goes. 'fix_command' realigns a dependency set that has already drifted. 'doctor_command' is the compatibility check; the gate that enforces it reads its EXIT CODE, never the number of checks it reports, because the tally moves with the framework version. Find all three in your framework's own CLI docs; if the framework has no doctor, set doctor_command to null rather than substituting a plain audit command, which checks something else.",
+    "ecosystem": "exampleframework",
+    "add_command": "npx exampleframework install <pkg>",
+    "fix_command": "npx exampleframework install --fix",
+    "doctor_command": "npx exampleframework-doctor"
+  },
+  "tooling": {
+    "_comment": "Where a one-off script goes INSTEAD of the repository. SKILL.md section 3 exempts one-offs from the index on condition they are not committed, so this key is the other half of that rule: naming a real home is what stops 'it is only a one-off' becoming an untracked, unindexed script in the tree. Any scratch or ignored directory outside the checkout will do.",
+    "scratch_dir": "/path/to/your/scratch"
+  }
+}
