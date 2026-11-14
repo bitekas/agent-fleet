@@ -16,8 +16,8 @@ one-word one (`<version>`) is filled in when it is read, and a chat mention
 
 settings(m) is the view skills read: house rules, conventions and secrets with
 the fleet defaults applied. `fleet settings` prints it, after check_paths(m,
-root) has refused a convention or a deny list that names a file the install
-does not have.
+root) has refused a convention or a deny list that names a file neither the
+install nor, for a skill the manifest lists, the fleet tree has.
 
 The key tuples below are the ONE enumeration of schema 1. Validation, the
 defaults, schema_keys() and the tests that hold templates/fleet.example.json
@@ -33,6 +33,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from . import EnvironmentFault, ManifestError
 from . import transports as _transports
+from .paths import fleet_root
 
 TOP_KEYS = ("schema", "fleet", "skills", "transports", "conventions",
             "house_rules", "secrets", "upstream")
@@ -53,9 +54,10 @@ IDENTITY_KEYS = ("name", "email")
 DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 CHAT_TRANSPORT_SKILL = "chat-transport"
 
-# The fleet defaults. The fleet ships NO development convention: an absent or
-# null convention means the install has none, and the reading skill skips that
-# step and says so.
+# The fleet defaults. No convention has a default: an absent or null convention
+# means the install has none, and the reading skill skips that step and says so.
+# The fleet's own development conventions are an optional group's
+# (templates/skill-groups.json), which an install takes by naming them.
 DEFAULT_CONVENTIONS = {k: None for k in CONVENTION_KEYS}
 DEFAULT_HOUSE_RULES = {
     "questions_per_message": 1,
@@ -282,11 +284,17 @@ def validate(m, *, skills_dir=None, source="install manifest"):
 _READ_TIME = re.compile(r"<[^<>]*>")  # search: a doc path that is filled in when it is read
 
 
-def check_paths(m, install_root):
+def check_paths(m, install_root, *, skills_dir=None):
     """Raise ManifestError naming the key when a value of `m` (a manifest load()
-    returned) points at a file the install at `install_root` does not have: a
-    convention skill without `<install root>/.claude/skills/<name>/SKILL.md`, a
-    convention doc, or `upstream.deny_list`. A doc path holding a read-time
+    returned) points at a file that is not there: a convention doc or
+    `upstream.deny_list` the install at `install_root` does not have, or a
+    convention skill that is neither the install's own
+    (`<install root>/.claude/skills/<name>/SKILL.md`) nor a fleet skill the
+    manifest's `skills` lists and the fleet tree has (`<skills_dir>/<name>/SKILL.md`;
+    `skills_dir` defaults to the `.claude/skills` of the fleet tree this library
+    is imported from). A skill refusal says which of the two is missing; the
+    fleet skill that `skills` does not list is the install that declined a skill
+    group but kept a convention pointing into it. A doc path holding a read-time
     placeholder (`<feature-slug>`) names no file until it is read, so it is not
     followed. A relative path resolves against the install root, as the leak gate
     resolves the deny list; `~` expands.
@@ -297,6 +305,7 @@ def check_paths(m, install_root):
     how an agent reads a convention.
     """
     root = Path(install_root)
+    fleet = Path(skills_dir) if skills_dir is not None else fleet_root() / ".claude" / "skills"
     c = _Checker(f"install manifest {root / '.claude' / 'fleet.json'}")
 
     def resolve(p):
@@ -307,9 +316,20 @@ def check_paths(m, install_root):
         if v is None:
             continue
         if "skill" in v:
-            p = root / ".claude" / "skills" / v["skill"] / "SKILL.md"
-            if not p.is_file():
-                c.fail(f"conventions.{k}.skill", f"names skill {v['skill']!r}, but {p} does not exist")
+            name, key = v["skill"], f"conventions.{k}.skill"
+            own, shipped = root / ".claude" / "skills" / name / "SKILL.md", fleet / name / "SKILL.md"
+            listed = name in m.get("skills", [])
+            if own.is_file() or (listed and shipped.is_file()):
+                continue
+            if shipped.is_file():
+                c.fail(key, f"names the fleet skill {name!r}, but `skills` does not list it, so it is "
+                            f"not linked; add it to `skills`, or point the key at the install's own "
+                            f"skill or document ({own} does not exist)")
+            if listed:
+                c.fail(key, f"names skill {name!r}, which `skills` lists, but the fleet tree has no "
+                            f"{shipped} and the install has no {own}")
+            c.fail(key, f"names skill {name!r}, which is neither the install's own ({own} does not "
+                        f"exist) nor a fleet skill (no {shipped})")
         elif not _READ_TIME.search(v["doc"]) and not resolve(v["doc"]).is_file():
             c.fail(f"conventions.{k}.doc", f"names {v['doc']!r}, but {resolve(v['doc'])} does not exist")
     deny = m.get("upstream", {}).get("deny_list")

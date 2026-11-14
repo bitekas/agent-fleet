@@ -1820,6 +1820,28 @@ def settings_refuses_a_convention_or_deny_list_that_names_no_file():
 
 
 @case
+def settings_follows_a_convention_skill_into_the_fleet_tree_it_runs_from():
+    # A {"skill": X} convention may name a fleet skill: one the manifest's `skills`
+    # lists and the fleet tree `fleet` runs from carries. demo-skill is in SKILLS and
+    # in the synthetic fleet tree, and the install has no copy of its own; the refusal
+    # is the same convention naming stall-watchdog, which the fleet tree carries and
+    # `skills` does not list - an install that declined a group but kept its value.
+    m = manifest_doc()
+    m["conventions"] = {"release": {"skill": "demo-skill", "section": 1}}
+    w = World(manifest=m)
+    root = w.agents / "ada/project"
+    env = {"FLEET_CONTEXT_ROOT": root}
+    assert not (root / ".claude/skills/demo-skill").exists(), "the install has its own copy"
+    assert (w.fleet / ".claude/skills/stall-watchdog/SKILL.md").is_file()
+    r = w.fleet_cmd("settings", "conventions.release", **env)
+    ok(r)
+    assert json.loads(r.stdout) == {"skill": "demo-skill", "section": 1}, r.stdout
+    m["conventions"]["release"] = {"skill": "stall-watchdog"}
+    write(root / ".claude/fleet.json", json.dumps(m))
+    refused(w.fleet_cmd("settings", **env), "`skills` does not list it")
+
+
+@case
 def check_all_runs_every_linked_check_with_the_agent_context():
     w = World()
     ok(w.fleet_cmd("link", "ada"))

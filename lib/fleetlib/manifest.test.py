@@ -17,13 +17,13 @@ from fleetlib import DescriptorError, EnvironmentFault, ManifestError, manifest 
 from fleetlib._testkit import (FIXTURE_INSTALL, FIXTURE_TRANSPORTS, MINIMAL, REPO,  # noqa: E402
                                IsolatedTest, make_install, read_json, write_json)
 
-FLEET_SKILLS = [
-    "agent", "talking-to-humans", "self-compact", "scheduled-tasks", "restart",
-    "soft-restart", "stall-watchdog", "slack-communication", "agent-revive", "agent-health",
-    "knowledge-base", "claude-skill", "web-hierarchy-server", "google-spreadsheet",
-    "notion-workspace", "rate-graphic", "chat-transport", "adding-an-agent",
-    "install-agent-fleet", "safe-box",
-]
+
+def fixture():
+    return manifest.strip_comments(read_json(FIXTURE_INSTALL / ".claude" / "fleet.json"))
+
+
+# The fixture install's skills, read from it: the refusals below mutate this list.
+FLEET_SKILLS = fixture()["skills"]
 
 # design 6.1's defaults, written out here and not derived from manifest.py, so a
 # changed default reds this test instead of agreeing with itself.
@@ -36,10 +36,6 @@ DESIGN_HOUSE_RULES = {
     "ascii_skill_prose": True,
 }
 DESIGN_SECRETS = {"legacy_env": None, "default_dir": "~/.fleet-secrets"}
-
-
-def fixture():
-    return manifest.strip_comments(read_json(FIXTURE_INSTALL / ".claude" / "fleet.json"))
 
 
 def setp(d, dotted, value):
@@ -278,6 +274,66 @@ class CheckPathsTest(IsolatedTest):
         self.assertIsNone(manifest.check_paths(m, root))
 
 
+class FleetSkillConventionTest(IsolatedTest):
+    """check_paths(): a {"skill": X} convention names the install's own skill, or
+    a fleet skill the manifest's `skills` lists and the fleet tree has. Each case
+    runs against a fleet tree of its own (`skills_dir`), so the fleet skill's
+    presence is the case's choice, never this repository's."""
+
+    def setup(self, value, *, listed=(), own=(), fleet=()):
+        m = copy.deepcopy(MINIMAL)
+        m["skills"] = MINIMAL["skills"] + list(listed)
+        m["conventions"] = {"release": value}
+        root = make_install(self.tmp / "inst", m)
+        for name in own:
+            (root / ".claude/skills" / name).mkdir(parents=True)
+            (root / ".claude/skills" / name / "SKILL.md").write_text("x\n", encoding="utf-8")
+        skills_dir = self.tmp / "fleet" / ".claude" / "skills"
+        skills_dir.mkdir(parents=True)
+        for name in fleet:
+            (skills_dir / name).mkdir()
+            (skills_dir / name / "SKILL.md").write_text("x\n", encoding="utf-8")
+        return manifest.load(root, skills_dir=FIXTURE_TRANSPORTS), root, skills_dir
+
+    def test_the_install_own_skill_is_accepted(self):
+        m, root, fleet = self.setup({"skill": "example-release"}, own=["example-release"])
+        self.assertIsNone(manifest.check_paths(m, root, skills_dir=fleet))
+
+    def test_a_fleet_skill_the_manifest_lists_is_accepted(self):
+        m, root, fleet = self.setup({"skill": "release", "section": 3}, listed=["release"], fleet=["release"])
+        self.assertFalse((root / ".claude/skills/release").exists(), "the install has its own copy")
+        self.assertIsNone(manifest.check_paths(m, root, skills_dir=fleet))
+
+    def test_a_fleet_skill_the_manifest_does_not_list_is_refused(self):
+        # The install that declined the group but kept a convention pointing at it.
+        m, root, fleet = self.setup({"skill": "release"}, fleet=["release"])
+        err = self.assertFleetError(ManifestError, manifest.check_paths, m, root, skills_dir=fleet,
+                                    exit_code=2, key="conventions.release.skill")
+        self.assertIn("`skills` does not list it", str(err))
+
+    def test_a_listed_skill_the_fleet_tree_lacks_is_refused(self):
+        m, root, fleet = self.setup({"skill": "release"}, listed=["release"])
+        err = self.assertFleetError(ManifestError, manifest.check_paths, m, root, skills_dir=fleet,
+                                    exit_code=2, key="conventions.release.skill")
+        self.assertIn("the fleet tree has no", str(err))
+
+    def test_a_name_in_neither_is_refused(self):
+        m, root, fleet = self.setup({"skill": "release"})
+        err = self.assertFleetError(ManifestError, manifest.check_paths, m, root, skills_dir=fleet,
+                                    exit_code=2, key="conventions.release.skill")
+        self.assertIn("neither", str(err))
+
+    def test_the_default_fleet_tree_is_the_one_this_library_is_in(self):
+        # No skills_dir: the fleet tree is this repository, whose software-development
+        # skill exists, so listing it is all an install needs to point a key at it.
+        self.assertTrue((REPO / ".claude/skills/software-development/SKILL.md").is_file())
+        m, root, _ = self.setup({"skill": "software-development"}, listed=["software-development"])
+        self.assertIsNone(manifest.check_paths(m, root))
+        m["skills"].remove("software-development")
+        self.assertFleetError(ManifestError, manifest.check_paths, m, root, exit_code=2,
+                              key="conventions.release.skill")
+
+
 class OptionalConventionTest(IsolatedTest):
     """`conventions.people_notes` is optional, so a schema-1 manifest without it is
     still valid: it loads unchanged and reads the key as null (no such convention),
@@ -317,7 +373,7 @@ class OptionalConventionTest(IsolatedTest):
 class FixtureTest(IsolatedTest):
     def test_fixture_install_loads(self):
         m = manifest.load(FIXTURE_INSTALL, skills_dir=FIXTURE_TRANSPORTS)
-        self.assertEqual(m["skills"], FLEET_SKILLS)
+        self.assertEqual(m["skills"], read_json(FIXTURE_INSTALL / ".claude" / "fleet.json")["skills"])
         self.assertEqual(m["transports"], {"enabled": ["slack"], "default": "slack"})
 
     def test_fixture_house_rules_all_differ_from_the_defaults(self):
@@ -480,6 +536,7 @@ class ConventionsDocTest(unittest.TestCase):
             for p in path:
                 want = want[p]
             self.assertEqual(json.loads(rows[name]), want, name)
+
 
 
 if __name__ == "__main__":
