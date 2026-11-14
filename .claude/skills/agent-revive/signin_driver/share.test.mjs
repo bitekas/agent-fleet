@@ -18,7 +18,8 @@
 //      fails to go DOWN (record and timer kept, start refusing), the host-wide setup
 //      lock, an x11vnc that can take only ::1, two shares racing, teardown on quit, on
 //      SIGTERM, and by the next `start` after a SIGKILL - and the password on no
-//      output. Needs signin_driver's node_modules, a chromium build, xvfb-run, x11vnc,
+//      output, and nothing left in the TMPDIR the drivers are given. Needs
+//      signin_driver's node_modules, a chromium build, xvfb-run, x11vnc,
 //      websockify and python3.
 //
 // ── EXIT CODES: THREE, NEVER TWO ─────────────────────────────────────────────
@@ -46,6 +47,10 @@
 //     from the one, and the other must stay empty.
 //   - the password is asserted absent from every output only beside a scanner shown
 //     to find a planted copy.
+//   - "nothing is left in P", the TMPDIR every driver's process tree is given, only
+//     after xvfb-run's directory was found in P while a driver ran and the scan found
+//     an entry planted there; "the browser's own temp dirs are inside the run dir" only
+//     after they were found while that driver ran, wherever they were made.
 // Delete a control and the assertion beside it can no longer fail.
 
 import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync, existsSync, statSync, readdirSync, chmodSync } from 'node:fs';
@@ -255,6 +260,20 @@ async function probeInput(X, port, args, password, { remote = false, second = fa
 }
 
 const T = mkdtempSync(join(tmpdir(), 'shrt-'));
+// EVERY CLIENT OF HALF B - AND SO EVERY DRIVER, xvfb-run AND BROWSER UNDER IT - IS GIVEN
+// A TMPDIR OF ITS OWN, P, AND P MUST BE EMPTY AT THE END. Each of them makes directories
+// in its TMPDIR (xvfb-run's X authority, Playwright's artifacts, Chromium's singleton
+// socket) that only a clean end removes, and half B ends drivers by SIGTERM and by
+// SIGKILL on purpose. A TMPDIR of their own is what makes "nothing is left" exact: in a
+// shared one, any other browser on the host makes the same names.
+const P = mkdtempSync(join(tmpdir(), 'p'));
+// AND EVERYTHING ELSE THIS FILE RUNS IS GIVEN T, which the end of this file removes.
+// Two of those leave a directory in TMPDIR every time: uutils stdbuf (the coreutils of
+// Ubuntu 26.04, 0.10.0, measured 2026-11-14) makes an empty .tmpXXXXXX at every call
+// and never removes it, because it execs the command it wraps; and half A's throwaway
+// xvfb-run, ended by the final SIGTERM, runs no EXIT trap under /bin/sh (signin.mjs,
+// launchDriver). So T and P gone at the end is nothing of this run's left in its TMPDIR.
+process.env.TMPDIR = T;
 const outputs = [];                 // every stdout/stderr/log, scanned for the passwords
 const passwords = [];               // every one-time password a share wrote
 const started = new Set();          // every driver `start` launched, killed at the end
@@ -350,7 +369,9 @@ try {
   const haveChromium = (() => { try { return readdirSync(browsers).some(d => d.startsWith('chromium-')); } catch { return false; } })();
   const notHere = [!existsSync(join(HERE, 'node_modules', 'playwright-extra')) && 'no node_modules in signin_driver (npm ci there)',
     !haveChromium && `no chromium under ${browsers}`, ...['xvfb-run', 'x11vnc', 'websockify'].filter(b => !has(b)).map(b => `no ${b}`),
-    !desWorks() && 'no DES', Buffer.byteLength(join(T, 'rb', 'driver.sock')) > 107 && 'TMPDIR is too long for a unix socket'].filter(Boolean);
+    // The longest unix socket a driver makes is Chromium's singleton socket inside its
+    // run dir (driver.mjs refuses a run dir it does not fit in).
+    !desWorks() && 'no DES', Buffer.byteLength(join(T, 'rb', 'org.chromium.Chromium.XXXXXX', 'SingletonSocket')) > 107 && "TMPDIR is too long for Chromium's singleton socket in a run dir"].filter(Boolean);
   if (notHere.length) inconclusive.push(`half B did not run: ${notHere.join('; ')}`);
   else {
     try { await halfB(browsers); } catch (e) {
@@ -368,7 +389,15 @@ try {
   control('the password scan finds a password planted in the collected output (so its silence below means something)', leaks(['Zq7xPw2m']).length, 1);
   outputs.pop();
   if (passwords.length) ok(`none of the ${passwords.length} one-time passwords appears on any stdout, stderr, driver log or share log`, leaks(passwords).join(','), '');
+  // Nothing any client, driver, xvfb-run or browser of half B made is left in P, the
+  // TMPDIR they were all given - read after every process of this run is gone.
+  writeFileSync(join(P, 'planted'), '');
+  control('the leftover scan of P finds a planted entry (so its silence below means something)', readdirSync(P).includes('planted'), true);
+  rmSync(join(P, 'planted'), { force: true });
+  ok('nothing a driver, xvfb-run or browser of half B made is left in the TMPDIR they were given - after a quit, a SIGTERM and a SIGKILL', readdirSync(P).join(', '), '');
+  try { rmSync(P, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch (e) { console.log(`note: could not remove ${P}: ${e.message}`); }
   try { rmSync(T, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch (e) { console.log(`note: could not remove ${T}: ${e.message}`); }
+  ok('this run leaves nothing in its TMPDIR: T and P, the temp dirs everything it ran was given, are gone', existsSync(T) || existsSync(P), false);
 }
 
 async function halfB(browsers) {
@@ -408,6 +437,7 @@ async function halfB(browsers) {
   childEnv.HOME = join(T, 'home');
   childEnv.XDG_CONFIG_HOME = join(T, 'home', '.config');
   mkdirSync(childEnv.XDG_CONFIG_HOME, { recursive: true });
+  childEnv.TMPDIR = P;
   const client = (args, extraEnv = {}) => new Promise(res => {
     const c = spawn(process.execPath, [CLIENT, ...args], { env: { ...childEnv, ...env, ...extraEnv } });
     let stdout = '', stderr = '';
@@ -489,6 +519,17 @@ async function halfB(browsers) {
     ok('start --app-window: no tab strip and no address bar - the page is drawn where they would be', [pixel(rb, 640, 30), pixel(rb, 640, 72)].join(','), '00C800,00C800');
   }
   ok('start --app-window: the display is recorded, mode 0600', existsSync(join(rb, 'display.json')) && modeOf(join(rb, 'display.json')), '600');
+  // Where the driver's process tree keeps its temp dirs while it runs: xvfb-run's in
+  // P, the TMPDIR it was given; Playwright's and Chromium's in the run dir, which the
+  // driver makes the browser's TMPDIR so that every exit it observes, and the next start
+  // after a SIGKILL, removes them (driver.mjs).
+  const inDir = (d, f) => { try { return readdirSync(d).filter(n => n.startsWith(f)); } catch { return []; } };
+  // The controls ask for presence, not a count: the previous driver's `quit` returned
+  // before its process tree had finished exiting.
+  control("xvfb-run's directory is in P while the driver runs (so P is the TMPDIR the driver's process tree was given)", inDir(P, 'xvfb-run.').length > 0, true);
+  control("Playwright's and Chromium's temp dirs exist while the driver runs (so where they are means something)",
+          ['playwright-artifacts-', 'org.chromium.Chromium.'].map(f => inDir(P, f).length + inDir(rb, f).length > 0).join(','), 'true,true');
+  ok("Playwright's and Chromium's temp dirs are inside the run dir", ['playwright-artifacts-', 'org.chromium.Chromium.'].map(f => inDir(rb, f).length).join(','), '1,1');
 
   // ── a share being set up elsewhere on this host holds the setup lock ──
   // Two shares set up at once race for one set of ports with no guaranteed winner

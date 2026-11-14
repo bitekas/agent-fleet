@@ -39,6 +39,9 @@ Needs `node` and, on a Linux host with no X session, `xvfb-run` - the browser ru
 On macOS the browser draws through WindowServer, which a user has only while
 logged in at the console (the Aqua session, launchd's `gui/<uid>`), so `start`
 never uses xvfb-run there, and a unix socket path holds 103 bytes instead of 107.
+On Linux the client runs `xvfb-run` under `bash`: under `/bin/sh` (dash on Debian
+and Ubuntu) a SIGTERM, SIGINT or SIGHUP to it skips the EXIT trap that removes its
+temp dir and stops its Xvfb.
 `share` additionally needs `x11vnc`, `websockify`, noVNC and a `tailscale` that may
 run a Funnel on `share.funnel_port` (the install's `config.json`); `installation/check` runs each.
 `share` is Linux only: x11vnc shares an X11 display, and on macOS `share` exits 2
@@ -176,6 +179,10 @@ the one stream nothing redacts.
 Every run has a **run dir** under the system temp dir - the socket, the shots, the
 code file, and with `--app-window` the display record and any share's state, log and
 password - and it is removed when the driver quits or is signalled, in both modes.
+On Linux it is also the browser's temp dir: Playwright's artifacts dir and Chromium's
+singleton socket dir are made inside it, so what an unclean end leaves of them goes
+with it. Chromium's socket sits 45 bytes past the run dir, so there the driver
+refuses a run dir longer than 62 bytes.
 The **profile** is the difference between them:
 
 | | throwaway (no `--profile`) | stored (`--profile <username>`) |
@@ -232,8 +239,11 @@ needs this directory's `node_modules`, a chromium build and a display or `xvfb-r
 survives a restart on a stored profile and not on a throwaway one, the modes, a busy
 profile refused before Chromium with no stray window in the holder, `profiles-check`
 end to end, the throwaway mode's replies key for key, and no pool password on any
-output or driver log, nor in any file of the profile it was typed into. A host
-without half B's needs gets exit **3 NO VERDICT**, never a pass.
+output or driver log, nor in any file of the profile it was typed into. Every client
+it starts, and so every driver, `xvfb-run` and browser, gets a TMPDIR of its own,
+which must be empty at the end; on Linux Playwright's and Chromium's temp dirs must be
+inside the run dir. A host without half B's needs gets exit **3 NO VERDICT**, never
+a pass.
 
 `share.test.mjs` guards the share, with a FAKE `tailscale`
 (`../fixtures/fake-tailscale.mjs`, through `AGENT_REVIVE_TAILSCALE`) and a tripwire
@@ -252,8 +262,9 @@ pixels against a tabbed control, `share`, a second `share` refused, `unshare` tw
 the expiry timer, a funnel that fails to come up, a funnel that fails to turn OFF (by
 `unshare` and by `quit`: record and timer kept, `start` refusing), two shares racing,
 and teardown on `quit`, on SIGTERM and by the next `start` after a SIGKILL, with no
-one-time password on any output. Exit **3 NO VERDICT** when a control misbehaves or a
-half cannot run (~75 s).
+one-time password on any output and nothing any driver, `xvfb-run` or browser made
+left in the TMPDIR of their own it gives them. Exit **3 NO VERDICT** when a control
+misbehaves or a half cannot run (~75 s).
 
 `redaction.test.mjs` runs offline, with no browser and no `node_modules` - which is why `redact.mjs`, `wire.mjs` and
 `pool.mjs` import nothing but node builtins, and why the test asserts that they do.

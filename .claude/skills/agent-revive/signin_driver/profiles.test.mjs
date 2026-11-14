@@ -47,7 +47,12 @@
 //   - the storage refusal is first shown a directory it must ACCEPT, so a function
 //     that refused everything could not pass the refusals;
 //   - "no stealth scratch profile is left" is asserted only after the plugin's
-//     scratch profile was FOUND while the first driver ran, wherever it was made.
+//     scratch profile was FOUND while the first driver ran, wherever it was made;
+//   - "the browser's own temp dirs are inside the run dir" and "they are gone" only
+//     after they were FOUND while the first driver ran, in the run dir or in P;
+//   - "nothing is left in P" only after P was shown to be the TMPDIR of the drivers'
+//     process trees (xvfb-run's directory, on macOS Playwright's, found in it while
+//     the first driver ran), and the scan found an entry planted there.
 // Delete a control and the assertion beside it can no longer fail.
 
 import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync, existsSync, statSync, chmodSync, symlinkSync, readdirSync, realpathSync } from 'node:fs';
@@ -84,6 +89,17 @@ const modeOf = p => (statSync(p).mode & 0o777).toString(8);
 // A long TMPDIR is a host this half cannot run on, said as such rather than as a
 // driver failure.
 const T = mkdtempSync(join(tmpdir(), 'sipt-'));
+// ⚠️ EVERY CLIENT THIS RUN STARTS - AND SO EVERY DRIVER, xvfb-run AND BROWSER UNDER IT -
+// IS GIVEN A TMPDIR OF ITS OWN, P, AND P MUST BE EMPTY AT THE END. Each of them makes
+// directories in its TMPDIR (xvfb-run's X authority, Playwright's artifacts, Chromium's
+// singleton socket) that only a clean end removes, and one left behind stays in the
+// temp dir for good. A TMPDIR of their own is what makes "nothing is left" exact: in a
+// shared one, any other browser on the host makes the same names. Short, like T: a
+// profiles-check run dir is made inside it.
+const P = mkdtempSync(join(tmpdir(), 'p'));
+// And everything else this file runs is given T, which the end of this file removes,
+// so T and P gone at the end is nothing of this run's left in its TMPDIR.
+process.env.TMPDIR = T;
 const PW_A = 'SENTINEL-alpha-pw-6e1f*?[x]';
 const PW_B = 'SENTINEL-beta-pw-77c2';
 const SENTINELS = [PW_A, PW_B];
@@ -109,7 +125,8 @@ const CONFIG = writeConfig('config.json', { profiles_dir: PROFILES });
 const transcript = [];
 // ⚠️ EVERY DRIVER `start` LAUNCHED IS RECORDED, AND THE FINAL TEARDOWN SIGNALS ITS
 // WHOLE PROCESS GROUP. The client spawns the driver detached (its own group: xvfb-run,
-// Xvfb, node, Chromium), so a half B that throws between a start and its quit would
+// Xvfb and node; Playwright starts Chromium in a group of its own, which the driver's
+// exit takes down), so a half B that throws between a start and its quit would
 // otherwise leave a live browser - and a profile it keeps writing into - behind this
 // test. SIGTERM reaches the driver's own cleanup, which removes its run dir.
 const started = new Set();
@@ -124,6 +141,7 @@ childEnv.FLEET_HOST_CONFIG ||= join(homedir(), '.config', 'agent-fleet', 'host.j
 childEnv.HOME = join(T, 'home');
 childEnv.XDG_CONFIG_HOME = join(T, 'home', '.config');
 mkdirSync(childEnv.XDG_CONFIG_HOME, { recursive: true });
+childEnv.TMPDIR = P;
 // ⚠️ ASYNCHRONOUS, NEVER spawnSync: half B's pages are served from THIS process, and
 // a spawnSync blocks its event loop, so the browser's request would wait on a server
 // that cannot answer until the client returns - which it does only after the
@@ -306,7 +324,12 @@ try {
   const haveDisplay = darwin
     ? spawnSync('/bin/launchctl', ['print', `gui/${process.getuid()}`], { stdio: 'ignore' }).status === 0
     : !!process.env.DISPLAY || spawnSync('sh', ['-c', 'command -v xvfb-run']).status === 0;
-  const sockLen = Buffer.byteLength(join(T, 'rb', 'driver.sock'));
+  // The longest unix socket a driver of half B makes, in the longest run dir it gets
+  // (T/rb, or a profiles-check one under P: signin.mjs, checkProfile): Chromium's
+  // singleton socket on Linux, the driver's own on macOS (driver.mjs refuses either
+  // when it does not fit).
+  const inRunDir = darwin ? ['driver.sock'] : ['org.chromium.Chromium.XXXXXX', 'SingletonSocket'];
+  const sockLen = Math.max(...[join(T, 'rb'), join(P, 'arpc-4194304-0')].map(rd => Buffer.byteLength(join(rd, ...inRunDir))));
   const sockMax = darwin ? 103 : 107;
   const notHere = [!haveModules && 'no node_modules in signin_driver (npm ci there)', !haveChromium && `no chromium under ${browsers}`,
     !haveDisplay && (darwin ? 'no Aqua session (nobody logged in at the console)' : 'no DISPLAY and no xvfb-run'),
@@ -331,6 +354,14 @@ try {
   const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
   for (const pid of started) if (alive(pid)) { try { process.kill(-pid, 'SIGTERM'); } catch {} }
   for (let n = 0; n < 40 && [...started].some(alive); n++) await new Promise(r => setTimeout(r, 250));
+  // Nothing any client, driver, xvfb-run or browser of this run made is left in P, the
+  // TMPDIR they were all given - read after every driver of the run has exited.
+  writeFileSync(join(P, 'planted'), '');
+  control('the leftover scan of P finds a planted entry (so its silence below means something)', readdirSync(P).includes('planted'), true);
+  rmSync(join(P, 'planted'), { force: true });
+  ok('nothing a driver, xvfb-run or browser of this run made is left in the TMPDIR they were given', readdirSync(P).join(', '), '');
+  try { rmSync(P, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); }
+  catch (e) { console.log(`note: could not remove ${P}: ${e.message}`); }
   // ⚠️ THE SENTINEL SCAN RUNS OVER EVERYTHING EITHER HALF PRODUCED, including each
   // driver's own log, which is the one stream the redactor never sees.
   for (const f of readdirSync(T)) if (f.endsWith('.log')) transcript.push(readFileSync(join(T, f), 'utf8'));
@@ -339,6 +370,7 @@ try {
   ok('no password from the pool appears on any stdout, stderr or driver log', SENTINELS.some(s => all.includes(s) || all.includes(JSON.stringify(s).slice(1, -1))), false);
   try { rmSync(T, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); }
   catch (e) { console.log(`note: could not remove ${T}: ${e.message}`); }
+  ok('this run leaves nothing in its TMPDIR: T and P, the temp dirs everything it ran was given, are gone', existsSync(T) || existsSync(P), false);
 }
 
 async function halfB(browsers) {
@@ -364,12 +396,18 @@ async function halfB(browsers) {
   // puppeteer_dev_profile-* directory at every launch and never removes it
   // (driver.mjs, setDependencyDefaults). The driver must make it inside its run dir,
   // which every exit it can observe removes, never in the temp dir, where each
-  // launch would leave one. Found by name, in the run dir and among the temp dir's
-  // entries that are NEW since half B began - so another process's entries already
-  // there are not this run's.
+  // launch would leave one. Found by name, in the run dir and in P, the TMPDIR every
+  // driver of this run is given.
   const scratch = d => { try { return readdirSync(d).filter(n => n.startsWith('puppeteer_dev_profile-')).map(n => join(d, n)); } catch { return []; } };
-  const tmpBefore = new Set(scratch(tmpdir()));
-  const newInTmp = () => scratch(tmpdir()).filter(p => !tmpBefore.has(p));
+  const newInTmp = () => scratch(P);
+  // THE BROWSER'S OWN TEMP DIRS: Playwright's playwright-artifacts-*, and on Linux
+  // Chromium's org.chromium.Chromium.* (its singleton socket), each made in its TMPDIR
+  // at launch and removed only by a clean close. On Linux the driver makes its TMPDIR
+  // the run dir (driver.mjs), which every exit it observes removes; on macOS Playwright's
+  // is in P. Found by name while the driver runs, in the run dir and in P.
+  const darwin = process.platform === 'darwin';
+  const families = darwin ? ['playwright-artifacts-'] : ['playwright-artifacts-', 'org.chromium.Chromium.'];
+  const browserTemp = rd => families.map(f => [rd, P].flatMap(d => { try { return readdirSync(d).filter(n => n.startsWith(f)).map(n => join(d, n)); } catch { return []; } }));
   const quitAndWait = async (agent, rd, pid) => {
     const r = await run(agent, rd, ['quit']);
     const deadline = Date.now() + 20000;
@@ -386,6 +424,24 @@ async function halfB(browsers) {
     control(`${agent}: inspect of the filled field carries the redaction marker - the password really crossed the wire`, i.stdout.includes('[PW]'), true);
   };
   try {
+    // ── the longest socket in a run dir: a run dir one byte past it is refused, by name ──
+    // On Linux that socket is Chromium's singleton socket, 45 bytes past the run dir
+    // (driver.mjs); on macOS the driver's own. A run dir AT the limit must start, or the
+    // refusal is too strict; one byte past it must be refused before Chromium is reached,
+    // which otherwise dies on it (FATAL "Socket path too long") with nothing naming the
+    // run dir.
+    const limit = darwin ? 103 - Buffer.byteLength('/driver.sock') : 107 - Buffer.byteLength('/org.chromium.Chromium.XXXXXX/SingletonSocket');
+    const sized = n => join(T, 'L'.repeat(n - Buffer.byteLength(T) - 1));
+    const s0 = await run('sipt-len', sized(limit), ['start', '--config', CONFIG]);
+    ok(`a run dir of ${limit} bytes, at the limit: start exits 0`, s0.status, 0);
+    if (s0.status === 0) await quitAndWait('sipt-len', sized(limit), s0.json?.pid);
+    const past = await run('sipt-len', sized(limit + 1), ['start', '--config', CONFIG]);
+    ok(`a run dir of ${limit + 1} bytes: start exits 2, naming the socket that would not fit`,
+       `${past.status}:${(darwin ? /its socket path is 104 bytes/ : /Chromium's singleton socket inside it is 108 bytes/).test(past.stderr)}`, '2:true');
+    ok('...and no run dir was made', existsSync(sized(limit + 1)), false);
+    // One that was not refused is quit, so nothing of it is counted by the checks below.
+    if (past.status === 0) await quitAndWait('sipt-len', sized(limit + 1), past.json?.pid);
+
     // ── the throwaway mode, unchanged ──
     const ra = join(T, 'ra');
     let s = await run('sipt-a', ra, ['start', '--config', CONFIG]);
@@ -396,12 +452,21 @@ async function halfB(browsers) {
     const made = [...scratch(ra), ...newInTmp()];
     control("the stealth plugin's scratch profile was found while the driver runs (so its absence below means something)", made.length, 1);
     ok("throwaway start: that scratch profile is inside the run dir, which the driver's cleanup removes", made.length === 1 && dirname(made[0]) === ra, true);
+    const temps = browserTemp(ra);
+    control(`the browser's own temp dirs (${families.join(', ')}) were found while the driver runs, one of each (so where they are, and their absence below, mean something)`,
+            temps.map(l => l.length).join(','), families.map(() => '1').join(','));
+    // P is the TMPDIR the driver's process tree was given: under xvfb-run, xvfb-run's
+    // own directory is there while the driver runs; on macOS, Playwright's.
+    if (darwin) control("Playwright's artifacts dir is in P while the driver runs (so P is the TMPDIR the driver was given)", dirname(temps[0][0] || ''), P);
+    else if (s.json?.xvfb) control("xvfb-run's directory is in P while the driver runs (so P is the TMPDIR the driver's process tree was given)", readdirSync(P).some(n => n.startsWith('xvfb-run.')), true);
+    if (!darwin) ok("throwaway start: Playwright's and Chromium's temp dirs are inside the run dir, which the driver's cleanup removes", temps.flat().every(p => dirname(p) === ra), true);
     await run('sipt-a', ra, ['goto', `${base}/set`]);
     await typePassword('sipt-a', ra);
     let q = await quitAndWait('sipt-a', ra, s.json?.pid);
     ok("throwaway quit: the reply carries exactly the keys it always has", Object.keys(q.json?.result || {}).join(','), 'bye,removing');
     ok('throwaway quit: the run dir, profile included, is gone', existsSync(ra), false);
     ok("throwaway quit: the stealth plugin's scratch profile is gone too", made.some(p => existsSync(p)), false);
+    ok("throwaway quit: and so are the browser's own temp dirs", temps.flat().some(p => existsSync(p)), false);
     s = await run('sipt-a', ra, ['start', '--config', CONFIG]);
     ok('throwaway restart: exit 0', s.status, 0);
     control('a throwaway restart does NOT bring the cookie back (so the stored-profile cookie below is the profile, not the server)',
@@ -477,7 +542,7 @@ async function halfB(browsers) {
     ok('profiles-check: it says where the page landed', alpha.landed?.claude, `${base.slice(7)}/show`);
     ok('profiles-check: a directory that is no pool account is an error', pc.json?.profiles?.stranger?.status, 'error');
     ok('profiles-check: ...which makes the exit 1', pc.status, 1);
-    ok('profiles-check: its drivers leave no run dir behind', readdirSync(tmpdir()).some(d => d.startsWith(`agent-revive-signin-profiles-check-${pc.pid}-`)), false);
+    ok('profiles-check: its drivers leave no run dir behind', readdirSync(P).some(d => d.startsWith(`arpc-${pc.pid}-`)), false);
     ok('profiles-check: the profile is kept', existsSync(join(pdir, 'Default')), true);
     const pcAbsent = await client(['profiles-check', '--config', CONFIG, '--profile', 'beta@example.com', '--log', join(T, 'pc2.log')], { env });
     ok('profiles-check --profile <an account with none>: absent', pcAbsent.json?.profiles?.['beta@example.com']?.status, 'absent');

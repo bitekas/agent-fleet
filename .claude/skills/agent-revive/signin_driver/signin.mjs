@@ -64,7 +64,7 @@
 import net from 'node:net';
 import { spawn } from 'node:child_process';
 import { existsSync, openSync, closeSync, fchmodSync, mkdirSync, lstatSync, unlinkSync, chmodSync, statSync, readFileSync, readdirSync, writeFileSync, rmSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir, homedir, hostname, userInfo } from 'node:os';
 import { randomBytes } from 'node:crypto';
@@ -136,9 +136,21 @@ function launchDriver({ agent: a, runDir: rd, log, extra = [] }) {
   // xvfb-run supplies the virtual display a headful browser needs on a Linux host with
   // no X session. `--no-xvfb` is for a host that already has a real DISPLAY. macOS has
   // no X server to start: Chromium draws through WindowServer.
+  // ⚠️ xvfb-run RUNS UNDER bash, NOT UNDER ITS OWN #!/bin/sh. It keeps the X authority
+  // file in a mktemp directory that only its EXIT trap removes - the same trap stops
+  // Xvfb - and dash, /bin/sh on Debian and Ubuntu, runs no EXIT trap when a signal ends
+  // it. Under /bin/sh, a SIGTERM, SIGINT or SIGHUP to the driver's process group (a
+  // service stop, profiles-check's timeout below) leaves an xvfb-run.XXXXXX directory in
+  // the temp dir, and a SIGHUP leaves the Xvfb running as well; bash runs the trap for
+  // all three (xvfb-run of Ubuntu 26.04, measured 2026-11-14).
   const useXvfb = process.platform !== 'darwin' && !has('no-xvfb') && !process.env.DISPLAY;
-  const cmd = useXvfb ? 'xvfb-run' : process.execPath;
-  const cmdArgs = useXvfb ? ['-a', process.execPath, ...args] : args;
+  let cmd = process.execPath, cmdArgs = args;
+  if (useXvfb) {
+    const xvfbRun = (process.env.PATH || '').split(delimiter).map(d => join(d, 'xvfb-run')).find(p => { try { return statSync(p).isFile(); } catch { return false; } });
+    if (!xvfbRun) { closeSync(fd); die('no xvfb-run on PATH, and no DISPLAY: the headful browser needs one of them here (installation/check); no driver was started', 1); }
+    cmd = 'bash';
+    cmdArgs = [xvfbRun, '-a', process.execPath, ...args];
+  }
   // ⚠️ THE CHILD'S ENVIRONMENT IS SCRUBBED OF THE DEBUG SWITCHES, NOT INHERITED
   // WHOLESALE. `DEBUG=pw:api` in whatever shell launched this makes Playwright log
   // every call's ARGUMENTS - including the password `fill --secret` types - into that
@@ -315,7 +327,9 @@ if (op === 'profiles-check') {
     const busy = profileInUse(dir);
     if (busy) return { status: 'busy', detail: busy };
     const a = `profiles-check-${process.pid}-${i}`;
-    const rd = join(tmpdir(), `agent-revive-signin-${a}`);
+    // ⚠️ SHORT, ON PURPOSE: on Linux Chromium's singleton socket is made inside the run
+    // dir, 45 bytes past it, and driver.mjs refuses a run dir it would not fit in.
+    const rd = join(tmpdir(), `arpc-${process.pid}-${i}`);
     const sock = join(rd, 'driver.sock');
     const { child, offset } = launchDriver({ agent: a, runDir: rd, log, extra: ['--profile', name] });
     const w = await waitForSocket(sock, child, 60000);

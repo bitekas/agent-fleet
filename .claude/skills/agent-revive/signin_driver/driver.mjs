@@ -204,9 +204,17 @@ const CODE = join(runDir, 'code.txt');
 // 2026-11-01: listen() on a 132-byte path printed "driver ready" and no socket ever
 // appeared at that path, so `start` waited out its 60 s for a file that could not
 // exist. Refused here, by name, before anything is wiped.
+// ⚠️ ON LINUX THE LONGEST SOCKET IN THE RUN DIR IS CHROMIUM'S, NOT THIS ONE: the
+// browser's temp dir is the run dir there (below), and Chromium binds
+// <its temp dir>/org.chromium.Chromium.XXXXXX/SingletonSocket at launch, 45 bytes past
+// the run dir. Measured 2026-11-14 (chromium-1243): at 108 bytes Chromium dies with
+// FATAL "Socket path too long", so the driver would never come up.
 const SOCK_MAX = process.platform === 'darwin' ? 103 : 107;
-if (Buffer.byteLength(SOCK) > SOCK_MAX) {
-  console.error(`driver.mjs: refusing --run-dir ${runDir} - its socket path is ${Buffer.byteLength(SOCK)} bytes and a unix socket path holds at most ${SOCK_MAX} here; use a shorter --run-dir`);
+const [sockWhat, sockPath] = process.platform === 'darwin'
+  ? ['its socket path', SOCK]
+  : ["Chromium's singleton socket inside it", join(runDir, 'org.chromium.Chromium.XXXXXX', 'SingletonSocket')];
+if (Buffer.byteLength(sockPath) > SOCK_MAX) {
+  console.error(`driver.mjs: refusing --run-dir ${runDir} - ${sockWhat} is ${Buffer.byteLength(sockPath)} bytes and a unix socket path holds at most ${SOCK_MAX} here; use a shorter --run-dir`);
   process.exit(2);
 }
 // A driver killed with a share live leaves that share recorded in its run dir; it is
@@ -223,6 +231,17 @@ rmSync(runDir, { recursive: true, force: true });
 mkdirSync(SHOTS, { recursive: true, mode: 0o700 });
 chmodSync(runDir, 0o700);
 chmodSync(SHOTS, 0o700);
+// ⚠️ ON LINUX THE BROWSER'S TEMP DIR IS THE RUN DIR, SO WHAT AN UNCLEAN END LEAVES GOES
+// WITH IT. At every launch Playwright makes playwright-artifacts-XXXXXX under
+// os.tmpdir(), and Chromium makes org.chromium.Chromium.XXXXXX (its singleton socket)
+// under $TMPDIR, which it inherits; each removes its own only on a clean close. A
+// SIGTERM to the driver's process group kills Xvfb under Chromium, which then exits
+// without removing its directory, and a SIGKILLed driver leaves both (playwright
+// 1.63.0, chromium-1243, measured 2026-11-14): one more in the system temp dir per such
+// end. In the run dir, the cleanup below removes them on every exit this process
+// observes, and the next start on the run dir after a SIGKILL. On macOS nothing here
+// changes: where Chromium keeps its temp dir there is not measured.
+if (process.platform !== 'darwin') process.env.TMPDIR = runDir;
 // ⚠️ 0700 ON EVERY START, NOT ONLY AT CREATION. mkdir's mode applies only to the
 // directories it creates; a profiles dir someone made, copied or restored with a
 // looser mode would otherwise stay readable - and its cookies are protected by
