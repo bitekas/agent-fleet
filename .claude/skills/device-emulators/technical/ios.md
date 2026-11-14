@@ -926,10 +926,10 @@ load is not proven; the install's `CONTEXT.md` says on which platforms its
 runner points. **It points one app or none**: the app id comes from the flows'
 own `appId:`, and when the selected flows name more than one it points none and
 says so, because one serve cannot be right for two identities - run one flow per
-identity to pin each. `/tooling-index` has the
-runner's row, and `/e2e-suite` owns what a change owes it in coverage; the
-install's `CONTEXT.md` names what its runner adds beyond this (another
-platform, a per-flow check over the screenshots a flow took).
+identity to pin each. `/tooling-index` has the runner's row, and `/e2e-suite`
+owns what a change owes it in coverage; the install's `CONTEXT.md` names what
+its runner adds beyond this (another platform, a per-flow check over the
+screenshots a flow took).
 
 **From a non-Mac host it runs ON the Mac**, against the Metro served from the
 operator's machine: sync the tree to a directory of your own under
