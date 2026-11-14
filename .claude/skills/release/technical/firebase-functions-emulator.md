@@ -39,8 +39,9 @@ serves the callables and the HTTP routes and nothing else:
 
 **The startup log over-counts.** Auth and Storage trigger registrations report
 the function as initialized (`auth function initialized`) whether or not
-anything can ever dispatch to it; only Firestore and database registrations
-print that the function was ignored, naming the absent emulator. A census of
+anything can ever dispatch to it; Firestore and database registrations, and the
+Pub/Sub registrations schedules are, print that the function was ignored,
+naming the absent emulator. A census of
 what the server serves therefore reads the log's `http function initialized`
 lines as served, its `ignored` lines as not served, and every other
 `... function initialized` line as not served either. A boot census taken this
@@ -105,7 +106,8 @@ Measured on firebase-tools 15.25 through 15.31.
   worker that fetches a secret after the token's hour takes the whole emulator
   down, and the emulator's own output then says only
   `An unexpected error has occurred.`: the real error is in
-  `firebase-debug.log`, which a teardown must read before deleting it.
+  `firebase-debug.log`, so a boot that sees the emulator exit prints that log's
+  last `TypeError` / `Error:` lines before the teardown deletes it.
 - **A worker keeps its secrets for its life.** A warmed function keeps its
   worker until a file under the functions source directory changes: the
   emulator watches it, and a change (a build, a pull, a test run) drops every
