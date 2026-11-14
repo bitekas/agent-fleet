@@ -61,10 +61,11 @@ prompt, its design file and pages, the human principal, the design's approvers,
 and the measured instances behind the rules below. Its `config.json` (`fleet
 where definition-of-done config.json`, made from `config.example.json`) carries
 the values this file refers to by key. **A relative path in that `config.json`
-is relative to the repository root, not to the file** - the exception to
-`/claude-skill` section 2's rule for a SPECIFIC config - because each one names a
-place in the project's tree: `checklist.dir` is matched against `git diff
---name-only` output, and the commands are typed from the repository root. This
+is relative to the repository root, not to the file** - the install-root base of
+`/claude-skill` section 2, which the top `_comment` of `config.example.json`
+names for every key - because each one names a place in the project's tree:
+`checklist.dir` is matched against `git diff --name-only` output, and the
+commands are typed from the repository root. This
 file names no skill of the install's own; where a rule leans on one, it names the
 ROLE, and `CONTEXT.md` names the install's skill or document that fills it:
 
@@ -321,7 +322,7 @@ Then prove it: the directory is gone, `git worktree list` does not name it,
 empty.
 
 **Where the install's branch names carry the agent's name** (its `branch_naming`
-convention; `/worktree-workflow` section 1), **that is what makes the sweep
+convention; `/worktree-workflow` section 1.1), **that is what makes the sweep
 possible**: `git branch --list '<agent>/*'` and `git ls-remote --heads origin
 '<agent>/*'` list everything of yours still outstanding, local and remote, in two
 commands. Run them at the end of a task rather than trusting that you remembered
