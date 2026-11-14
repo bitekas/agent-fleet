@@ -1,0 +1,50 @@
+{
+  "_comment": [
+    "TEMPLATE. Copy to config.json in this skill's install context",
+    "(`fleet where repo-and-environments config.json` prints the path) and replace every placeholder.",
+    "",
+    "The values SKILL.md refers to by key. SKILL.md names none of them: it talks",
+    "about the dev-machine / shared-dev / live / live-copy environments, and",
+    "about the landing branch, so the same document serves any repository with",
+    "this shape.",
+    "",
+    "This file is deliberately SMALL. It carries only what another skill, a",
+    "script or a tool would key off: the environment role names, the selector",
+    "variable, the repository paths and the branch map. Everything richer - the",
+    "identity table, the distribution table, the project ids, a single-identity",
+    "lane's target, the rulings - lives in CONTEXT.md, because it is annotated",
+    "human judgement rather than structured data, and because a second copy of",
+    "one fact is exactly what SKILL.md section 4.2 exists to prevent. The one",
+    "deliberate overlap is the role-to-name map below, which CONTEXT.md section 1",
+    "also shows with the cloud project and the purpose of each environment.",
+    "",
+    "No credential and no path to a credential appears here. Credentials for",
+    "the repository's environments follow the install's own credential",
+    "procedure, which CONTEXT.md names.",
+    "",
+    "JSON has no comments, so every _comment key here is documentation.",
+    "Leave them in your config.json or delete them; nothing reads them."
+  ],
+  "environments": {
+    "_comment": "The environment ROLES SKILL.md talks about, mapped to what they are called here. REQUIRED and complete: an environment missing from this map is an environment SKILL.md's rules silently do not reach. selector_var is the single environment variable carried into the app bundle and read back by the client - the one selector everything else derives from (SKILL.md section 1); on Expo it carries the framework's public prefix. dev_machine is the throwaway environment on a developer's own machine, shared_dev the shared integration environment, live the one real users are served from. live_copy is a non-live environment that holds a copy of live's data, is deployed on demand, and is never written back to live. Omit it where your install has none - never point it at another row, which would hand that environment a purpose it does not have.",
+    "selector_var": "ACME_PUBLIC_APP_ENV",
+    "dev_machine": "local",
+    "shared_dev": "dev",
+    "live": "prod",
+    "live_copy": "preprod"
+  },
+  "repo": {
+    "_comment": "Where the shared checkout is and how work lands in it. root is the shared checkout's absolute path on the machine the agents work from, and is the only absolute path in this skill. landing_branch is the branch finished work merges into (SKILL.md section 3.3); default_branch is what the forge considers default, and it matters on its own because a scheduled workflow always runs on it and a path-filter action defaults its comparison base to it (SKILL.md sections 3.2 and 5.1) - where the two are different branches, both rules read off default_branch, not off landing_branch. worktrees_dir is where a session working from the shared checkout creates its worktrees; an agent working from its own home uses that home's workspaces directory (the fleet's agent skill). Both are declared locations, so an orphan is findable by ls and no worktree sits inside the checkout it is isolating from.",
+    "root": "/path/to/your/checkout",
+    "slug": "acme/example-app",
+    "landing_branch": "main",
+    "default_branch": "main",
+    "worktrees_dir": "/path/to/your/checkout-workspaces"
+  },
+  "branches": {
+    "_comment": "branch -> environment name (a value of the environments map above). THE map SKILL.md section 2 is about: one branch selects one environment, this is the only place the mapping is stated, and an unmapped branch must fail the deploy job loudly rather than guessing. Each key is a branch name, so the keys are data: list every branch that deploys. A branch listed here need not exist on the remote - CONTEXT.md section 2 says which of these have never been driven by a push, because a wired lane that has never run is not evidence it works.",
+    "main": "dev",
+    "preprod": "preprod",
+    "prod": "prod"
+  }
+}

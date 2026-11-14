@@ -1,0 +1,26 @@
+{
+  "_comment": [
+    "FIXTURE. A synthetic install's values for repo-and-environments, read by",
+    "sections.test.py. Every value is fake; see config.example.json in the",
+    "skill for what each key is."
+  ],
+  "environments": {
+    "selector_var": "ACME_PUBLIC_APP_ENV",
+    "dev_machine": "local",
+    "shared_dev": "dev",
+    "live": "prod",
+    "live_copy": "preprod"
+  },
+  "repo": {
+    "root": "/tmp/fleet-fixture/example-app",
+    "slug": "acme/example-app",
+    "landing_branch": "main",
+    "default_branch": "main",
+    "worktrees_dir": "/tmp/fleet-fixture/example-app-workspaces"
+  },
+  "branches": {
+    "main": "dev",
+    "preprod": "preprod",
+    "prod": "prod"
+  }
+}
