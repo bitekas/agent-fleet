@@ -13,12 +13,14 @@ through:
     section strands every citer with nothing going red. CONTRACT is written by
     hand on purpose: it is the list the citers rely on, so it cannot be derived
     from the file it polices.
-  - CITATIONS: every "section N" in SKILL.md and in config.example.json's
-    comments resolves. A bare or `SKILL.md` citation names a SKILL.md heading;
-    a `CONTEXT.md` citation names a SKILL.md heading or a section the fixture
-    install's CONTEXT.md has (section 0, the role table, lives only there). A
-    citation of another skill (`/release` section 12) is that skill's to keep
-    and is not read here.
+  - CITATIONS: every "section N" (any case: "Section 4.3" too) in SKILL.md
+    and in config.example.json's comments resolves. A bare or `SKILL.md`
+    citation names a SKILL.md heading; a `CONTEXT.md` citation names a section
+    the fixture install's CONTEXT.md has (section 0, the role table, lives only
+    there), never a SKILL.md heading alone. A citation written directly after
+    another skill's backticked name (`/release` section 12) is that skill's to
+    keep and is not read here; one after a comma ("`/release`, section 9") is
+    read as this skill's, because the comma makes it ambiguous.
   - CONTEXT: the fixture install's CONTEXT.md, reached through fleetlib's
     skill_context with FLEET_CONTEXT_ROOT, numbers its sections only with
     numbers SKILL.md has or cites as `CONTEXT.md` sections, so the fixture
@@ -29,12 +31,14 @@ through:
     environment by name, and a branch mapped to a name no role carries is a
     deploy job that cannot resolve its environment.
 
-Negative controls: each check is re-run against a mutated copy (a deleted
-heading, a duplicated heading, a citation of a missing section, a CONTEXT
-section SKILL.md lacks, a branch mapped to no environment, a key missing from
-the fixture config). Every mutation must produce its finding; a mutation that
-does not is NO VERDICT, exit 3, because a check that cannot see a planted fault
-says nothing about the real files.
+Negative controls: each check is re-run against a mutated copy - a deleted
+heading, a duplicated heading, a citation of a missing section, the same with a
+capital S, one after a comma behind another skill's name, a CONTEXT citation of
+a missing section, a CONTEXT citation that only SKILL.md's headings could
+satisfy, a CONTEXT section SKILL.md lacks, a branch mapped to no environment,
+and a key missing from the fixture config. Every mutation must produce its
+finding; a mutation that does not is NO VERDICT, exit 3, because a check that
+cannot see a planted fault says nothing about the real files.
 
 Nothing is written outside a temporary directory, and HOME and XDG_* point
 into it, so the real home is never read.
@@ -60,8 +64,8 @@ CONTRACT = ["1", "2", "2.1", "3", "3.1", "3.2", "3.3", "3.4", "3.5",
 
 HEADING = re.compile(r"^#{2,3} (\d+(?:\.\d+[a-z]?)?)\.?(?= )", re.M)
 NUM = r"\d+(?:\.\d+[a-z]?)?"
-CITE = re.compile(r"\bsections?\s+(" + NUM + r"(?:\s*(?:-|,|and)\s*" + NUM + r")*)")
-OTHER_SKILL = re.compile(r"`/[a-z][a-z0-9-]*`,?\s*$")
+CITE = re.compile(r"\bsections?\s+(" + NUM + r"(?:\s*(?:-|,|and)\s*" + NUM + r")*)", re.I)
+OTHER_SKILL = re.compile(r"`/[a-z][a-z0-9-]*`\s*$")
 CONTEXT_PREFIX = re.compile(r"CONTEXT\.md`?\s*$")
 
 
@@ -107,8 +111,8 @@ def findings(skill_md, example, context_md, fixture_cfg):
         for n, kind in citations(text):
             if kind == "context":
                 cited_context.add(n)
-                if n not in heads and n not in context_heads:
-                    out.append(f"{where}: cites CONTEXT.md section {n}, which neither file has")
+                if n not in context_heads:
+                    out.append(f"{where}: cites CONTEXT.md section {n}, which the fixture CONTEXT.md has no heading for")
             elif n not in heads:
                 out.append(f"{where}: cites section {n}, which SKILL.md has no heading for")
     for n in context_heads:
@@ -151,8 +155,14 @@ def mutations(skill_md, example, context_md, fixture_cfg):
          "section 3.3 appears as a heading 2 times"),
         ("dangling citation", (skill_md + "\nSee section 9.9 for nothing.\n", example, context_md, fixture_cfg),
          "cites section 9.9"),
+        ("capitalised dangling citation", (skill_md + "\nSee Section 9.7 for nothing.\n", example, context_md, fixture_cfg),
+         "cites section 9.7"),
+        ("citation after a comma behind a skill name", (skill_md + "\nAs `/release`, section 9.6 says.\n", example, context_md, fixture_cfg),
+         "cites section 9.6"),
         ("dangling CONTEXT citation", (skill_md + "\n`CONTEXT.md` section 9.8 has nothing.\n", example, context_md, fixture_cfg),
          "cites CONTEXT.md section 9.8"),
+        ("CONTEXT citation only SKILL.md satisfies", (skill_md, example, context_md.replace("\n### 4.5 ", "\n### four-five ", 1), fixture_cfg),
+         "cites CONTEXT.md section 4.5"),
         ("CONTEXT section SKILL.md lacks", (skill_md, example, context_md + "\n## 9. Extra\n", fixture_cfg),
          "section 9 is neither"),
         ("branch to no environment", (skill_md, bad_branch, context_md, fixture_cfg),

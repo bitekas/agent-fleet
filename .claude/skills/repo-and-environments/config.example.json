@@ -27,7 +27,7 @@
   ],
   "environments": {
     "_comment": "The environment ROLES SKILL.md talks about, mapped to what they are called here. REQUIRED and complete: an environment missing from this map is an environment SKILL.md's rules silently do not reach. selector_var is the single environment variable carried into the app bundle and read back by the client - the one selector everything else derives from (SKILL.md section 1); on Expo it carries the framework's public prefix. dev_machine is the throwaway environment on a developer's own machine, shared_dev the shared integration environment, live the one real users are served from. live_copy is a non-live environment that holds a copy of live's data, is deployed on demand, and is never written back to live. Omit it where your install has none - never point it at another row, which would hand that environment a purpose it does not have.",
-    "selector_var": "ACME_PUBLIC_APP_ENV",
+    "selector_var": "EXPO_PUBLIC_ACME_ENV",
     "dev_machine": "local",
     "shared_dev": "dev",
     "live": "prod",

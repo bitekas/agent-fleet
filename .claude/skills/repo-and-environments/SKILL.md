@@ -180,12 +180,14 @@ them one**: a test fails if the two disagree on anything they both declare.
 corner icon ribbon and a suffixed app name, both selected from the one selector
 variable by the app config.
 
-**WARNING:** where the badge does **not** distinguish the dev-machine environment
-from the shared-dev one - both mapped to the same suffix and the same ribbon -
-**do not use the app's name as evidence of which environment a build is talking
-to**: a build named for the shared-dev environment may be talking to the
-dev-machine one, which is exactly the signature section 6.3 describes.
-`CONTEXT.md` section 1 names the install's badges.
+**WARNING: do not use the app's name as evidence of which environment a build is
+talking to**; the provenance gate (section 7) is that evidence. The name shows
+only the selector the app config saw, never the backend the bundle talks to,
+and section 6.3 is exactly that split. Where the badge does not even distinguish
+the dev-machine environment from the shared-dev one - both mapped to the same
+suffix and the same ribbon - a build named for the shared-dev environment may be
+talking to the dev-machine one. `CONTEXT.md` section 1 names the install's
+badges.
 
 ---
 
@@ -195,8 +197,8 @@ dev-machine one, which is exactly the signature section 6.3 describes.
 an unmapped branch fails the job loudly rather than guessing.** The map is a
 value: `branches` in `config.json`, with `CONTEXT.md` section 2 for the
 judgement around it. A manual **Run workflow** takes an environment input
-instead, plus a job filter and a runner escape hatch that moves the run off the
-in-house build machine.
+instead, plus a job filter and a runner escape hatch that moves the run off a
+self-hosted build machine, where the install has one.
 
 **WARNING: the landing branch is itself on the map**, so every merge into it
 deploys. There is no branch on the map that merely stores work.
@@ -469,7 +471,8 @@ skips the job is not evidence the job passes.**
 CAUSE - SO READ YOUR OWN RUN'S JOB-LEVEL CONCLUSIONS AFTER EVERY LANDING, NOT
 THE RUN'S.** A GitHub Actions job that exceeds its `timeout-minutes` is
 reported `conclusion: cancelled` - the same word GitHub gives an operator
-cancellation and a concurrency cancellation, with no API field separating them.
+cancellation and a concurrency cancellation, with no API field separating them
+(GitHub Actions, measured 2026-09-22).
 It is **grey rather than red**, so it survives any scan that looks for red, and
 it sits beside green siblings and a successful version bump while the
 environment is half-deployed and nothing in the repository says so. **The
@@ -522,18 +525,19 @@ the exemption.**
 **Worktrees live in a declared workspaces directory** - the agent's own, or
 `repo.worktrees_dir` for a session working from the shared checkout - never
 beside the repo, in `/tmp`, or inside the checkout; `/worktree-workflow`
-section 1 has the reasoning.
+section 1.3 has the reasoning.
 
 Where the install's dev stack claims a per-worktree port slot (`CONTEXT.md`
 section 3.3), an isolated worktree gets a conflict-free emulator and e2e stack
 for free.
 
-**Branch off the branch your work lands on**, which the second question of
-section 3.5 decides and section 3.1 constrains: the live branch for a critical
-fix to the live line, which the backmerge (section 5) then carries to the
-landing branch; the landing branch for everything else, which lands there.
+**Branch off the branch your work lands on.** Which branch that is - for feature
+work, for a critical fix to the live line (section 3.1), and for a fix found
+while testing a release candidate (`/release`) - is `/worktree-workflow`
+section 1.2 ("Cutting, landing, cleaning up"); this is a pointer, not a second
+statement of it.
 
-**Name the branch and the commit subject per `/worktree-workflow` section 1.**
+**Name the branch and the commit subject per `/worktree-workflow` section 1.1.**
 The shared lanes on the branch map are exempt from its naming rule, as are
 release branches and anything CI authors. That skill owns the form, the type
 vocabulary, the exemptions and the ref-namespace constraint; this is a pointer,
@@ -542,9 +546,9 @@ not a second statement of it.
 A fresh worktree has **no installed dependencies**; give it a real, independent
 install of every dependency root before doing anything. **WARNING:** hardlinking
 from the main checkout is **BANNED** - the shared install's staleness produces
-false gate verdicts in isolated trees. `/worktree-workflow` owns the install
-line (`repo.install_command`), the roots it covers, and why the failure is
-sneaky.
+false gate verdicts in isolated trees. `/worktree-workflow` section 1.3 owns the
+install line (`repo.install_command`), the roots it covers, and why the failure
+is sneaky.
 
 #### The cycle, because SEVERAL AGENTS RUN AT ONCE
 
@@ -552,16 +556,18 @@ Every step below exists because a concurrent writer makes the lazy version fail:
 a branch cut hours ago works against a base that no longer exists, and a file
 left loose in the main checkout is sitting in someone else's workspace.
 
-1. **Pull the landing branch regularly, during the work, not only at its
+1. **Pull the branch you land on regularly, during the work, not only at its
    start.** Refresh before branching, and again whenever the work runs long. The
    cost of a conflict grows with the age of the base you are holding.
 2. **A branch AND a worktree, always, before the first write.** **WARNING:**
    never leave files loose in the main checkout, and never write outside a
    worktree.
-3. **When the work is finished, merge the landing branch INTO your branch and
-   resolve conflicts there** - in your own worktree, where a broken merge harms
-   nobody. Never resolve on the landing branch.
-4. **Then push to the landing branch.**
+3. **When the work is finished, merge the branch you land on INTO your branch
+   and resolve conflicts there** - in your own worktree, where a broken merge
+   harms nobody. Never resolve on the branch you land on. For a release-candidate
+   fix that branch is the candidate, never the landing branch
+   (`/worktree-workflow` section 1.2).
+4. **Then push to the branch you land on.**
 5. **Then tidy up, and it is part of the task rather than after it:** delete the
    branch **locally and on origin**, remove the worktree, and delete any local
    temp files the work created. Prune, then confirm the worktree list and the
@@ -1054,7 +1060,11 @@ load-bearing alone**:
 
 **WARNING: LAYER 3 IS NOT SCOPED TO THE BRANCH THE BUMP WAS MADE ON, AND THAT
 COSTS A WHOLE RELEASE.** `[skip ci]` is evaluated against the **HEAD COMMIT of a
-push**, not against who authored it or where it was authored. So when a bump
+push**, not against who authored it or where it was authored - and against that
+commit's whole message, body included: GitHub reads `[skip ci]`, `[ci skip]`,
+`[no ci]`, `[skip actions]` and `[actions skip]` anywhere in it, so a body that
+merely quotes the marker suppresses the push too (GitHub Actions, measured
+2026-10-11). So when a bump
 commit is the landing branch's tip and the landing branch is merged into the
 live branch, **the bump commit becomes the head of *that* push and suppresses the
 live release entirely**: no release run, no backmerge run, no red, nothing to
@@ -1065,8 +1075,8 @@ window is widest exactly when you are releasing**: any native-affecting push to
 the landing branch ends in a bump commit minutes later, so releasing shortly
 after one is precisely when the tip IS that commit.
 
-- **Check the landing branch's tip before a release push.** A version-bump
-  subject carrying `[skip ci]` means the push will no-op.
+- **Check the landing branch's tip before a release push.** A head commit whose
+  message (subject or body) carries `[skip ci]` means the push will no-op.
 - **Recovery, and it is not a lesser option:** dispatch the release workflow on
   the live branch with the all-jobs filter. Every deploy job's `if:` carries a
   dispatch-and-all clause, so a dispatch force-runs everything regardless of the
@@ -1708,8 +1718,7 @@ catch exactly that:
 > of the build service's Environment-Variables store.** With no `environment:`
 > named, eas-cli *infers* one from the profile's **shape**, mapping YOUR profile
 > names onto the SERVICE's own environment names, which are not yours
-> (`CONTEXT.md` section 6.3 has the install's inferred mapping and when it was
-> measured) - and injects that environment's stored variables **above** the repo
+> (`CONTEXT.md` section 6.3 has the install's inferred mapping) - and injects that environment's stored variables **above** the repo
 > `.env`. Worse: the `.env` file **never enters the local-build sandbox at all**
 > (it is gitignored, and there is no `.easignore` exemption), so anything the
 > store does not supply falls through to **hardcoded defaults in source**. So a
@@ -1758,9 +1767,9 @@ environment down to gradle, xcodebuild, the bundler and every other child
 process. **With no key filter, any identifier in the file becomes an exported
 variable in the build**, so a single `.env` line could set `PATH`, `LD_PRELOAD`,
 `NODE_OPTIONS` or `HOME` and take over the build, or carry a service-account key
-into every child. This is not hypothetical: fed a hostile file, an unfiltered
-exporter does export `LD_PRELOAD` (the next exec's `ld.so` complains about it)
-and leaks an API key to children, and nothing else in such a build catches it.
+into every child. Fed a hostile file, an unfiltered exporter exports
+`LD_PRELOAD` (the next exec's `ld.so` complains about it) and leaks an API key to
+children (`CONTEXT.md` section 6.4 records the install's measurement).
 
 The allowlist is the right shape because the exported environment has exactly
 **one** legitimate consumer: the framework inlining its public-prefixed values
@@ -1944,8 +1953,9 @@ pair is a value (`CONTEXT.md` section 6.6).
   file is null, so an environment with no pair prebuilds to a no-op instead of
   throwing. **Verify it in the plugin source and then measure it on a real
   prebuild** for an environment with no pair (no scheme, no file copied, exit 0)
-  and for one with a pair (its OWN scheme); `CONTEXT.md` section 6.6 cites the
-  install's evidence. **WARNING: the gate that can actually fail for it is an
+  and for two with pairs (each getting its OWN scheme: one environment shows a
+  scheme is written, only two show each gets a different one); `CONTEXT.md`
+  section 6.6 cites the install's evidence. **WARNING: the gate that can actually fail for it is an
   app-config test**, because the scheme is written at PREBUILD and the config
   dump, the SDK doctor and the bundle-verify scripts are **structurally blind to
   it.**

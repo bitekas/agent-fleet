@@ -5,7 +5,7 @@
     "skill for what each key is."
   ],
   "environments": {
-    "selector_var": "ACME_PUBLIC_APP_ENV",
+    "selector_var": "EXPO_PUBLIC_ACME_ENV",
     "dev_machine": "local",
     "shared_dev": "dev",
     "live": "prod",
