@@ -29,6 +29,11 @@ THE FORMAT, which the checker parses:
   that writes there by default is pointed under `artifacts/`.
 - Gates are named by rule number only. The rule text lives in the definition
   of done and nowhere else.
+- A project with no design file (`figma.file_key` null in the install's
+  config) keeps sections 1a, 1b, 1c and 4 with their tables and may leave them
+  empty; the checker accepts that and prints a NOTE saying so. Every row that
+  is there is still checked. The presentation row in section 5 then carries
+  the videos only.
 -->
 
 # Feature checklist - <feature name>

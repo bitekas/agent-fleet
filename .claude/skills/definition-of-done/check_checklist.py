@@ -51,8 +51,10 @@ ARGUMENTS
                      checklist.waivers, the allow-list of people who may waive;
                      checklist.permalink_pattern, what a chat message permalink
                      looks like on the install's chat transport; and
-                     checklist.dir (repo-relative), which --served needs. Each
-                     is a value of the install, so it lives there and not here.
+                     checklist.dir (repo-relative), which --served needs; and
+                     figma.file_key, whose null means the project has no design
+                     file (see NO DESIGN FILE below). Each is a value of the
+                     install, so it lives there and not here.
 
 EXIT CODES - three, never collapsed. Several files: the worst of them wins
 (2 over 1 over 0), and each file still gets its own verdict line.
@@ -79,6 +81,14 @@ all - a SyntaxError in a mid-merge copy), handled like 2.
 
 Per-file verdict lines and findings go to stdout; a run-level NO VERDICT (bad
 usage, bad config) goes to stderr.
+
+NO DESIGN FILE. With figma.file_key null the project has no design file, so
+sections 1a, 1b, 1c and 4 have nothing to hold: their tables must still be
+there, every row in them is still checked, but empty tables are accepted where
+otherwise 1a must have rows and, while the header names screens, 1b or 1c and
+4 must too. The run prints one `NOTE` line on stdout saying so. A config that
+carries no figma.file_key key at all is NO VERDICT: an absent key must never
+relax a gate, so a project without a design file says so with null.
 
 WHAT IT REFUSES (exit 1), each per row and each with the row's line:
     - an empty cell: every cell of every row is owed, so an empty item is a
@@ -299,11 +309,12 @@ def open_problem(path):
 # -- one file --
 
 class Checklist(object):
-    def __init__(self, path, waivers, rules, permalink):
+    def __init__(self, path, waivers, rules, permalink, design=True):
         self.path = path
         self.waivers = waivers
         self.rules = rules
         self.permalink = permalink
+        self.design = design
         self.findings = []
         self.dir = os.path.dirname(os.path.abspath(path))
         self.root = None
@@ -524,9 +535,9 @@ class Checklist(object):
         for key in ["1a", "1b", "1c", "2", "3", "4", "5"]:
             self.check_rows(key, rows(key))
 
-        if not rows("1a"):
+        if self.design and not rows("1a"):
             self.find(sections["1a"][0], "1a has no rows: the design read is owed before any code")
-        if not no_screens:
+        if self.design and not no_screens:
             if not rows("1b") and not rows("1c"):
                 self.find(sections["1b"][0], "no frames in 1b and no screens in 1c, "
                           "while the header names screens")
@@ -677,8 +688,9 @@ class Checklist(object):
         if not found:
             self.find(hline, "5 has no `%s` row: before the hand-off the builder shows the "
                       "requester, in the feature's chat thread, a video of the feature per "
-                      "platform and the design pixel-comparison pack with its diff maps "
-                      "(N/A only when the header's Screens is none)" % PRESENTED_ROW)
+                      "platform%s (N/A only when the header's Screens is none)"
+                      % (PRESENTED_ROW, " and the design pixel-comparison pack with its diff "
+                         "maps" if self.design else ""))
         for ln, cells in found:
             status, evidence = cells["status"].strip(), cells["evidence"]
             if (status == "DONE" and evidence.strip() and not any(
@@ -785,7 +797,8 @@ def default_config():
 
 
 def load_config(path):
-    """(waivers, checklist directory or None, permalink regex) from the config."""
+    """(waivers, checklist directory or None, permalink regex, design file?)
+    from the config."""
     try:
         with open(path, encoding="utf-8") as f:
             cfg = json.load(f)
@@ -806,9 +819,16 @@ def load_config(path):
         permalink = re.compile(pattern)
     except re.error as e:
         raise NoVerdict("config %s: checklist.permalink_pattern does not compile: %s" % (path, e))
+    figma = cfg.get("figma")
+    if not isinstance(figma, dict) or "file_key" not in figma:
+        raise NoVerdict("config %s has no figma.file_key: set it to the design file's key, or to "
+                        "null for a project with no design file" % path)
+    key = figma["file_key"]
+    if key is not None and not (isinstance(key, str) and key.strip()):
+        raise NoVerdict("config %s: figma.file_key is neither a design file's key nor null" % path)
     d = block.get("dir")
     return ([w.strip() for w in waivers], (d.strip() if isinstance(d, str) and d.strip() else None),
-            permalink)
+            permalink, key is not None)
 
 
 def served_head(path):
@@ -872,7 +892,7 @@ def main(argv):
 
     try:
         config = args.config or default_config()
-        waivers, checklist_dir, permalink = load_config(config)
+        waivers, checklist_dir, permalink, design = load_config(config)
         rules = load_rules(SKILL_MD)
         served = served_head(args.served) if args.served else None
         if served and single and not checklist_dir:
@@ -881,11 +901,14 @@ def main(argv):
     except NoVerdict as e:
         print("NO VERDICT: %s" % e, file=sys.stderr)
         return 2
+    if not design:
+        print("NOTE: figma.file_key is null in %s: no design file, so sections 1a, 1b, 1c "
+              "and 4 may be empty" % config)
     worst = 0
     counts = {"pass": 0, "findings": 0, "noverdict": 0}
     handoffs = []
     for path in files:
-        c = Checklist(path, waivers, rules, permalink)
+        c = Checklist(path, waivers, rules, permalink, design)
         try:
             c.check()
             if served:

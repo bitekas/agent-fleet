@@ -402,7 +402,15 @@ link = os.path.join(_tmp, "skill-link")
 os.symlink(HERE, link)
 rc, out = run([os.path.join(root, CL)], config=None,
               script=os.path.join(link, "check_checklist.py"))
-check("run through a skill link, SKILL.md and fleetlib are found by realpath",
+check("run through a linked skill DIRECTORY (how fleet link installs it), fleetlib is found by realpath",
+      rc == 0 and "PASS " in out, out)
+# A link to the script FILE, in a directory with no SKILL.md: only realpath
+# finds the rule table. --config is given so this case measures SKILL.md alone.
+file_link_dir = os.path.join(_tmp, "script-link")
+os.makedirs(file_link_dir)
+os.symlink(SCRIPT, os.path.join(file_link_dir, "check_checklist.py"))
+rc, out = run([os.path.join(root, CL)], script=os.path.join(file_link_dir, "check_checklist.py"))
+check("run through a link to the script FILE, SKILL.md's rule table is found by realpath",
       rc == 0 and "PASS " in out, out)
 no_install = os.path.join(_tmp, "no-install")
 os.makedirs(no_install)
@@ -440,7 +448,7 @@ spec = importlib.util.spec_from_file_location("check_checklist", SCRIPT)
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
 try:
-    _, example_dir, example_link = mod.load_config(EXAMPLE_CONFIG)
+    _, example_dir, example_link, _ = mod.load_config(EXAMPLE_CONFIG)
     loads = True
 except mod.NoVerdict as e:
     loads, example_dir, example_link = str(e), None, None
@@ -452,6 +460,70 @@ if example_link is not None:
           and bool(example_link.fullmatch(slack_message + "?thread_ts=1000000000.000001"))
           and not example_link.fullmatch("https://acme.slack.com/archives/CABCDEFGH"),
           example_link.pattern)
+
+# === 9d. No design file: figma.file_key null lifts the design sections, and
+# nothing else; an ABSENT key lifts nothing.
+no_design = load_json(CONFIG)
+no_design["figma"]["file_key"] = None
+NO_DESIGN_CFG = write_config("no-design.json", no_design)
+
+
+def emptied(body, heading, next_heading):
+    """`body` with the data rows of the table under `heading` removed."""
+    start = body.index(heading)
+    end = body.index(next_heading)
+    lines = body[start:end].split("\n")
+    kept, seen_sep = [], False
+    for l in lines:
+        if l.startswith("|---"):
+            seen_sep = True
+            kept.append(l)
+        elif seen_sep and l.startswith("|"):
+            continue
+        else:
+            kept.append(l)
+    return body[:start] + "\n".join(kept) + body[end:]
+
+
+BARE = PASS
+for h, nxt in (("### 1a. ", "### 1b. "), ("### 1b. ", "### 1c. "), ("### 1c. ", "## 2. "),
+               ("## 4. ", "## 4b. ")):
+    BARE = emptied(BARE, h, nxt)
+BARE = BARE.replace(
+    "| 2026-10-22 | Dana | [ruling](https://chat.example.com/feature-thread/m/1000000000000005) | "
+    "[12 - cart](https://design.example.com/file/example?node=12) | `COMMIT_SHA` | RE-FROZEN | "
+    "https://chat.example.com/feature-thread/m/1000000000000006 |\n", "")
+assert BARE != PASS and "| Contradictions and removals list |" not in BARE and "| 12 - cart, default |" not in BARE
+root = repo({CL: BARE})
+rc, out = run([os.path.join(root, CL)], config=NO_DESIGN_CFG)
+check("no design file: empty 1a, 1b, 1c and 4 pass, with a NOTE saying so",
+      rc == 0 and "PASS " in out and "NOTE: figma.file_key is null" in out, out)
+rc, out = run([os.path.join(root, CL)])
+found = [l for l in out.splitlines() if l.startswith(root)]
+check("with a design file, the same empty sections are refused, exactly three findings",
+      rc == 1 and len(found) == 3 and "1a has no rows" in out
+      and "no frames in 1b and no screens in 1c" in out and "4 has no rows" in out
+      and "NOTE:" not in out, out)
+root = repo({CL: mutate("| Contradictions and removals list | DONE |", "| Contradictions and removals list | TODO |")})
+rc, out = run([os.path.join(root, CL)], config=NO_DESIGN_CFG)
+check("no design file: a row that IS there is still checked (a TODO in 1a is refused)",
+      rc == 1 and "TODO: not done" in out, out)
+root = repo({CL: mutate(PRES + "\n", "", BARE)})
+rc, out = run([os.path.join(root, CL)], config=NO_DESIGN_CFG)
+check("no design file: the presentation row is still owed, with the videos only",
+      rc == 1 and "has no `6 - presented to the requester` row" in out
+      and "a video of the feature per platform (N/A" in out and "diff maps" not in out, out)
+absent = load_json(CONFIG)
+del absent["figma"]["file_key"]
+root = repo({CL: BARE})
+rc, out = run([os.path.join(root, CL)], config=write_config("no-file-key.json", absent))
+check("a config with no figma.file_key at all is NO VERDICT (2): an absent key relaxes nothing",
+      rc == 2 and "has no figma.file_key" in out and "PASS" not in out, out)
+blank = load_json(CONFIG)
+blank["figma"]["file_key"] = "  "
+rc, out = run([os.path.join(root, CL)], config=write_config("blank-file-key.json", blank))
+check("a blank figma.file_key is NO VERDICT (2), not read as no design file",
+      rc == 2 and "neither a design file's key nor null" in out, out)
 
 # === 10. Several files in one run: per-file verdicts, the worst exit wins.
 FAILING = mutate("| 1 | DONE |", "| 1 | TODO |").replace("example-feature", "failing-feature")

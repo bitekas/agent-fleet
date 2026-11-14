@@ -17,11 +17,12 @@ description: >
   waived by name - and the coverage that gate explicitly does NOT claim; and
   the human dev-build pass every feature gets before it merges - preceded by
   the agents' visual sweep, by the builder showing the requester, in the
-  feature's chat thread, a video per platform and the design diff maps, and by
-  the feature checklist passing its checker, run by a non-builder; driven step
-  by step by the agent, asked for friction, and TIMED from the agent's own
-  start and end posts in the thread (the dev server's session log once it
-  writes one), so an untimed or too-short pass does not merge; and the rule
+  feature's chat thread, a video per platform and, where there is a design
+  file, the design diff maps, and by the feature checklist passing its
+  checker, run by a non-builder; driven step by step by the agent, asked for
+  friction, and TIMED from the agent's own start and end posts in the thread
+  (or from the dev server's session log, where it writes one), so an untimed
+  or too-short pass does not merge; and the rule
   that a feature ships complete - every surface it touches (screens, server
   half, analytics, e2e coverage, push-notification copy, store listing per
   storefront) in one landing, with the SCOPE cut to a smaller feature that is
@@ -37,12 +38,18 @@ requires_install: false
 
 # Process: shipping changes (definition of done)
 
-**Where it applies.** Rules 1 to 4 bind any code project. Rules 5 and 6 bind a
-project with a user interface that a human tester checks on a development build,
-and Rule 5's design-parity half binds one whose screens are built from a design
-file (`figma.file_key`; `null` means that half does not apply). Rule 7's surface
-list is written for an app with a server half, shipped to users through stores;
-a surface the project does not have is recorded as `none`, with the reason.
+**Where it applies.** Rules 1 to 4 bind any code project. Rules 5 and 6 bind
+any project with a user interface: Rule 5 every change to a screen or component,
+Rule 6 every feature merge, its pass run on the development build `CONTEXT.md`
+names. Rule 5's screenshots are never conditional. Exactly two facts about a
+project lift a step, and each step says so where it applies: a project with no
+user interface at all, which Rules 5 and 6 do not bind; and a project with no
+design file (`figma.file_key` set to `null`), for which Rule 5's design-parity
+half, the checklist's design sections (1a, 1b, 1c and 4) and the design pack in
+Rule 6's presentation lift, and the checker accepts those sections empty. Rule
+7's surface list is written for an app with a server half, shipped to users
+through stores; for each surface the feature states what it ships there or
+`none`, with the reason (Rule 7).
 
 **What the install names.** The install's `CONTEXT.md` for this skill
 (`fleet where definition-of-done CONTEXT.md`) names its landing branch and where
@@ -50,21 +57,28 @@ its worktrees live, its e2e runner's scoped invocations, its consistency-scan
 prompt, its design file and pages, the human principal, the design's approvers,
 and the measured instances behind the rules below. Its `config.json` (`fleet
 where definition-of-done config.json`, made from `config.example.json`) carries
-the values this file refers to by key. This file names no skill of the install's
-own; where a rule leans on one, it names the ROLE, and `CONTEXT.md` names the
-install's skill or document that fills it:
+the values this file refers to by key. **A relative path in that `config.json`
+is relative to the repository root, not to the file** - the exception to
+`/claude-skill` section 2's rule for a SPECIFIC config - because each one names a
+place in the project's tree: `checklist.dir` is matched against `git diff
+--name-only` output, and the commands are typed from the repository root. This
+file names no skill of the install's own; where a rule leans on one, it names the
+ROLE, and `CONTEXT.md` names the install's skill or document that fills it:
 
 | Role | What it is |
 |---|---|
 | the UI evidence gate | the screenshot procedure Rule 5 requires: the presentation viewports, and the per-state annotated pack a design-verified screen owes |
 | the design verification kit | the instrument that gives a screen and state a pixel verdict against its frame, and the bar a PASS meets |
 | the design-freeze procedure | how frames move from the incoming page to the current page of the design file, including its sections on editing a shared component master and on the current page as a mirror of the landing branch |
-| the visual sweep | the agents' sweep over a build's screens before a tester gets it (Rule 6), and the compact visual row it leaves on the tester's step sheet |
+| the visual sweep | the agents' sweep over a build's screens before a tester gets it (Rule 6), the parity check it runs before a build is served, and the compact visual row it leaves on the tester's step sheet |
 | the chat transport | where a feature's thread lives: the requester is shown the work there and the tester's pass is driven there (`/chat-transport`) |
 | the roadmap | where a follow-up is filed as a feature of its own (Rule 7) |
 
-A role the install does not fill is written in `CONTEXT.md` as `none`, and the
-step that needs it says in its report that it was skipped.
+**A role the install does not fill is not a skip.** `CONTEXT.md` then states how
+the install meets the rule that role serves by other means. Where it cannot, the
+change that rule binds is blocked, and the reason is reported to the human
+principal; it is never reported as skipped. Only the two facts under "Where it
+applies" lift a step.
 
 **Seven rules, and their NUMBERS are part of the contract.** Agent charters,
 other skills, prompts and design documents cite these sections by number
@@ -94,7 +108,8 @@ VERDICT rather than pass.
 **Every feature keeps one checklist file, made from
 `feature-checklist.template.md` beside this file when its work starts**, at
 `checklist.dir/<feature-slug>.md` (the path the install's `feature_checklist`
-convention names, `fleet settings conventions.feature_checklist`), committed on
+convention names, `fleet settings conventions.feature_checklist`; nothing checks
+that the two agree, so a change to one changes the other), committed on
 the feature branch and landing with it. A screen task inside a feature that
 already has one adds its rows there: one feature, one file. The template
 documents the format. Its sections:
@@ -131,6 +146,10 @@ documents the format. Its sections:
    chat message's permalink, matching `checklist.permalink_pattern`.
 6. **The hand-off**: who ran the checker, on which commit, when.
 
+A project with no design file (`figma.file_key` null) has nothing for sections
+1a, 1b, 1c and 4 to hold: they stay in the file, with their tables, and may be
+empty.
+
 **An item is done only when it points at evidence**: a path that opens, or a
 URL - a test, a pixel verdict, a clip. **Evidence has to outlive the landing**,
 because a release candidate checks the same file again after the feature has
@@ -143,8 +162,11 @@ tool that writes to a temporary directory by default is pointed under
 **`check_checklist.py` beside this file checks it:**
 `python3 "${CLAUDE_SKILL_DIR}/check_checklist.py" <checklist.md | directory> ... [--expect <slug>[,<slug>...]]... [--served <worktree>]`,
 from inside a checkout of the feature branch. It reads `checklist.dir`,
-`checklist.waivers` and `checklist.permalink_pattern` from the install's
-`config.json` (`--config <path>` overrides that, for tests). Exit `0` pass; `1`
+`checklist.waivers`, `checklist.permalink_pattern` and `figma.file_key` from the
+install's `config.json` (`--config <path>` overrides that, for tests). With
+`figma.file_key` null it accepts empty sections 1a, 1b, 1c and 4 and prints a
+`NOTE` line saying so; a config with no `figma.file_key` at all is NO VERDICT,
+because an absent key must never relax a gate. Exit `0` pass; `1`
 findings, each printed as `<file>:<line>: <what is wrong>`; `2` NO VERDICT - a
 malformed or unreadable file, a config that does not resolve, or a run that
 checked nothing. **Never read 2 as a pass**: nothing was judged, so nothing was
@@ -427,16 +449,16 @@ control asks *"is this exercising the case it is named for?"*. Shapes it
 catches, each a check that could fail, did fail on cue, and still measured the
 wrong thing:
 
-- a fixture that silently re-tests rung 1 of an overflow ladder while its name
-  claims rung 2;
-- a taxonomy-wide PII sweep that stays **green** when free text is added to an
-  event, because ordinary prose carries no `@`, scheme or slash, so the sweep was
-  never the gate anyone believed it was;
-- a signature widening with a byte-identical emitted payload that passes
-  **every** shape pin, key-set pin and fence, caught by the signature layer
-  alone;
-- a free-text predicate blind to a **named** string alias, because every
-  parameter type before it was a builtin or a numeric union.
+- a fixture that exercises the first fallback while its name claims the second;
+- a sweep for personal data across every analytics event that stays **green**
+  when free text is added to an event, because ordinary prose carries no `@`,
+  URL scheme or slash, so the sweep is not the gate anyone believes it is;
+- a widened function signature whose emitted payload is byte-identical, so it
+  passes **every** check on the payload's shape and keys and is caught only by a
+  check on the signature itself;
+- a free-text predicate blind to a string type reached through a **named**
+  alias, because it recognises only builtin and numeric-union parameter
+  types.
 
 **The corollary that catches the rest: when a check or a comment rests on a
 REASON rather than an observation, ask whether the reason is about to stop being
@@ -542,12 +564,17 @@ the hand-off:
    frame leaves the mirror permanently wrong, sitting next to a deletion nobody
    will later dare make; a leftover in-build mark tells every later reader that
    shipped work is still in flight.
-3. **Where the install has a frame registry probe (`figma.registry_probe`), it
-   is green.** A freeze mints a new node id for every frame it copies, and a node
-   id is a STRING - no typecheck, lint or spec can see one go dead, so without a
-   probe the only symptom is a later agent getting `null` back with no way to
-   tell a stale pointer from a typo. The probe reads the repository's ids back
-   against the one registry a freeze writes. **Treat any non-zero exit as not
+3. **The install's design-id registry, where it has one, was written, and where
+   the install has a registry probe (`figma.registry_probe`), the probe is
+   green.** A freeze mints a new node id for every frame it copies and writes
+   each into the one registry (`CONTEXT.md` names it), and a node id is a
+   STRING - no typecheck, lint or spec can see one go dead, so without the
+   registry the only symptom is a later agent getting `null` back with no way to
+   tell a stale pointer from a typo. **Confirm the registry carries every frame
+   this task froze by reading it**, whether or not a probe exists: a green probe
+   does not prove it, because a freeze whose new ids nothing cites yet leaves the
+   probe green and the registry stale. The probe reads the repository's ids back
+   against the registry. **Treat any non-zero exit as not
    green, and never read a no-verdict exit as a pass because nothing was
    reported**; the probe's own header owns what each exit means. **It cannot see
    whether an id is live in the design tool** - it holds no credential - only
@@ -561,8 +588,10 @@ the hand-off:
    `CONTEXT.md` states what the install's probe covers, what it does not, and the
    instrument that counts the uncovered set, because a bare number cannot be
    re-derived and therefore cannot be corrected. `figma.registry_probe` set to
-   `null`: the install has no such probe, this third proof does not apply, and
-   the report says so rather than reading as covered.
+   `null`: the install has no such probe, and only the probe half lapses - the
+   registry is still written and read back, and the report says the probe half
+   did not run rather than reading as covered. An install that keeps no
+   design-id registry says so in `CONTEXT.md`.
 
 **A full-page audit of the whole current page is a SEPARATE job**, commissioned
 when the human principal wants one. It is not run per task, and a task that did
@@ -633,9 +662,9 @@ physical device can answer, stays.
 hand-off, the builder posts in the feature's chat thread, to the feature's
 requester (the checklist header's Requester), a video of the feature on each
 platform it runs on (for a mobile app, the iOS simulator and the Android
-emulator, `/device-emulators`), and the design pixel-comparison pack with its
-diff maps (the UI evidence gate's per-state pack, from the design verification
-kit). That message's permalink is the evidence in the checklist's section-5 row
+emulator, `/device-emulators`), and, where the install has a design file, the
+design pixel-comparison pack with its diff maps (the UI evidence gate's
+per-state pack, from the design verification kit). That message's permalink is the evidence in the checklist's section-5 row
 `6 - presented to the requester`, and the checker refuses the hand-off until the
 row is `DONE` with a permalink matching `checklist.permalink_pattern`; a feature
 whose header names no screens records it `N/A`, with the reason.
@@ -656,8 +685,8 @@ the feature.
 **The pass is timed, and the timing goes in the merge report.** The agent posts
 in the thread when the driven pass starts, immediately before step 1, and when
 it ends, after the last answer is recorded; the duration is the difference
-between the two posts' timestamps. The dev server's session log is the
-measurement once the dev server writes one; until then the thread posts are
+between the two posts' timestamps. Where the dev server writes a session log,
+that log is the measurement; where it does not, the thread posts are
 (`CONTEXT.md` states which applies on the install). The merge report states the
 start, the end, the duration, the floor it was held to, and the thread.
 
