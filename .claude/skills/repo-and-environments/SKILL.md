@@ -1555,7 +1555,8 @@ touches that lane's paths. The merge carries **one rule the live mode does
 not**: where the install commits a gate-outcome file (`CONTEXT.md` section 5.2
 names it), it keeps the TARGET's side, conflicted or not, because the
 candidate's copy attests a gate run on the candidate and is a stale green
-anywhere else (`/release` section 10). The version file conflicts by design
+anywhere else (`/release` section 11: the file is honest only on the tree the
+gates measured). The version file conflicts by design
 here too and is computed exactly as in the live mode.
 
 **WARNING: the job reads only branch tips, never the pushed SHA**, because
