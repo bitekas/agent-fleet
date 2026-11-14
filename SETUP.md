@@ -531,6 +531,51 @@ carries outside its `_comment` keys, one line per skill.
       `recovery.mailbox`, `share.vnc_port`, `share.web_port`,
       `share.funnel_port`, `share.novnc_dir`, `share.page`, `share.minutes`,
       `share.tailscale`
+- [ ] `architecture-map` - `design.packages_dir`
+- [ ] `definition-of-done` - `repo.landing_branch`, `repo.worktrees_dir`,
+      `repo.dev_stack_command`, `repo.deploy_command`, `e2e.runner`,
+      `e2e.specs_dir`, `process.consistency_scan_prompt`, `checklist.dir`,
+      `checklist.waivers`, `checklist.permalink_pattern`; for a project whose
+      screens are built from a design file `figma.file_key`,
+      `figma.pages.current`, `figma.pages.incoming`,
+      `figma.deletion_marker_prefix`, `figma.in_build_marker_prefix` and
+      `figma.registry_probe` (null when it has no registry probe), and for one
+      without, `figma.file_key` null
+- [ ] `device-emulators` - `project.name`, `project.artifact_prefix`,
+      `platforms.enabled`, `build.script`, `build.dev_script`,
+      `build.dev_client_service`, `build.env_config_script`,
+      `build.default_env`, `build.method_metro`, `build.method_embedded`,
+      `build.ports_artifact`, `build.metro_port_key`, `ios.sim_artifact`,
+      `ios.device_type`, `ios.device_type_id`, `ios.dev_menu_onboarding_key`,
+      `ios.xcode_min_major`, `ios.sweep_extra_device_types[].name`,
+      `ios.sweep_extra_device_types[].id`, `ios.remote.host`,
+      `ios.remote.user`, `ios.remote.workdir`, `android.hypervisor_probe`,
+      `android.apk_artifact`, `android.aab_artifact`, `android.avd.default`,
+      `android.avd.compat`, `android.sweep_short_screen.size`,
+      `android.sweep_short_screen.density`, `android.jdk_min_major`,
+      `keystore.dir`, `metro.host_cmd`, `ci.eas_token_env`,
+      `docs.build_machine_components`, `device_e2e.driver`,
+      `device_e2e.driver_path`, `device_e2e.runner`, `device_e2e.flows_dir`
+- [ ] `e2e-suite` - `e2e.runner`, `e2e.specs_dir`, `e2e.projects.parallel`,
+      `e2e.projects.serial`, `e2e.projects.exclusive`, `e2e.verdict.pass`,
+      `e2e.verdict.fail`, `e2e.exclusive_tag.tag`, `e2e.workers_env_var.name`,
+      `e2e.workers_env_var.default`, `e2e.artifacts.root`,
+      `e2e.artifacts.root_env_var`, `e2e.lock.dir_env_var`,
+      `e2e.lock.dir_default`, `e2e.lock.lock_file`, `e2e.lock.holders_dir`,
+      `e2e.lock.timeout_env_var`, `e2e.lock.timeout_default_s`,
+      `e2e.lock.heartbeat_env_var`, `e2e.lock.heartbeat_default_s`,
+      `e2e.lock.timeout_exit_code`, `e2e.lock.share_flag`,
+      `e2e.lock.share_workers_env_var`, `e2e.lock.share_workers_default`,
+      `e2e.lock.library`, `e2e.ports.slot_artifact`, `app.navigation_calls`,
+      `app.route_table`, `checks.commands`; optional, each block whole or not
+      at all: `e2e.device.runner`, `e2e.device.flows_dir`, `e2e.device.driver`,
+      `e2e.instrument_fault.marker`, `e2e.instrument_fault.declaration_module`,
+      `e2e.instrument_fault.classifier`, `e2e.instrument_fault.teeth`,
+      `e2e.instrument_fault.remeasure_workers`
+- [ ] `figma-workspace` - `files[].alias`, `files[].key`,
+      `mcp.connector_name`, `tokens.read.path`, `tokens.write.path`,
+      `tokens.content.path`, `names.token`, `names.cache_hours`,
+      `post.prefix`, `state.dir`
 - [ ] `google-spreadsheet` - `identity.agent`, `identity.subject_template`,
       `credential.key_path`, `api.sheets_base`, `api.drive_base`,
       `scopes.sheets`, `scopes.drive`
@@ -542,6 +587,13 @@ carries outside its `_comment` keys, one line per skill.
 - [ ] `rate-graphic` - `ratings_log.path`,
       `credentials.service_account_key_path`, `secret.name`, `secret.project`,
       `api.base`
+- [ ] `release` - `repo.landing_branch`, `repo.release_branch`,
+      `repo.rc_branch_prefix`, `release.version_file`,
+      `release.design_packages_dir`
+- [ ] `repo-and-environments` - `environments.selector_var`,
+      `environments.dev_machine`, `environments.shared_dev`, `environments.live`,
+      `environments.live_copy`, `repo.root`, `repo.slug`, `repo.landing_branch`,
+      `repo.default_branch`, `repo.worktrees_dir`, `branches.<branch>`
 - [ ] `restart` - `service.unit`, `service.reattach_command` (each keeps its
       <agent> token, which the reading agent fills),
       `service.reboot_command`, `stack.teardown_command`,
@@ -578,12 +630,20 @@ carries outside its `_comment` keys, one line per skill.
       `state.dir`, `state.prefix`, `owner.claude_config_dir`; keep the
       example's value unless the terminal UI changed: `stall.prompt_patterns`,
       `stall.idle_patterns`, `action.deny_key`, `action.notice`
+- [ ] `tooling-index` - `packages.ecosystem`, `packages.add_command`,
+      `packages.fix_command`, `packages.doctor_command`, `tooling.scratch_dir`
 - [ ] `web-hierarchy-server` - `server.host`, `server.cap_kb`,
       `server.preferred_ip_prefix`, `transcripts.config_dir`,
       `transcripts.projects_subdir`, `identities.file`, `packages.repo_root`,
       `packages.dir_pattern`, `labels.root_owner`,
       `fleet.by_config_dir.<config-dir-key>`, `servers.<unit-name>.config_dir`,
       `servers.<unit-name>.port`
+- [ ] `worktree-workflow` - `repo.root`, `repo.worktrees_dir`,
+      `repo.landing_branch`, `repo.install_command`, `repo.dev_stack_command`,
+      `environments.dev_machine`, `environments.shared_dev`,
+      `environments.live`, `environments.live_copy` (omitted where the install
+      has no such environment), `naming.branch`, `naming.subject`,
+      `naming.slug_case`, `naming.types.<type>`
 
 **Each charter**, `.claude/agents/<agent-name>.md`, from a persona template:
 
