@@ -8,12 +8,12 @@ An install tells the fleet how it works through two parts of its install manifes
 
 | Key | What it answers | Read by |
 |---|---|---|
-| `definition_of_done` | the check a task passes before it is reported complete | the `agent` skill, section 4; persona templates; the `software-development` skill |
-| `feature_checklist` | where a feature's working checklist lives, re-read after a compaction | the `agent` skill, section 4; the `software-development` skill |
-| `branch_naming` | how branches and commit subjects are named | the `agent` skill, section 4; persona templates; the `software-development` skill |
-| `workspace` | where and how a write to a repository happens | persona templates; the `software-development` skill |
-| `release` | how a release is cut and shipped | persona templates; the `software-development` skill |
-| `environments` | which environments exist and what deploys where | persona templates; the `software-development` skill |
+| `definition_of_done` | the check a task passes before it is reported complete | the `agent` skill, section 4; the `software-development` skill; the `root-orchestrator` and `lead-engineer` persona templates |
+| `feature_checklist` | where a feature's working checklist lives, re-read after a compaction | the `agent` skill, section 4; the `software-development` skill; the `definition-of-done` skill, *The feature checklist*; the `lead-engineer` persona template |
+| `branch_naming` | how branches and commit subjects are named | the `agent` skill, section 4; the `software-development` skill; the `definition-of-done` skill, Rule 3; the `adding-an-agent` skill, section 2; the `install-agent-fleet` skill, step 6.7; the `health-doctor`, `root-orchestrator` and `lead-engineer` persona templates |
+| `workspace` | where and how a write to a repository happens | the `software-development` skill; the `adding-an-agent` skill, section 2; the `install-agent-fleet` skill, step 6.7; the `root-orchestrator` and `lead-engineer` persona templates |
+| `release` | how a release is cut and shipped | the `software-development` skill; the `lead-engineer` persona template |
+| `environments` | which environments exist and what deploys where | the `software-development` skill; the `lead-engineer` persona template |
 | `people_notes` | where the install records standing requests from people, such as how a person wants to receive questions | the `talking-to-humans` skill, rules 1, 4 and 5 |
 
 A value is one of:
