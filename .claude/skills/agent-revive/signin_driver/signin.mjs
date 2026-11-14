@@ -146,9 +146,12 @@ function launchDriver({ agent: a, runDir: rd, log, extra = [] }) {
   const useXvfb = process.platform !== 'darwin' && !has('no-xvfb') && !process.env.DISPLAY;
   let cmd = process.execPath, cmdArgs = args;
   if (useXvfb) {
-    const xvfbRun = (process.env.PATH || '').split(delimiter).map(d => join(d, 'xvfb-run')).find(p => { try { return statSync(p).isFile(); } catch { return false; } });
+    const onPath = name => (process.env.PATH || '').split(delimiter).map(d => join(d, name)).find(p => { try { return statSync(p).isFile(); } catch { return false; } });
+    const xvfbRun = onPath('xvfb-run');
     if (!xvfbRun) { closeSync(fd); die('no xvfb-run on PATH, and no DISPLAY: the headful browser needs one of them here (installation/check); no driver was started', 1); }
-    cmd = 'bash';
+    const bash = onPath('bash');
+    if (!bash) { closeSync(fd); die('no bash on PATH: xvfb-run runs under it here, so that its EXIT trap runs on a signal; no driver was started', 1); }
+    cmd = bash;
     cmdArgs = [xvfbRun, '-a', process.execPath, ...args];
   }
   // ⚠️ THE CHILD'S ENVIRONMENT IS SCRUBBED OF THE DEBUG SWITCHES, NOT INHERITED
@@ -158,6 +161,10 @@ function launchDriver({ agent: a, runDir: rd, log, extra = [] }) {
   // writing straight to stderr, and nobody would connect the two.
   const childEnv = { ...process.env };
   for (const k of ['DEBUG', 'DEBUG_COLORS', 'NODE_DEBUG', 'PWDEBUG', 'PLAYWRIGHT_DEBUG']) delete childEnv[k];
+  // And of what bash reads before it runs a script, which dash does not: a BASH_ENV
+  // file it sources first, and each exported BASH_FUNC_<name>%% function it imports -
+  // one named after a command xvfb-run calls (mktemp, rm, kill) runs in its place.
+  for (const k of Object.keys(childEnv)) if (k === 'BASH_ENV' || k.startsWith('BASH_FUNC_')) delete childEnv[k];
   const child = spawn(cmd, cmdArgs, { detached: true, stdio: ['ignore', fd, fd], env: childEnv });
   child.unref();
   return { child, offset, xvfb: useXvfb };
@@ -328,7 +335,8 @@ if (op === 'profiles-check') {
     if (busy) return { status: 'busy', detail: busy };
     const a = `profiles-check-${process.pid}-${i}`;
     // ⚠️ SHORT, ON PURPOSE: on Linux Chromium's singleton socket is made inside the run
-    // dir, 45 bytes past it, and driver.mjs refuses a run dir it would not fit in.
+    // dir, 45 bytes past it, when it fits; in a run dir too long for it, the browser's
+    // temp dirs go to the system temp dir instead (driver.mjs).
     const rd = join(tmpdir(), `arpc-${process.pid}-${i}`);
     const sock = join(rd, 'driver.sock');
     const { child, offset } = launchDriver({ agent: a, runDir: rd, log, extra: ['--profile', name] });

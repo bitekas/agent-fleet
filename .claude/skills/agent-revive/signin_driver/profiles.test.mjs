@@ -310,6 +310,25 @@ try {
   ok('a bare --profile is refused, not quietly run on a throwaway profile', bare.status === 2 && /--profile needs a username/.test(bare.stderr), true);
   ok('none of the refusals created the profiles dir', existsSync(PROFILES), false);
 
+  // ── the xvfb-run launch: what it needs is named when it is missing, never a stack trace ──
+  // On Linux with no DISPLAY the client runs `bash <xvfb-run> ...` (signin.mjs,
+  // launchDriver), and looks both up on PATH before it starts anything. A PATH with
+  // neither, then one with only an xvfb-run stand-in that records any call.
+  if (process.platform !== 'darwin') {
+    const noBin = join(T, 'path-none'), onlyX = join(T, 'path-xvfb');
+    mkdirSync(noBin);
+    mkdirSync(onlyX);
+    writeFileSync(join(onlyX, 'xvfb-run'), `#!/bin/sh\necho "$@" >> '${join(T, 'xvfb-trip.txt')}'\n`);
+    chmodSync(join(onlyX, 'xvfb-run'), 0o755);
+    const launch = (pathDir, rd) => client(['sipt-path', 'start', '--config', CONFIG, '--run-dir', join(T, rd), '--log', join(T, 'path.log')], { env: { PATH: pathDir, DISPLAY: '' } });
+    const nx = await launch(noBin, 'rp-none');
+    ok('no xvfb-run on PATH and no DISPLAY: start exits 1, naming xvfb-run', `${nx.status}:${/no xvfb-run on PATH/.test(nx.stderr)}`, '1:true');
+    const nb = await launch(onlyX, 'rp-nobash');
+    ok('xvfb-run on PATH but no bash: start exits 1, naming bash', `${nb.status}:${/no bash on PATH/.test(nb.stderr)}`, '1:true');
+    ok('...with no stack trace', /ENOENT|\n\s+at /.test(nb.stderr), false);
+    ok('...and nothing was started: no run dir, no call to xvfb-run', `${existsSync(join(T, 'rp-nobash'))}:${existsSync(join(T, 'xvfb-trip.txt'))}`, 'false:false');
+  }
+
   // `share` on macOS: refused before anything is read, naming the human route.
   const sh = await client(['sipt-share', 'share', '--config', CONFIG, '--run-dir', join(T, 'r-share')]);
   const macText = /not on macOS/.test(sh.stderr) && /step 7e/.test(sh.stderr);
@@ -326,8 +345,9 @@ try {
     : !!process.env.DISPLAY || spawnSync('sh', ['-c', 'command -v xvfb-run']).status === 0;
   // The longest unix socket a driver of half B makes, in the longest run dir it gets
   // (T/rb, or a profiles-check one under P: signin.mjs, checkProfile): Chromium's
-  // singleton socket on Linux, the driver's own on macOS (driver.mjs refuses either
-  // when it does not fit).
+  // singleton socket on Linux, the driver's own on macOS. A run dir the first does not
+  // fit in keeps the browser's temp dirs out of it (driver.mjs), which half B's checks
+  // of where they are cannot then read.
   const inRunDir = darwin ? ['driver.sock'] : ['org.chromium.Chromium.XXXXXX', 'SingletonSocket'];
   const sockLen = Math.max(...[join(T, 'rb'), join(P, 'arpc-4194304-0')].map(rd => Buffer.byteLength(join(rd, ...inRunDir))));
   const sockMax = darwin ? 103 : 107;
@@ -370,7 +390,7 @@ try {
   ok('no password from the pool appears on any stdout, stderr or driver log', SENTINELS.some(s => all.includes(s) || all.includes(JSON.stringify(s).slice(1, -1))), false);
   try { rmSync(T, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); }
   catch (e) { console.log(`note: could not remove ${T}: ${e.message}`); }
-  ok('this run leaves nothing in its TMPDIR: T and P, the temp dirs everything it ran was given, are gone', existsSync(T) || existsSync(P), false);
+  ok("this run's own temp dirs, T and P, are removed (no process of the run still writes into them)", existsSync(T) || existsSync(P), false);
 }
 
 async function halfB(browsers) {
@@ -424,28 +444,62 @@ async function halfB(browsers) {
     control(`${agent}: inspect of the filled field carries the redaction marker - the password really crossed the wire`, i.stdout.includes('[PW]'), true);
   };
   try {
-    // ── the longest socket in a run dir: a run dir one byte past it is refused, by name ──
-    // On Linux that socket is Chromium's singleton socket, 45 bytes past the run dir
-    // (driver.mjs); on macOS the driver's own. A run dir AT the limit must start, or the
-    // refusal is too strict; one byte past it must be refused before Chromium is reached,
-    // which otherwise dies on it (FATAL "Socket path too long") with nothing naming the
-    // run dir.
-    const limit = darwin ? 103 - Buffer.byteLength('/driver.sock') : 107 - Buffer.byteLength('/org.chromium.Chromium.XXXXXX/SingletonSocket');
+    // ── a run dir and the sockets inside it ──
+    // The driver's own socket must fit (107 bytes on Linux, 103 on macOS): one byte past
+    // that, the start is refused by name before anything is made. On Linux the run dir is
+    // also the browser's TMPDIR when Chromium's singleton socket, 45 bytes past it, fits
+    // there too (driver.mjs); when it does not, the start goes on with the browser's
+    // TMPDIR left as the driver's own, saying so in one line of its log. Chromium dies on
+    // a socket path it cannot bind (FATAL "Socket path too long"), so that boundary is
+    // pinned from both sides.
     const sized = n => join(T, 'L'.repeat(n - Buffer.byteLength(T) - 1));
-    const s0 = await run('sipt-len', sized(limit), ['start', '--config', CONFIG]);
-    ok(`a run dir of ${limit} bytes, at the limit: start exits 0`, s0.status, 0);
-    if (s0.status === 0) await quitAndWait('sipt-len', sized(limit), s0.json?.pid);
-    const past = await run('sipt-len', sized(limit + 1), ['start', '--config', CONFIG]);
-    ok(`a run dir of ${limit + 1} bytes: start exits 2, naming the socket that would not fit`,
-       `${past.status}:${(darwin ? /its socket path is 104 bytes/ : /Chromium's singleton socket inside it is 108 bytes/).test(past.stderr)}`, '2:true');
-    ok('...and no run dir was made', existsSync(sized(limit + 1)), false);
+    const readLog = agent => { try { return readFileSync(join(T, `${agent}.log`), 'utf8'); } catch { return ''; } };
+    const chromeDirs = d => { try { return readdirSync(d).filter(n => n.startsWith('org.chromium.Chromium.')).length; } catch { return 0; } };
+    const sockLimit = (darwin ? 103 : 107) - Buffer.byteLength('/driver.sock');
+    const past = await run('sipt-len', sized(sockLimit + 1), ['start', '--config', CONFIG]);
+    ok(`a run dir of ${sockLimit + 1} bytes: start exits 2, naming the driver's socket that would not fit`,
+       `${past.status}:${new RegExp(`its socket path is ${sockLimit + 13} bytes`).test(past.stderr)}`, '2:true');
+    ok('...and no run dir was made', existsSync(sized(sockLimit + 1)), false);
     // One that was not refused is quit, so nothing of it is counted by the checks below.
-    if (past.status === 0) await quitAndWait('sipt-len', sized(limit + 1), past.json?.pid);
+    if (past.status === 0) await quitAndWait('sipt-len', sized(sockLimit + 1), past.json?.pid);
+    if (darwin) {
+      const s0 = await run('sipt-fit', sized(sockLimit), ['start', '--config', CONFIG]);
+      ok(`a run dir of ${sockLimit} bytes, at the limit: start exits 0`, s0.status, 0);
+      if (s0.status === 0) await quitAndWait('sipt-fit', sized(sockLimit), s0.json?.pid);
+    } else {
+      const fallbackLine = /too long to hold Chromium's singleton socket/;
+      const chromeLimit = 107 - Buffer.byteLength('/org.chromium.Chromium.XXXXXX/SingletonSocket');
+      const fit = sized(chromeLimit), long = sized(chromeLimit + 1);
+      const sf = await run('sipt-fit', fit, ['start', '--config', CONFIG]);
+      ok(`a run dir of ${chromeLimit} bytes: start exits 0, with Chromium's singleton dir inside it and none in P`, `${sf.status}:${chromeDirs(fit)}:${chromeDirs(P)}`, '0:1:0');
+      ok('...and no fallback line in its log', fallbackLine.test(readLog('sipt-fit')), false);
+      if (sf.status === 0) await quitAndWait('sipt-fit', fit, sf.json?.pid);
+      const sl = await run('sipt-long', long, ['start', '--config', CONFIG]);
+      ok(`a run dir of ${chromeLimit + 1} bytes, too long for Chromium's socket to fit in: start still exits 0`, sl.status, 0);
+      ok("...with Chromium's singleton dir in the TMPDIR the driver was given (P), not in the run dir", `${chromeDirs(long)}:${chromeDirs(P)}`, '0:1');
+      ok('...saying so in exactly one line of its log', readLog('sipt-long').split('\n').filter(l => fallbackLine.test(l)).length, 1);
+      if (sl.status === 0) await quitAndWait('sipt-long', long, sl.json?.pid);
+    }
 
     // ── the throwaway mode, unchanged ──
     const ra = join(T, 'ra');
-    let s = await run('sipt-a', ra, ['start', '--config', CONFIG]);
+    // What bash reads before it runs xvfb-run - a BASH_ENV file, an exported function -
+    // is kept out of the launch (signin.mjs, launchDriver). Both are planted here, each
+    // writing to a tripwire when bash takes it up, and shown first to work on a bash of
+    // this host, so the tripwire staying empty under the driver means something.
+    const trip = join(T, 'bash-trip.txt');
+    writeFileSync(join(T, 'bash-env.sh'), `echo BASH_ENV >> '${trip}'\n`);
+    const bashTraps = { BASH_ENV: join(T, 'bash-env.sh'), 'BASH_FUNC_mktemp%%': `() { echo BASH_FUNC >> '${trip}'; command mktemp "$@"; }` };
+    const viaXvfb = !darwin && !childEnv.DISPLAY;
+    if (viaXvfb) {
+      spawnSync('bash', ['-c', 'mktemp -u > /dev/null'], { env: { ...process.env, ...bashTraps } });
+      control('a bash here takes up both a BASH_ENV file and an exported function (so the tripwire staying empty below means something)',
+              existsSync(trip) ? readFileSync(trip, 'utf8').trim().split('\n').sort().join(',') : '', 'BASH_ENV,BASH_FUNC');
+      rmSync(trip, { force: true });
+    }
+    let s = await run('sipt-a', ra, ['start', '--config', CONFIG], { env: { ...env, ...bashTraps } });
     ok('throwaway start: exit 0', s.status, 0);
+    if (viaXvfb) ok("throwaway start: xvfb-run's bash took up neither the BASH_ENV file nor the exported function", existsSync(trip) ? readFileSync(trip, 'utf8').trim() : '', '');
     ok('throwaway start: the reply carries exactly the keys it always has', Object.keys(s.json || {}).join(','), 'ok,started,pid,sock,run_dir,log,xvfb');
     ok('throwaway start: its profile is inside the run dir', existsSync(join(ra, 'profile')), true);
     ok('throwaway start: no profiles dir is made', existsSync(PROFILES), false);

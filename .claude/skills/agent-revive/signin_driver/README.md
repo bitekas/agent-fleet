@@ -181,8 +181,12 @@ code file, and with `--app-window` the display record and any share's state, log
 password - and it is removed when the driver quits or is signalled, in both modes.
 On Linux it is also the browser's temp dir: Playwright's artifacts dir and Chromium's
 singleton socket dir are made inside it, so what an unclean end leaves of them goes
-with it. Chromium's socket sits 45 bytes past the run dir, so there the driver
-refuses a run dir longer than 62 bytes.
+with it. Chromium's socket sits 45 bytes past the run dir and must fit in 107 bytes,
+so this holds for a run dir of up to 62 bytes. A longer one still starts, with the
+browser's temp dir left as the driver's own and one line in the log saying so - and
+there a crash, a signal to the driver's process group or a SIGKILL leaves Chromium's
+`org.chromium.Chromium.*` and Playwright's `playwright-artifacts-*` in the system temp
+dir, one each per such end.
 The **profile** is the difference between them:
 
 | | throwaway (no `--profile`) | stored (`--profile <username>`) |
@@ -242,7 +246,9 @@ end to end, the throwaway mode's replies key for key, and no pool password on an
 output or driver log, nor in any file of the profile it was typed into. Every client
 it starts, and so every driver, `xvfb-run` and browser, gets a TMPDIR of its own,
 which must be empty at the end; on Linux Playwright's and Chromium's temp dirs must be
-inside the run dir. A host without half B's needs gets exit **3 NO VERDICT**, never
+inside the run dir, and a run dir one byte too long for Chromium's socket must still
+start, saying so in one log line. A missing `xvfb-run` or `bash` must be named, not
+crash the client. A host without half B's needs gets exit **3 NO VERDICT**, never
 a pass.
 
 `share.test.mjs` guards the share, with a FAKE `tailscale`

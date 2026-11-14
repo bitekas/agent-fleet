@@ -370,7 +370,8 @@ try {
   const notHere = [!existsSync(join(HERE, 'node_modules', 'playwright-extra')) && 'no node_modules in signin_driver (npm ci there)',
     !haveChromium && `no chromium under ${browsers}`, ...['xvfb-run', 'x11vnc', 'websockify'].filter(b => !has(b)).map(b => `no ${b}`),
     // The longest unix socket a driver makes is Chromium's singleton socket inside its
-    // run dir (driver.mjs refuses a run dir it does not fit in).
+    // run dir; a run dir it does not fit in keeps the browser's temp dirs out of it
+    // (driver.mjs), which the checks of where they are cannot then read.
     !desWorks() && 'no DES', Buffer.byteLength(join(T, 'rb', 'org.chromium.Chromium.XXXXXX', 'SingletonSocket')) > 107 && "TMPDIR is too long for Chromium's singleton socket in a run dir"].filter(Boolean);
   if (notHere.length) inconclusive.push(`half B did not run: ${notHere.join('; ')}`);
   else {
@@ -397,7 +398,7 @@ try {
   ok('nothing a driver, xvfb-run or browser of half B made is left in the TMPDIR they were given - after a quit, a SIGTERM and a SIGKILL', readdirSync(P).join(', '), '');
   try { rmSync(P, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch (e) { console.log(`note: could not remove ${P}: ${e.message}`); }
   try { rmSync(T, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch (e) { console.log(`note: could not remove ${T}: ${e.message}`); }
-  ok('this run leaves nothing in its TMPDIR: T and P, the temp dirs everything it ran was given, are gone', existsSync(T) || existsSync(P), false);
+  ok("this run's own temp dirs, T and P, are removed (no process of the run still writes into them)", existsSync(T) || existsSync(P), false);
 }
 
 async function halfB(browsers) {
