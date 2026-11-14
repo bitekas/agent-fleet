@@ -1,0 +1,177 @@
+{
+ "comments": [
+  {
+   "id": "1000000008",
+   "uuid": "00000000-0000-4000-8000-001000000008",
+   "file_key": "EXAMPLEFILEKEY000",
+   "parent_id": "1000009999",
+   "user": {
+    "id": "100000000000000002",
+    "handle": "Grace",
+    "img_url": "https://example.com/grace.png"
+   },
+   "created_at": "2026-01-17T08:00:00.000Z",
+   "resolved_at": null,
+   "message": "A reply whose thread is gone.",
+   "reactions": [],
+   "client_meta": null,
+   "order_id": null
+  },
+  {
+   "id": "1000000007",
+   "uuid": "00000000-0000-4000-8000-001000000007",
+   "file_key": "EXAMPLEFILEKEY000",
+   "parent_id": "",
+   "user": {
+    "id": "100000000000000003",
+    "handle": "Alan",
+    "img_url": "https://example.com/alan.png"
+   },
+   "created_at": "2026-01-16T16:20:00.000Z",
+   "resolved_at": null,
+   "message": "Loose note on the canvas.",
+   "reactions": [],
+   "client_meta": {
+    "x": 100,
+    "y": 200
+   },
+   "order_id": "5"
+  },
+  {
+   "id": "1000000006",
+   "uuid": "00000000-0000-4000-8000-001000000006",
+   "file_key": "EXAMPLEFILEKEY000",
+   "parent_id": "",
+   "user": {
+    "id": "100000000000000001",
+    "handle": "Ada",
+    "img_url": "https://example.com/ada.png"
+   },
+   "created_at": "2026-01-15T11:00:00.000Z",
+   "resolved_at": null,
+   "message": "This frame was removed later.",
+   "reactions": [],
+   "client_meta": {
+    "node_id": "7:8",
+    "node_offset": {
+     "x": 4,
+     "y": 4
+    },
+    "stable_path": [
+     "7:8"
+    ]
+   },
+   "order_id": "4"
+  },
+  {
+   "id": "1000000005",
+   "uuid": null,
+   "file_key": "EXAMPLEFILEKEY000",
+   "parent_id": "",
+   "user": {
+    "id": "100000000000000002",
+    "handle": "Grace",
+    "img_url": "https://example.com/grace.png"
+   },
+   "created_at": "2026-01-14T14:45:10.250Z",
+   "resolved_at": null,
+   "message": "Avatar crop looks off.",
+   "reactions": [],
+   "client_meta": {
+    "node_id": "5:6",
+    "node_offset": {
+     "x": 12,
+     "y": 8
+    },
+    "stable_path": null
+   },
+   "order_id": "3"
+  },
+  {
+   "id": "1000000004",
+   "uuid": "00000000-0000-4000-8000-001000000004",
+   "file_key": "EXAMPLEFILEKEY000",
+   "parent_id": "",
+   "user": {
+    "id": "100000000000000003",
+    "handle": "Alan",
+    "img_url": "https://example.com/alan.png"
+   },
+   "created_at": "2026-01-12T12:00:00.000Z",
+   "resolved_at": "2026-01-13T09:30:00.000Z",
+   "message": "Spacing fixed?",
+   "reactions": [],
+   "client_meta": {
+    "node_id": "3:4",
+    "node_offset": {
+     "x": 50,
+     "y": 60
+    },
+    "stable_path": [
+     "3:4"
+    ]
+   },
+   "order_id": "2"
+  },
+  {
+   "id": "1000000003",
+   "uuid": "00000000-0000-4000-8000-001000000003",
+   "file_key": "EXAMPLEFILEKEY000",
+   "parent_id": "1000000001",
+   "user": {
+    "id": "100000000000000001",
+    "handle": "Ada",
+    "img_url": "https://example.com/ada.png"
+   },
+   "created_at": "2026-01-11T08:00:00.000Z",
+   "resolved_at": null,
+   "message": "Agreed.\nMoving the button up.",
+   "reactions": [],
+   "client_meta": null,
+   "order_id": null
+  },
+  {
+   "id": "1000000002",
+   "uuid": "00000000-0000-4000-8000-001000000002",
+   "file_key": "EXAMPLEFILEKEY000",
+   "parent_id": "1000000001",
+   "user": {
+    "id": "100000000000000002",
+    "handle": "Grace",
+    "img_url": "https://example.com/grace.png"
+   },
+   "created_at": "2026-01-10T10:00:00.000Z",
+   "resolved_at": null,
+   "message": "Which button?",
+   "reactions": [],
+   "client_meta": null,
+   "order_id": null
+  },
+  {
+   "id": "1000000001",
+   "uuid": "00000000-0000-4000-8000-001000000001",
+   "file_key": "EXAMPLEFILEKEY000",
+   "parent_id": "",
+   "user": {
+    "id": "100000000000000001",
+    "handle": "Ada",
+    "img_url": "https://example.com/ada.png"
+   },
+   "created_at": "2026-01-10T09:00:00.000Z",
+   "resolved_at": null,
+   "message": "The primary button sits too low.",
+   "reactions": [],
+   "client_meta": {
+    "node_id": "1:2",
+    "node_offset": {
+     "x": 120.5,
+     "y": 40
+    },
+    "stable_path": [
+     "1:2"
+    ]
+   },
+   "order_id": "1"
+  }
+ ]
+}

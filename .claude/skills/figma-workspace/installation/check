@@ -1,0 +1,199 @@
+#!/usr/bin/env python3
+"""[" -f "${BASH_SOURCE:-$0}" ] || { echo "a Python script: run it with python3" >&2; exit 126; }; exec python3 "${BASH_SOURCE:-$0}" "$@" || exit # sh/bash: hand off to python3 before reading the docstring
+Is the figma-workspace skill installed, and is it current?
+
+Prints ONE line and exits:
+
+    0  installed, current      -> proceed
+    1  installed, but stale    -> re-run INSTRUCTION.md, then re-check
+                                  (also: a leg this script cannot measure; the
+                                  line says which, and it is not a pass)
+    2  not installed           -> follow INSTRUCTION.md
+
+It verifies REAL ARTIFACTS, never a marker file: config.json loads through the
+helper's own loader (the same refusals the helper makes, from the same code),
+each configured token file is OPENED through the helper's own reader (mode 600,
+non-empty) and holds a personal access token's prefix, the MCP connector is in
+the client's own connection record when config names one, and with --online the
+read token is used for real: one GET of each configured file's comments.
+
+Only then the recorded version: installation/.install-state.json in the install
+context, one entry per host, compared against SKILL.md's `version`.
+
+THREE LOAD-BEARING PROPERTIES
+
+1. THE MCP LEG SAYS "EVER CONNECTED", NEVER "CONNECTED NOW". A hosted connector
+   is an account-level OAuth grant with no artifact on disk; the client's
+   connection record is the closest evidence. Record present and naming the
+   connector: proven ever connected. Record present and not naming it: not
+   installed. Record without the list at all: NO VERDICT (exit 1), because the
+   client's format moved and absence means nothing. Which ACCOUNT, and which
+   seat, the connector acts as is visible only in-session, through the
+   connector's whoami tool.
+2. THE WRITE TOKEN'S SCOPE IS NOT MEASURED. No read-only call proves a write
+   scope; only a post would, and a check never posts. The line says so.
+3. THE EXIT CODE IS LOSSY; THE PRINTED LINE IS THE VERDICT.
+
+Environment, so the three states can be tested without a real install:
+    FIGMA_WORKSPACE_CONFIG       an alternate config.json (the helper reads it too)
+    FIGMA_SKILL_INSTALL_STATE    an alternate .install-state.json
+With both set, no install context is consulted.
+
+Modes:
+    check            offline: config, token files, MCP record, version
+    check --online   the above, plus one comments read per configured file
+"""
+import importlib.util
+import json
+import os
+import re
+import socket
+import sys
+
+# realpath, never abspath: reached through an agent's skill link.
+HERE = os.path.dirname(os.path.realpath(__file__))
+SKILL = os.path.dirname(HERE)
+sys.dont_write_bytecode = True  # the fleet tree is read-only on a host; write nothing into it
+_spec = importlib.util.spec_from_file_location("figma_comments", os.path.join(SKILL, "figma_comments.py"))
+fc = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(fc)
+
+# A Figma personal access token's prefix (measured 2026-11-14). A vendor format,
+# so mechanism. The length is not asserted: pinning a vendor's length is how a
+# check reds on the day the vendor changes it.
+PAT_PREFIX = "figd_"
+
+
+def out(code, msg):
+    print(msg)
+    sys.exit(code)
+
+
+def declared_version():
+    with open(os.path.join(SKILL, "SKILL.md"), encoding="utf-8") as f:
+        m = re.search(r"^version:\s*(\d+)\s*$", f.read(4096), re.M)
+    return int(m.group(1)) if m else 0
+
+
+def specific_files():
+    config = os.environ.get("FIGMA_WORKSPACE_CONFIG")
+    state = os.environ.get("FIGMA_SKILL_INSTALL_STATE")
+    if not (config and state):
+        try:
+            ctx = fc._paths.skill_context(fc.SKILL)
+        except Exception as e:  # noqa: BLE001
+            out(2, f"NOT INSTALLED: this skill's install context is not resolvable ({e})")
+        config = config or str(ctx / "config.json")
+        state = state or str(ctx / "installation" / ".install-state.json")
+    return config, state
+
+
+def token_leg(cfg, role):
+    """A one-line note for ROLE's token, or exit 2. Read with the helper's own reader."""
+    if fc.token_path(cfg, role) is None:
+        return None
+    try:
+        value = fc.read_token(cfg, role)
+    except fc.CredentialError as e:
+        out(2, f"NOT INSTALLED: {e}")
+    if not value.startswith(PAT_PREFIX):
+        out(2, f"NOT INSTALLED: the {role} token at {fc.token_path(cfg, role)} does not hold a "
+               f"Figma personal access token (no {PAT_PREFIX!r} prefix)")
+    return f"{role} token resolved (mode 600)"
+
+
+def mcp_leg(name):
+    """(state, message): PROVEN, ABSENT or NO_VERDICT. See property 1."""
+    cfg_dir = os.path.expanduser(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude"))
+    record = os.path.join(cfg_dir, ".claude.json")
+    try:
+        with open(record, encoding="utf-8") as f:
+            doc = json.load(f)
+    except FileNotFoundError:
+        return "NO_VERDICT", f"no client connection record at {record}"
+    except (OSError, ValueError) as e:
+        return "NO_VERDICT", f"the client connection record {record} cannot be read ({type(e).__name__})"
+    ever = doc.get("claudeAiMcpEverConnected") if isinstance(doc, dict) else None
+    if not isinstance(ever, list):
+        return "NO_VERDICT", (f"{record} carries no claudeAiMcpEverConnected list; the client's "
+                              f"record format has probably changed")
+    if name in ever:
+        return "PROVEN", f"connector {name!r} was connected under {cfg_dir} (ever, not necessarily now)"
+    return "ABSENT", f"connector {name!r} has never been connected under {cfg_dir}"
+
+
+def online_leg(cfg):
+    notes = []
+    for f in cfg["files"]:
+        try:
+            n = len(fc.fetch_comments(cfg, f["key"]))
+        except fc.AuthError as e:
+            out(1, f"STALE: the read token was refused for file {f['alias']!r}: {fc.scrub(e)}")
+        except (fc.ApiError, fc.CredentialError) as e:
+            out(1, f"NO VERDICT on the online leg: file {f['alias']!r}: {fc.scrub(e)}")
+        notes.append(f"{f['alias']}: {n} comments")
+    return "read token reads " + ", ".join(notes)
+
+
+def main():
+    argv = sys.argv[1:]
+    if [a for a in argv if a != "--online"]:
+        out(2, "NOT INSTALLED: usage: check [--online]")
+    config, state = specific_files()
+    try:
+        cfg = fc.load_config(config)
+    except fc.ConfigError as e:
+        out(2, f"NOT INSTALLED: {e}")
+    notes = [token_leg(cfg, "read")]
+    for role in ("write", "content"):
+        notes.append(token_leg(cfg, role) or f"no {role} token"
+                     + (" (read-only install)" if role == "write" else ""))
+    if fc.token_path(cfg, "write"):
+        notes.append("write scope not measured (only a post proves it)")
+
+    name = (cfg.get("mcp") or {}).get("connector_name")
+    if name:
+        st, msg = mcp_leg(name)
+        if st == "ABSENT":
+            out(2, f"NOT INSTALLED: {msg}. Connect it, or set mcp.connector_name to null")
+        if st == "NO_VERDICT":
+            out(1, f"NO VERDICT on the MCP leg: {msg}. The token leg checked out; confirm the "
+                   f"connector in-session with its whoami tool")
+        notes.append("MCP: " + msg)
+    else:
+        notes.append("MCP leg not used (mcp.connector_name is null)")
+
+    if "--online" in argv:
+        notes.append(online_leg(cfg))
+    else:
+        notes.append("online leg not run (--online reads each file's comments once)")
+
+    want = declared_version()
+    me = socket.gethostname()
+    try:
+        with open(state, encoding="utf-8") as f:
+            doc = json.load(f)
+    except FileNotFoundError:
+        out(1, f"STALE: installed, but no .install-state.json records it (SKILL.md declares "
+               f"{want}). Do INSTRUCTION.md's record step.")
+    except (OSError, ValueError) as e:
+        out(1, f"STALE: .install-state.json unreadable ({type(e).__name__}: {e})")
+    hosts = doc.get("hosts") if isinstance(doc, dict) else None
+    if not isinstance(hosts, dict) or me not in hosts:
+        where = f" (recorded on: {', '.join(sorted(hosts))})" if isinstance(hosts, dict) and hosts else ""
+        out(1, f"STALE: no install is recorded for this machine ({me}){where}. The state file "
+               f"travels with the install repository; the install does not.")
+    try:
+        have = int(hosts[me].get("version", -1))
+    except (TypeError, ValueError, AttributeError):
+        have = -1
+    if have < want:
+        out(1, f"STALE: installed version {have}, SKILL.md declares {want}. Re-run INSTRUCTION.md.")
+    if have > want:
+        out(1, f"STALE: installed version {have} is NEWER than SKILL.md's {want}: the fleet "
+               f"checkout is behind the install.")
+    out(0, f"OK: installed and current (version {want}); " + "; ".join(notes))
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,56 @@
+{
+  "_comment": [
+    "TEMPLATE. Copy it to config.json in this skill's install context (the",
+    "directory `fleet where figma-workspace` prints) and replace every",
+    "placeholder. A relative path in it resolves against that directory.",
+    "",
+    "Everything install-specific the figma-workspace skill needs: which design",
+    "files, which token does what, and where an agent keeps its cursor. SKILL.md",
+    "names none of it.",
+    "",
+    "This file holds the PATH to each credential, never a credential. A leaked",
+    "config is then embarrassing rather than exploitable.",
+    "",
+    "Every key below must be PRESENT. The ones that may be null say so, and null",
+    "has a meaning for each of them; a missing key is refused by name, never",
+    "defaulted, because a guessed token role would post with a token nobody chose",
+    "for posting.",
+    "",
+    "WHAT IS DELIBERATELY NOT HERE: the API root (https://api.figma.com) and the",
+    "link root (https://www.figma.com). Both are identical for every install, so",
+    "they are mechanism; the tests replace the transport, not the host.",
+    "",
+    "JSON has no comments, so every _comment key is documentation and is ignored",
+    "by the loader. Leave them in your config.json or delete them."
+  ],
+  "files": [
+    {
+      "_comment": "The design files agents read comments on. `alias` is the short name an agent passes as --file; `key` is the file key from the file's URL (figma.com/design/<key>/...; for a branch, the key after /branch/). With exactly one entry, --file may be left out. A file not listed here can still be read by passing its key or URL: the token reaches every file its owner can open, and this list is a convenience, not a fence.",
+      "alias": "main",
+      "key": "EXAMPLEFILEKEY000"
+    }
+  ],
+  "mcp": {
+    "_comment": "The hosted Figma MCP connector (path 1): the name your MCP client records it under. installation/check looks for it in the client's own connection record, which proves only that it was EVER connected. Set it to null when this install does not use path 1; check then skips that leg and says so.",
+    "connector_name": "example.ai Figma"
+  },
+  "tokens": {
+    "_comment": "PATHS to personal access tokens, one token per file, mode 600, each file holding the token and nothing else. Each token acts as the PERSON who generated it, on every file that person can open, and lives at most 90 days. read: scope file_comments:read, REQUIRED. write: scope file_comments:write, or null for a READ-ONLY install - with null every write verb refuses before building a request. content: scope file_content:read, for anchor names, or null. ${VAR:-default}, $VAR and a leading ~ are expanded. Keep them OUTSIDE any checkout.",
+    "read": { "path": "${FLEET_SECRETS_DIR:-$HOME/.fleet-secrets}/figma-comments-read.token" },
+    "write": { "path": null },
+    "content": { "path": null }
+  },
+  "names": {
+    "_comment": "Anchor names: resolving a comment's node id to its frame and page name is a FILE-CONTENT read (scope file_content:read, Figma's Tier 1 budget, which a View or Collab seat gets very little of). token: \"content\" (use tokens.content), \"read\" (the read token also carries file_content:read), or null (no lookup: the link is printed and the name is marked unavailable). cache_hours: how long resolved names are reused from the agent's state directory before they are read again; a renamed frame shows its new name after at most this long, and 0 reads on every run.",
+    "token": null,
+    "cache_hours": 24
+  },
+  "post": {
+    "_comment": "Text put in front of every comment this install posts, unless the message already starts with it, so a reader can tell an agent wrote it: a token posts under its OWNER's name. {agent} is the posting agent's name (its home directory's name) and {Agent} the same capitalised. null posts the message as given.",
+    "prefix": "{Agent} (via Jane's account): "
+  },
+  "state": {
+    "_comment": "Where the cursor (`new`) and the name cache live: per agent, in the agent's own state directory. {home} is the calling agent's home, the parent of CLAUDE_CONFIG_DIR. A path inside a git work tree is refused.",
+    "dir": "{home}/state/figma-workspace"
+  }
+}

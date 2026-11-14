@@ -1,0 +1,22 @@
+{
+  "_comment": [
+    "FIXTURE install config for figma-workspace. Synthetic values only; it is",
+    "what the skill's install context resolves to when FLEET_CONTEXT_ROOT points",
+    "at tests/fixtures/install. The token paths name files no test creates, and",
+    "the second file's alias is a value no test-local config carries, so a test",
+    "that reads it back proves this file was the one read."
+  ],
+  "files": [
+    { "alias": "main", "key": "EXAMPLEFILEKEY000" },
+    { "alias": "fixture-install-library", "key": "EXAMPLEFILEKEY001" }
+  ],
+  "mcp": { "connector_name": "example.ai Figma" },
+  "tokens": {
+    "read": { "path": "/tmp/fleet-fixture-secrets/figma-comments-read.token" },
+    "write": { "path": null },
+    "content": { "path": null }
+  },
+  "names": { "token": null, "cache_hours": 24 },
+  "post": { "prefix": "{Agent} (via Ada's account): " },
+  "state": { "dir": "{home}/state/figma-workspace" }
+}

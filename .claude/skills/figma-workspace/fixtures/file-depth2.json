@@ -1,0 +1,42 @@
+{
+ "name": "Example Design File",
+ "role": "viewer",
+ "editorType": "figma",
+ "version": "1",
+ "document": {
+  "id": "0:0",
+  "name": "Document",
+  "type": "DOCUMENT",
+  "children": [
+   {
+    "id": "0:1",
+    "name": "Screens",
+    "type": "CANVAS",
+    "children": [
+     {
+      "id": "1:2",
+      "name": "Checkout",
+      "type": "FRAME"
+     },
+     {
+      "id": "3:4",
+      "name": "Profile",
+      "type": "FRAME"
+     }
+    ]
+   },
+   {
+    "id": "0:2",
+    "name": "Archive",
+    "type": "CANVAS",
+    "children": [
+     {
+      "id": "9:9",
+      "name": "Old onboarding",
+      "type": "FRAME"
+     }
+    ]
+   }
+  ]
+ }
+}
