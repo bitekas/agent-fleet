@@ -7,7 +7,7 @@
     "Each group, under its name: skills, the fleet skills it adds to the install manifest's `skills`",
     "(each a .claude/skills/<name>/SKILL.md in this tree); conventions, the conventions keys",
     "(CONVENTIONS.md) its skills fill, each value in the manifest's {\"skill\": \"<name>\"} form, naming",
-    "one of the group's skills.",
+    "one of the group's skills, with an optional \"section\" as CONVENTIONS.md allows.",
     "",
     "Taking a group is a manifest edit and nothing else: add every name in its `skills` to the",
     "manifest's `skills`, and set the conventions keys it fills to its values, or to the install's own",
@@ -31,7 +31,7 @@
     ],
     "conventions": {
       "definition_of_done": { "skill": "definition-of-done" },
-      "branch_naming": { "skill": "worktree-workflow" },
+      "branch_naming": { "skill": "worktree-workflow", "section": "1.1" },
       "workspace": { "skill": "worktree-workflow" },
       "release": { "skill": "release" },
       "environments": { "skill": "repo-and-environments" }

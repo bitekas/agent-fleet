@@ -596,7 +596,9 @@ class SkillGroupsTest(unittest.TestCase):
             for k, v in d["conventions"].items():
                 with self.subTest(group=g, key=k):
                     self.assertIn(k, manifest.CONVENTION_KEYS)
-                    self.assertEqual(sorted(v), ["skill"], 'not {"skill": <name>}')
+                    # the section's own form is validate()'s, which the path-check case runs
+                    self.assertIn("skill", v, 'not {"skill": <name>}')
+                    self.assertLessEqual(set(v), {"skill", "section"}, 'not {"skill": <name>, "section": ...}')
                     self.assertIn(v["skill"], d["skills"], "names a skill outside the group")
 
     def test_a_manifest_taking_the_group_passes_the_path_check(self):
