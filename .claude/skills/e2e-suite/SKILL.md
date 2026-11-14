@@ -602,9 +602,9 @@ The install's `CONTEXT.md` carries the measured
 plateau.
 
 Triage: an explicit per-invocation worker flag beats the environment default,
-so reproduce a suspected parallelism flake serially at one worker. Per
-`/definition-of-done` Rule 4, a failure caused BY parallel execution is a
-harness bug to fix, not a reason to serialize the suite or retry until green.
+so reproduce a suspected parallelism flake serially at one worker. A failure
+caused BY parallel execution is a defect to fix - in the spec (section 3.3) or
+in the harness - never a reason to serialize the suite or retry until green.
 
 ## 6. Run artifacts: one shared location, readable by every agent
 
@@ -812,7 +812,7 @@ Three things generalise beyond any one harness:
   project and the one it does not match fails the whole run on a bare
   `No tests found`.
 
-### 10.1 The folklore, which was worse than the bug
+### 10.1 A measurement written up as a universal claim outlives the fix
 
 A careful, correct measurement taken on one unusual input and written up as a
 universal claim ("this runner cannot scope a run") becomes folklore that
