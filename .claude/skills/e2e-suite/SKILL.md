@@ -50,7 +50,7 @@ context (`fleet where e2e-suite config.json` prints its path), written as
 - the serial phase's shared documents, the import chains a spec must not
   reach, the scoping probe, the fast-iteration commands, and whether the device
   harness is wired into CI;
-- the measured instance behind each rule below.
+- the measured instance behind a rule, where the install has one.
 
 Keeping the harness at `e2e.specs_dir` green **and its coverage current** is
 part of the definition of done for any change it touches (`/definition-of-done`
@@ -127,7 +127,7 @@ phantom bug in **its own** work, because **the failure text names the spec and
 never the commit that invalidated it**. Each of those agents pays the full
 diagnostic cost of a bug that is not theirs, and the honest ones pay it twice:
 once to find that the spec is stale, and once to establish that their own
-change did not cause it. (The install's `CONTEXT.md` carries the measured
+change did not cause it. (The install's `CONTEXT.md` carries any measured
 instance.)
 
 **The same-commit part is the whole rule.** A follow-up commit is not a smaller
@@ -171,7 +171,7 @@ tree you most need it to fail on.
 mechanism is gone, the spec is REWRITTEN or RETIRED, never reshaped.** A
 mechanical retarget that preserves an assertion's SHAPE after the thing that
 satisfied it has been deleted produces a spec **no correct build can pass**: it
-fails, and it reads as a regression. (The install's `CONTEXT.md` carries the
+fails, and it reads as a regression. (The install's `CONTEXT.md` carries any
 measured instance.)
 
 **This is the vacuous green's mirror image, and both read as diligence.** One
@@ -219,11 +219,12 @@ carries the invocations.
 **The dev server can serve a STALE BUNDLE to some parallel workers on the first
 run after a source edit, so one run reports a mix of the old code and the new
 one, with no error, no warning, and a perfectly ordinary-looking pass/fail
-line.** Measured on more than one spec (the install's `CONTEXT.md` carries the
-instances): disabling a fix and running immediately reported fewer failures
-than the truth; re-running with *nothing else changed* gave the true count.
-Only one worker had picked up the changed bundle; the others were served the
-previous one.
+line.** Measured 2026-08-18 and reproduced on a second spec, a Metro dev
+server serving the web bundle to parallel Playwright workers: disabling a fix
+and running immediately reported fewer failures than the truth, and re-running
+with *nothing else changed* gave the true count. One worker had picked up the
+changed bundle; the others were served the previous one. (The install's
+`CONTEXT.md` carries any measured instance.)
 
 **So: after any app-source edit, run the affected specs TWICE and believe the
 SECOND.** It costs one extra scoped run (seconds against a warm stack), and it
@@ -312,8 +313,8 @@ of them is acceptable, the spec has just found a PRODUCT defect.** Report it.
 Encoding the acceptable arm as the expectation hides the other one behind a
 green, which is how a race becomes permanent.
 
-Note this is usually discovered from a run you did not launch - the scheduled
-gate, or a full run a work order asked for explicitly. The local budget below
+Note this is usually discovered from a run you did not launch - a CI run, or a
+full run a work order asked for explicitly. The local budget below
 is unchanged; the point is how to read such a red when it arrives, not a
 licence to go looking for one.
 
@@ -332,17 +333,18 @@ check", and you do not re-run it because the tree moved.
 **Where the whole suite runs is the install's CI design, and the trade you
 accept depends on it.** The install's `CONTEXT.md` says which it is;
 `/repo-and-environments` section 3.2 says what a push triggers. When the whole
-suite runs in a SCHEDULED gate rather than per push, the cost model is a day
-wide, not a build wide: a regression is caught within the schedule's period,
-on the default branch only, and a feature branch is gated by nothing at all
-until it lands, unless the quality workflow is dispatched on its ref. **The
-local budget is still zero**; what changes is how wide the trade is that you
-accept when you follow it.
+suite runs in a SCHEDULED gate rather than per push, the trade is as wide as
+the schedule's period, not a build wide: a regression is caught within that
+period, only on the branch the schedule runs (on GitHub Actions, whose
+`schedule:` trigger always runs the default branch, that branch alone), and a
+feature branch is gated by nothing until it lands unless it is gated on demand
+(the install's `CONTEXT.md` says how). **The local budget is still zero**;
+what changes is how wide the trade is that you accept when you follow it.
 
 **Why zero.** A fleet of agents in parallel worktrees, each running the whole
 suite a few times "just to check", multiplies into many hours of compute a day
-re-proving the same tree (the install's `CONTEXT.md` carries the measured
-day). It is also self-harming: a suite with wall-clock instruments is
+re-proving the same tree (the install's `CONTEXT.md` carries any measured
+instance). It is also self-harming: a suite with wall-clock instruments is
 load-intermittent under concurrent stacks, and native release builds compete
 for the same memory. **The runs manufacture the flakes that then justify more
 runs.**
@@ -372,7 +374,7 @@ set is a measurement; "it's only comments" is not.
 **"Trivial" and "small" are not the same word.** A **one-line** guard can be
 the entire fix for a defect that silently disabled a whole feature, and a
 **single clause** in one predicate can decide a user-visible outcome (the
-install's `CONTEXT.md` carries the instances). Both are tiny; neither is
+install's `CONTEXT.md` carries any measured instance). Both are tiny; neither is
 trivial. **Ask what the change can reach first, and let size decide only once
 the answer is "nothing".**
 
@@ -416,7 +418,9 @@ kill anything.**
 - **A run RE-MEASURING AN INSTRUMENT FAULT** (section 4). After the tests have
   finished, it re-runs the faulted spec files before the verdict line prints,
   and it announces that with its own line. A run that has printed it is
-  measuring, not wedged.
+  measuring, not wedged - and its ETA clock restarts at that line, sized for
+  the faulted files at `e2e.instrument_fault.remeasure_workers` worker(s), so a
+  re-measurement that wedges is still caught.
 
 Historical minute figures age badly: they were taken at a worker count and on
 hardware that have both moved. Re-measure rather than trusting the number, and
@@ -560,8 +564,8 @@ any parallel spec that reads it.
 What makes a spec safe to overlap, in the order you should reach for it when
 writing a new one:
 1. **A fresh browser context per test.** Where the app gives every new visitor
-   its own anonymous identity, that is a private data subtree. Most specs need
-   nothing more.
+   its own anonymous identity, that is a private data subtree, and most specs
+   need nothing more.
 2. **A fresh signed-in account per test**, from the harness's own account
    fixture. Never sign a parallel spec in as a shared fixed account. A per-test
    account also means you never need a "wipe leftovers for a clean slate"
@@ -593,8 +597,8 @@ monotonically with worker count, so workers past the plateau load it harder for
 no wall-clock gain, and CPU is not the constraint. **Past the plateau, one
 machine has one run's worth of capacity**: shards in separate worktrees on the
 same machine queue on the machine-wide lock (section 7.1) rather than overlap,
-so they cost the sum of their runs. Take the wall-clock, run fewer specs, or
-run on another machine. The install's `CONTEXT.md` carries the measured
+so they cost the sum of their runs. Take the wall-clock, or run fewer specs.
+The install's `CONTEXT.md` carries the measured
 plateau.
 
 Triage: an explicit per-invocation worker flag beats the environment default,
@@ -657,10 +661,11 @@ its seeding done for it. **It takes over and tears down THIS worktree's stack
 only**, so it never touches a neighbour's. What protects that neighbour must be
 the dev script's per-PROCESS ownership check (a process belongs to the worktree
 it runs in), **not** port separation: the reset runs before a port slot is
-claimed, so a dev script that tears down by PORT kills whichever stack holds
-the default ports, on every run. Every port is derived from the worktree's slot
-artifact (`e2e.ports.slot_artifact`), never from a literal. The install's
-`CONTEXT.md` carries the phases, the flags and the port map.
+claimed, so a checkout whose dev script still tears down by PORT kills
+whichever stack holds the default ports, on every run. Every port is derived
+from the worktree's slot artifact (`e2e.ports.slot_artifact`), never from a
+literal. The install's `CONTEXT.md` carries the phases, the flags and the port
+map.
 
 ### 7.1 ONE RUN PER MACHINE: NOT COLLIDING IS NOT THE SAME AS NOT CONTENDING
 
@@ -701,9 +706,11 @@ design, and each is a failure mode somebody would otherwise re-discover:
   long as it lives, so every call site that spawns a surviving daemon must
   close that descriptor. The dev stack backgrounds its emulators and server,
   and a reuse-mode run deliberately leaves them up - miss the close, and one
-  run owns the box until somebody tears that stack down by hand. (macOS ships
-  no `flock` command; a runner meant for both systems takes the lock through a
-  language runtime's binding, such as Python's `fcntl.flock`.)
+  run owns the box until somebody tears that stack down by hand. (macOS has
+  flock(2) and ships no `flock` command; a runner meant for both systems takes
+  the lock through a language runtime's binding, such as Python's
+  `fcntl.flock`. The `shlock` command macOS does ship writes a claim file, the
+  class this design rules out, so it is no substitute. Not measured here.)
 - **There is no escape hatch that simply disables it.** Such a flag gets
   reached for exactly when the box is busiest, which is the moment it must not
   be. The one sanctioned way to run beside somebody (`e2e.lock.share_flag`)
@@ -717,8 +724,8 @@ behind a full run is a preview nobody uses.
 
 **The lock is only as strong as the OLDEST checkout on the box.** A worktree
 cut before the lock landed runs lockless and starves a lock-holding run, with
-nothing to say so. Same shape as the port-sweeping dev script above, and the
-same remedy: pull, or grep the runner for the lock library
+nothing to say so. Same shape as the port-sweeping dev script in section 7, and
+the same remedy: pull, or grep the runner for the lock library
 (`e2e.lock.library`) - no match means that checkout is lockless.
 
 **A queued run is NOT a runaway run**, and the ~2x-ETA rule (section 3.5) must
@@ -774,7 +781,8 @@ probe whose first check is a positive control can detect it; the install's
 Three things generalise beyond any one harness:
 
 - **A dependency between test projects is not free.** Playwright runs a
-  dependency project **IN FULL, ignoring your filter** (measured 2026-08-19), so
+  dependency project **IN FULL, ignoring your filter** (measured 2026-08-19; the
+  Playwright version was not recorded, so re-measure on a new major), so
   a filter that happens to match a test in the dependent project silently widens
   to everything - and it SKIPS the dependent wholesale when a dependency test
   fails (section 5). Reproducing the ordering one level up (run the projects as
@@ -796,10 +804,13 @@ Three things generalise beyond any one harness:
   *your filter matched no test*, and the second reads as the first, which sends
   the reader debugging code that is fine. **And `-g` is a REGEX, not a
   substring**, so a title carrying `(`, `[`, `+`, `?` or `.` matches something
-  other than what was typed. **Read the run's own test COUNT before you read
-  its exit code**, every time. This is also why the runner infers the suite
-  from a spec path: without that, a filter runs against every project and the
-  one it does not match fails the whole run on a bare `No tests found`.
+  other than what was typed. (Both are documented Playwright CLI behaviour:
+  `--grep` takes a regular expression, and a run that finds no test fails
+  unless `--pass-with-no-tests` is passed.) **Read the run's own test COUNT
+  before you read its exit code**, every time. This is also why the runner
+  infers the suite from a spec path: without that, a filter runs against every
+  project and the one it does not match fails the whole run on a bare
+  `No tests found`.
 
 ### 10.1 The folklore, which was worse than the bug
 

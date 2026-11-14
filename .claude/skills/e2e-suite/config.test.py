@@ -21,7 +21,9 @@ holds them to one key set:
      agrees with every example), and each comparison must go red on a planted
      fault - a citation of a missing key, an install short a required key, an
      install with an unknown key, an install without a required block, a partial
-     optional block - and stay green on an optional block left out whole. A
+     optional block, a cited key with a digit or an uppercase letter in a
+     segment (scanned, so checked, never skipped) - and stay green on an
+     optional block left out whole. A
      control that does not behave issues NO VERDICT, never a pass.
 
 To check an install other than the fixture, point fleetlib at it:
@@ -44,7 +46,7 @@ sys.path.insert(0, str(FLEET_ROOT / "lib"))
 from fleetlib import FleetError, paths  # noqa: E402
 
 SKILL = "e2e-suite"
-CITATION = re.compile(r"`((?:e2e|app|checks)(?:\.[a-z_]+)+)`")
+CITATION = re.compile(r"`((?:e2e|app|checks)(?:\.[A-Za-z0-9_]+)+)`")
 KNOWN_CITED = ("e2e.runner", "e2e.lock.library", "app.navigation_calls", "checks.commands")
 
 
@@ -111,11 +113,17 @@ def controls():
     found = citations("A `e2e.runner` and `e2e.lock.library`, a path `e2e/`, a word e2e.x.")
     if found != ["e2e.lock.library", "e2e.runner"]:
         raise NoVerdict(f"the citation scan read {found} from a fixed sentence")
+    # A segment with a digit or an uppercase letter is still a citation: a
+    # narrower class would skip it, and a skipped citation is never checked.
+    odd = citations("See `e2e.lock.v2_dir` and `e2e.Lock.dir`.")
+    if odd != ["e2e.Lock.dir", "e2e.lock.v2_dir"]:
+        raise NoVerdict(f"the citation scan skipped a digit or uppercase segment: read {odd}")
     example = {"a": {"b": 1, "c": [1, 2]}, "opt": {"_optional": True, "x": 1, "y": 2},
                "req": {"z": None}}
     leaves, _ = keyset(example)
     planted = {
         "citation of a missing key": (unresolved(["a.b", "a", "opt.x", "a.nope"], leaves), ["a.nope"]),
+        "digit or uppercase citation is checked": (unresolved(["a.B", "a.b2"], leaves), ["a.B", "a.b2"]),
         "install short a required key": (compare(example, {"a": {"b": 1}, "req": {"z": 0}}),
                                          ["install config misses `a.c`"]),
         "install with an unknown key": (compare(example, {"a": {"b": 1, "c": [], "d": 2}, "req": {"z": 0}}),
