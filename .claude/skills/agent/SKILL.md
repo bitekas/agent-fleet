@@ -199,6 +199,12 @@ answered by a path rather than by scrolling a conversation.
   settings conventions.definition_of_done`). When the key is `null` the install
   has none: say in the report that no completion check was run, rather than
   inventing one.
+- **When the install's `skills` lists `software-development`** (`fleet
+  settings skills`), load `/software-development` before starting a change to
+  a codebase, before briefing or reviewing another agent's change, and before
+  reporting a change as done. It states practice: the install's conventions
+  outrank it wherever a key names a skill or a document. When `skills` does not
+  list it, the install has not taken it, and this step does not apply.
 - **When a task is finished, compact.** The working context of a task you have
   reported is the largest thing you carry into the next one and the least useful.
   Run `/self-compact`: its preflight first - no subagent in flight, no background
