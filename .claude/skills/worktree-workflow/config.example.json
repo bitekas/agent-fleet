@@ -29,18 +29,19 @@
   "environments": {
     "_comment": "The environment names this install uses, in the shared role vocabulary the repo-and-environments skill defines. SKILL.md references only 'live', when it says which branch a fix for the live line cuts from; the rest are here so the branch table in CONTEXT.md can be written in the same words. The branch-to-environment map itself is NOT here: it is single-sourced by the repo-and-environments skill, and a second copy of it is a second thing to drift. 'live_copy' is a non-live environment holding a copy of live's data; omit the key where the install has none.",
     "dev_machine": "local",
-    "shared_dev": "development",
-    "live": "production",
-    "live_copy": "staging"
+    "shared_dev": "dev",
+    "live": "prod",
+    "live_copy": "preprod"
   },
   "naming": {
-    "_comment": "How an agent names a branch and a commit subject (SKILL.md section 1.1). 'branch' and 'subject' are forms built from the segments <agent>, <Agent>, <type>, <scope>, <slug> and <subject>; a form may leave out any of them, and one without <agent> and <Agent> is the form for a repository whose agents all commit under one identity. <slug> here is kebab-case. 'types' is the CLOSED list a <type> segment takes, each with its meaning: SKILL.md never enumerates it and nothing else in the install should either, since a second enumeration, or a written count of it, rots without looking like one. Adding or retiring a type edits this key, plus any place the install's project instructions repeat it, which CONTEXT.md names. The exempt lanes and CI subjects are not here: CONTEXT.md lists them byte-exact.",
+    "_comment": "How an agent names a branch and a commit subject (SKILL.md section 1.1). 'branch' and 'subject' are forms built from the segments <agent>, <Agent>, <type>, <kind>, <scope>, <slug> and <subject>. <type> is the BRANCH type, drawn from 'types'; <kind> is the COMMIT's conventional type (feat, fix, docs, ...), which is not drawn from 'types'. A form may leave out <agent> and <Agent> where the repository's own contributing rules forbid agent names; where agents share one commit identity, the subject prefix is the only thing on a one-line log that names the writer, so keep it. 'slug_case' is the case a <slug> is written in. 'types' is the CLOSED list of branch types, each with its meaning: SKILL.md never enumerates it and nothing else in the install should either, since a second enumeration, or a written count of it, rots without looking like one. Adding or retiring a type edits this key, plus any place the install's project instructions repeat it, which CONTEXT.md names. The exempt lanes and CI subjects are not here: CONTEXT.md lists them byte-exact.",
     "branch": "<agent>/<type>/<slug>",
-    "subject": "<Agent>: <type>(<scope>): <subject>",
+    "subject": "<Agent>: <kind>(<scope>): <subject>",
+    "slug_case": "kebab-case",
     "types": {
       "feature": "a new capability",
       "bug": "a fix for a defect",
-      "chore": "maintenance that is neither a feature nor a fix, including an integration branch that merges and pushes and owns no change of its own",
+      "chore": "maintenance: tooling, dependencies, CI; and an integration branch that merges and pushes and owns no change of its own",
       "docs": "documents only, including a design package or a spike that produces no product code",
       "test": "tests only"
     }

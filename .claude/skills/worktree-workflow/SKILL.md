@@ -86,17 +86,20 @@ form is built from these segments, and the install's form says which it uses:
 | Segment | What it is |
 |---|---|
 | `<agent>` | the lowercase name of the standing agent the work is for (below) |
-| `<Agent>` | the same name, capitalised, as a subject prefix followed by a colon |
-| `<type>` | one name from the install's closed list, `naming.types` |
+| `<Agent>` | the same name, capitalised |
+| `<type>` | the BRANCH type: one name from the install's closed list, `naming.types` |
+| `<kind>` | the COMMIT's conventional type (`feat`, `fix`, `docs`, `chore`, `test`, ...); not drawn from `naming.types`, and held to a list only where the install's `CONTEXT.md` names one |
 | `<scope>` | what part of the repository the change touches |
-| `<slug>` | what the work is, in a few words, in the case the form's comment states |
-| `<subject>` | the change in a few words, imperative |
+| `<slug>` | what the work is, in a few words, in the case `naming.slug_case` names |
+| `<subject>` | the change in a few words |
 
 Any `[skip ci]`-style marker the subject carries stays where it already is, at
 the end.
 
-**`naming.types` is a closed list, each type with its meaning.** Pick from it,
-never beside it. Whether anything enforces the list - a hook, a CI check - is
+**`naming.types` is a closed list of branch types, each with its meaning.** Pick
+from it, never beside it. It governs the branch's `<type>` only: a subject's
+`<kind>` is the commit's own conventional type, and a `fix` subject on a branch
+whose type is `bug` is the form working, not a violation. Whether anything enforces the list - a hook, a CI check - is
 the install's to state in `CONTEXT.md`, and **where nothing does, it says so in
 words**, so that a reader does not assume otherwise: a reader who believes a
 gate exists stops looking for what the gate would have caught, which is the more
@@ -129,11 +132,13 @@ cannot give an agent, and what each one breaks.
 
 **Why the agent goes on both, where the form carries it: a shared trunk is
 written by many agents at once, and the views used to read it show no author.**
-The author and committer fields do name the agent - the environment each agent
-session runs under supplies them, with a per-checkout `git config
-user.name`/`user.email` as the fallback for a clone used outside it, and a clone
-with neither falls back to the machine's global identity; `CONTEXT.md` carries
-this install's values. But `git log --oneline` prints no author, so without the
+Where each agent session has its own identity, the author and committer fields
+name the agent - the environment each agent session runs under supplies them,
+with a per-checkout `git config user.name`/`user.email` as the fallback for a
+clone used outside it, and a clone with neither falls back to the machine's
+global identity; where agents share one identity, the prefix is the only thing
+on the line that names the writer. `CONTEXT.md` carries this install's values.
+Either way `git log --oneline` prints no author, so without the
 prefix it cannot answer *who made this and can I ask them about it* without a
 `git show` per line - and a branch listing carries no author field to print,
 which is exactly the question asked of a branch nobody has deleted. A per-agent
@@ -145,8 +150,8 @@ work is `git branch --list '<agent>/*'`.
 (`repo.landing_branch`), the branch serving the live environment
 (`environments.live`), and every other branch on the branch-to-environment map -
 plus release branches, which are lane artifacts rather than any agent's branch.
-Also exempt is anything CI creates or authors: a version bump, a quality-check
-outcome, a backmerge, and the merge commits git writes for you. **A CI commit
+Also exempt is anything CI creates or authors: a version bump, a status or
+report commit, a backmerge, and the merge commits git writes for you. **A CI commit
 has no agent to name**, and CI's own subjects are read by other machinery, so
 prefixing them would break it. `CONTEXT.md` names this install's lanes and CI
 subjects, byte-exact.
@@ -270,7 +275,8 @@ listing out), and **it keeps worktrees out of the repo tree**: one under
 `.claude/worktrees/` sits inside the very checkout it exists to be isolated from.
 
 **A cwd-pinned subagent CANNOT use `EnterWorktree`**: the Claude Code tool
-refuses with "blocked for a cwd-pinned subagent", which is most spawned agents.
+refuses with "blocked for a cwd-pinned subagent", which is most spawned agents
+(Claude Code behaviour, observed by 2026-08-05; re-check after an upgrade).
 This is not a failure and needs no escalation: `git worktree add <abs-path> -b
 <branch> <base>` gives identical isolation, and agent threads reset their cwd
 between bash calls so absolute paths were required anyway. Reach for `git
@@ -278,7 +284,8 @@ worktree add` first.
 
 **Report the worktree path and branch you ACTUALLY landed on**: the harness can
 force an agent into its own `worktree-agent-<id>` off the dispatch-time base
-rather than the branch its brief named, and supervision pointed at the named
+rather than the branch its brief named (Claude Code behaviour, observed by
+2026-07-20), and supervision pointed at the named
 branch then sees nothing.
 
 **Within that directory, give the worktree a uniquely-named path you own**,
@@ -320,7 +327,8 @@ that carries its own lockfile**, not just the top one.
   nothing at the top level references it. The install's `CONTEXT.md` enumerates
   every such root; `repo.install_command` is the line that covers them, and it is
   the single source for that list.
-  - **A STANDARD gate can depend on a root the short recipe omits, and it reports
+  - **A STANDARD gate can depend on a root that an install line covering
+    only the obvious roots omits, and it reports
     that as a code failure.** A gate that drives a script under a secondary root
     reds a worktree installed with only the obvious roots - a no-verdict or a
     failure carrying a module-not-found error, **on a perfectly clean tree** - a
@@ -344,7 +352,7 @@ the other's harness, against whatever tree that one targets. A log another
 worktree's run clobbers mid-analysis is well-formed and its numbers are real;
 they just describe a different tree, and nothing catches it being quoted as
 yours. So: **name every scratchpad file for its agent AND task**
-(`teeth-<task>.sh`, not `teeth.sh`); **write evidence you intend to cite to a
+(`teeth-<agent>-<task>.sh`, not `teeth.sh`); **write evidence you intend to cite to a
 path you alone own** (`/tmp/<your-task>-evidence/`) in the first place;
 **confirm a log names the worktree you ran in before quoting its numbers**; and a
 script that mutates source must take its target worktree as an **explicit
