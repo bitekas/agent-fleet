@@ -1,9 +1,9 @@
 # Fleet CI on macOS. One job, test-macos: every fleet test (tests/run-all.sh)
 # on the repository owner's self-hosted macOS runner, labels
-# [self-hosted, macOS, ARM64, agent-fleet-mac], where the only bash is the
-# system /bin/bash 3.2 and the userland is BSD. What that runner carries and
-# how it behaves is the runner contract in CONTRIBUTING.md section 9; the job's
-# first step checks it.
+# [self-hosted, macOS, ARM64, agent-fleet-mac], where the only bash on the job
+# PATH is the system /bin/bash 3.2 and the userland is BSD. What that runner
+# carries and how it behaves is the runner contract in CONTRIBUTING.md section
+# 9; the job's first step checks it.
 #
 # It runs on the same events as ci.yml (every push, every pull request from a
 # branch of this repository, a manual dispatch), so a branch push shows all five
@@ -46,11 +46,11 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Runner contract (CONTRIBUTING.md section 9)
-        # The runner has no Homebrew and a job has no sudo, so these come with the
-        # runner or not at all: tmux (tmux_triage.test.sh, watchdog_live.test.py,
-        # agent-session.test.py) and Python 3.14. actions/setup-python cannot
-        # provide Python here: its macOS build installs a .pkg with sudo into
-        # /Library/Frameworks.
+        # Nothing of Homebrew is on the runner's PATH and a job has no sudo, so
+        # these come with the runner or not at all: tmux (tmux_triage.test.sh,
+        # watchdog_live.test.py, agent-session.test.py) and Python 3.14.
+        # actions/setup-python cannot provide Python here: its macOS build
+        # installs a .pkg with sudo into /Library/Frameworks.
         run: |
           missing=""
           for c in tmux python3.14; do
@@ -66,10 +66,11 @@ jobs:
         with:
           persist-credentials: false
       - name: Prove every bash is /bin/bash 3.2
-        # A fleet host's only bash is /bin/bash 3.2, and so is this runner's (the
-        # runner contract). The step's own shell, a `bash` found on PATH and a
-        # `#!/usr/bin/env bash` script must all be 3.2: a newer bash that comes
-        # first on the runner's PATH fails the job here, naming what it found.
+        # A fleet host's only bash is /bin/bash 3.2, and so is every bash this
+        # runner's job PATH reaches (the runner contract). The step's own shell,
+        # a `bash` found on PATH and a `#!/usr/bin/env bash` script must all be
+        # 3.2: a newer bash that comes first on the runner's PATH fails the job
+        # here, naming what it found.
         run: |
           sw_vers
           uname -m
