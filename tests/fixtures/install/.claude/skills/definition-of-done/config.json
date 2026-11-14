@@ -1,0 +1,40 @@
+{
+  "_comment": [
+    "FIXTURE install config for definition-of-done. Synthetic values only; it is",
+    "what `fleet where definition-of-done config.json` resolves to when",
+    "FLEET_CONTEXT_ROOT points at tests/fixtures/install. check_checklist.test.py",
+    "runs the checker against it, and holds its key set equal to the skill's",
+    "config.example.json. The waivers and the permalink pattern are the ones",
+    "the skill's fixtures/ checklists are written against. permalink_pattern is",
+    "deliberately unanchored (no ^ or $): the checker FULL-matches it, and the",
+    "test's trailing-extra case can only prove that against an unanchored pattern."
+  ],
+  "repo": {
+    "landing_branch": "main",
+    "worktrees_dir": "/tmp/fleet-fixture-worktrees",
+    "dev_stack_command": "./scripts/dev-stack.sh",
+    "deploy_command": "./scripts/deploy.sh"
+  },
+  "e2e": {
+    "runner": "./scripts/run-e2e.sh",
+    "specs_dir": "e2e/"
+  },
+  "process": {
+    "consistency_scan_prompt": "docs/consistency-scan.md"
+  },
+  "figma": {
+    "file_key": "ExAmPlEfIlEkEy0000000",
+    "pages": {
+      "current": "100:1",
+      "incoming": "200:1"
+    },
+    "deletion_marker_prefix": "MARKED FOR DELETION - ",
+    "in_build_marker_prefix": "IN BUILD - ",
+    "registry_probe": null
+  },
+  "checklist": {
+    "dir": "docs/checklists",
+    "waivers": ["Olive", "Tess", "Dana"],
+    "permalink_pattern": "https://chat\\.example\\.com/[a-z0-9-]+/m/[0-9]+(\\?thread=[0-9]+)?"
+  }
+}

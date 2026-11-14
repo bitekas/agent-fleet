@@ -1,0 +1,59 @@
+{
+  "_comment": [
+    "TEMPLATE. Copy to the install context as this skill's config.json",
+    "(`fleet where definition-of-done config.json` prints the path) and replace",
+    "every placeholder.",
+    "",
+    "Everything project-specific the definition of done refers to. SKILL.md names",
+    "none of it: it refers to the keys below, so the same shipping rules serve any",
+    "project. CONTEXT.md carries what a person needs to judge; this file carries",
+    "the values with a shape.",
+    "",
+    "There is no credential here and there must never be one: every value is a",
+    "branch name, a path, a command, a design-file id, a naming convention, a",
+    "list of names or a pattern.",
+    "",
+    "A relative path in this file is REPO-RELATIVE (relative to the root of the",
+    "project's repository), not relative to this file: each one names a place in",
+    "the project's tree, which is where the commands run and the checklists live.",
+    "",
+    "JSON has no comments, so every _comment key here is documentation.",
+    "Leave them in your config.json or delete them; nothing reads them."
+  ],
+  "repo": {
+    "_comment": "landing_branch is the branch finished work merges into and is pushed to - the branch 'done' is measured against, and the branch a design page is said to mirror. worktrees_dir is where a session working from the shared checkout creates its worktrees; an agent working from its own home uses that home's workspaces directory (the agent skill, section 3). Both are declared locations, so an orphan is findable by listing them. Both are REQUIRED: a wrong landing_branch means work is declared done on a branch nothing ships from. dev_stack_command and deploy_command are Rule 2's two operational entry points: the ONE way to run the dev stack and the ONE way to build or deploy. Name the invocation as it is typed from the repo root. If your project has no such single entry point, set the key to null and say so in CONTEXT.md rather than leaving a value nobody can run: a wrong entry point is worse than an absent one, because Rule 2 forbids the ad-hoc alternative a reader would otherwise fall back to.",
+    "landing_branch": "main",
+    "worktrees_dir": "/path/to/your/worktrees",
+    "dev_stack_command": "./scripts/your-dev-stack.sh",
+    "deploy_command": "./scripts/your-deploy.sh"
+  },
+  "e2e": {
+    "_comment": "runner is the single entry point that boots the stack and runs specs, as invoked from the repo root; specs_dir is the directory to grep when identifying which specs a change affects. REQUIRED. SKILL.md deliberately does not spell the invocations - they differ per harness and CONTEXT.md carries the install's.",
+    "runner": "./scripts/your-e2e-runner.sh",
+    "specs_dir": "e2e/"
+  },
+  "process": {
+    "_comment": "consistency_scan_prompt is the repo-relative path to the canonical Rule 1 scan prompt, which is also where the project's known fan-out invariants are recorded. REQUIRED: Rule 1 says the prompt is not improvised, so a wrong path leaves every scan to be invented from scratch and the fan-out list unread. Keep the prompt in the repo rather than in this skill - it accumulates project invariants, which are values, not mechanism.",
+    "consistency_scan_prompt": "docs/your-consistency-scan-prompt.md"
+  },
+  "figma": {
+    "_comment": "The one design file and its two live pages, plus the rename conventions for frames scheduled for deletion and frames still in build. The keys are named for Figma; a design tool with files, pages, frames and node ids fills them the same way. Set file_key to null and Rule 5's parity sub-gate does not apply to your project (the other keys are then unread). Pages are addressed BY ID and never by name: page names move between nodes, and a by-name lookup silently returns the wrong board. 'current' mirrors what is on repo.landing_branch; 'incoming' is where new designs land and move freely. deletion_marker_prefix is the literal prefix a frame's name is given when it is superseded - the parity gate reads the current page for leftovers carrying it, so a mismatch here makes the gate pass over exactly what it exists to find. in_build_marker_prefix is the literal prefix a frame copied in by a freeze wears until the work implementing it lands - the gate reads the current page for frames in the task's scope still carrying it, for the same reason. registry_probe is the command that reads every design node id in the repository back against the ONE table a freeze writes, run from the repo root; it is the parity gate's third proof and the only instrument that can see a frame id go stale, because a node id is a string no typecheck, lint or spec resolves. Set it to null if you have no such probe and say so in CONTEXT.md - a named command that does not exist is worse than an absent one, because the gate then reads as covered.",
+    "file_key": "AbCdEfGhIjKlMnOpQrStUv",
+    "pages": {
+      "current": "1234:5678",
+      "incoming": "9876:54321"
+    },
+    "deletion_marker_prefix": "MARKED FOR DELETION - ",
+    "in_build_marker_prefix": "IN BUILD - ",
+    "registry_probe": "bash scripts/your-registry-probe.sh"
+  },
+  "checklist": {
+    "_comment": "The feature checklist (SKILL.md, 'The feature checklist'), read by check_checklist.py. dir is the repo-relative directory where each feature's checklist lives, one <feature-slug>.md per feature, committed on the feature branch and landing with it; the install manifest's feature_checklist convention names the same place. check_checklist.py --served reads dir as the one directory a commit after the hand-off may touch. waivers is the allow-list of people whose name may stand in a 'WAIVED by <name>'; names as they are written there, compared case-insensitively. REQUIRED: with no list the checker issues NO VERDICT (exit 2) on every run, because a waiver nobody may grant and a waiver anybody may grant are both wrong. permalink_pattern is a regular expression that a message permalink on the install's chat transport FULL-matches; the '6 - presented to the requester' row's DONE evidence must carry a link matching it. REQUIRED, and it must compile: a pattern that matches any URL accepts a link to anything as proof the requester was shown the work. The value below is the shape of a Slack message permalink, with its optional thread query.",
+    "dir": "docs/checklists",
+    "waivers": [
+      "Jane Doe",
+      "John Roe"
+    ],
+    "permalink_pattern": "^https://acme\\.slack\\.com/archives/[A-Z0-9]+/p[0-9]+(\\?thread_ts=[0-9]+\\.[0-9]+(&\\S*)?)?$"
+  }
+}
