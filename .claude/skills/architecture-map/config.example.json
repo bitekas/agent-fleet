@@ -1,0 +1,28 @@
+{
+  "_comment": [
+    "TEMPLATE. Copy to config.json in this skill's install context",
+    "(`fleet where architecture-map config.json` prints the path) and replace every placeholder.",
+    "",
+    "This skill owns no script, so nothing here is read by a program: the keys",
+    "are read by the AGENT while it is following SKILL.md. They are still config",
+    "rather than CONTEXT.md prose because each is a single resolvable location",
+    "that a reader either finds or does not - a wrong value here sends the",
+    "reader to a directory that is not there, which is loud. Everything that",
+    "fails SILENTLY when wrong - what the components actually are, which sinks",
+    "user data reaches, which invariants hold - is CONTEXT.md's job.",
+    "",
+    "The MAP is not in here and never will be. The map is CONTEXT.md, beside",
+    "config.json in the install context; SKILL.md is the mechanism for writing",
+    "one. Only a location that differs per install is a config key.",
+    "",
+    "This skill owns no credential. No token, key or secret is ever a value in",
+    "this file.",
+    "",
+    "JSON has no comments, so every _comment key here is documentation. Leave",
+    "them in your config.json or delete them; nothing parses this but a reader."
+  ],
+  "design": {
+    "_comment": "Where this repository's design packages live, as a path relative to the repo root. Every slice of the map names the package that owns it, and this is the directory those slugs resolve under. One directory per feature or subsystem, each holding at least the design document the map defers to; a package that has been frozen normally also carries an errata register, which SKILL.md section 2 says to read before the body. Set it to wherever your design documents live; if they live in a wiki rather than the repo, put the base URL here instead and say so in CONTEXT.md.",
+    "packages_dir": "docs/design-packages/"
+  }
+}
