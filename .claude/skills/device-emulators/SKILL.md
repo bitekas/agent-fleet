@@ -57,7 +57,7 @@ block means substitute that key's value.
 | `luma.py` + `luma.test.py` | feed-vs-known-black luma of a screenshot, no image library: the instrument that makes "black" a measurement | the skill |
 | `config.example.json` | every key `config.json` must carry, and how to obtain it | the skill |
 | `config.test.mjs` | the config twins in agreement: the install's `config.json` vs `config.example.json`, every example key named in this skill's prose, and the JDK floor and predicate shared with the build script. Exits `0` / `1` / `3` NO VERDICT - a green from it is only meaningful because it proves its own comparator first | the skill |
-| `installation/` | how to make a machine ready, `check` to prove it is, and `check.test.py` driving every state `check` reports against the fleet's fixture install | the skill |
+| `installation/` | how to make a machine ready, `check` to prove it is, and `check.test.py` driving `check`'s states against the fleet's fixture install (its header lists each case, and the legs that have none) | the skill |
 | `config.json` | this install's scripts, artifact names, device and AVD choices, and the remote Mac's coordinates and Metro-host command. An install's build script may read keys from it at run time (section *The two scripts*); the install's `CONTEXT.md` says which | the install context |
 | `CONTEXT.md` | which project and machines, what this install's scripts print and leave behind, and what is not ruled | the install context |
 | `installation/.install-state.json` | this install's per-host install record | the install context |
@@ -80,20 +80,25 @@ exactly as far as the script behind the key implements the interface.
 
 **Before the first run on a machine, run `installation/check`**
 (`python3 "${CLAUDE_SKILL_DIR}/installation/check"`). It reads the install's
-`config.json` and per-host record through the install context. Exit `0` ready,
+`config.json` and per-host record through the install context. Exit `0` ready;
 `1` no install recorded for THIS machine, one against an older `version`, or
-no install context to read (the line says NO VERDICT), `2` not installed - the
-line names the one missing artifact, per platform. Do not proceed on `1` or
-`2`; `installation/INSTRUCTION.md` is the procedure for both.
+NOT FULLY MEASURED (no install context to read, or a leg the probe cannot
+measure on this machine: the line says NO VERDICT and names it); `2` not
+installed, the line naming the one missing artifact, per platform. Do not
+proceed on `1` or `2`; `installation/INSTRUCTION.md` is the procedure for both.
 
 On Android, before it looks at the AVD list, it asks whether an AVD could
 **boot**: on Linux the KVM device present, openable by this user, and `emulator
 -accel-check` green. Those are different facts from "an AVD exists", and only
 the second shows in `emulator -list-avds`, so an AVD list is not evidence a
 machine runs anything. The legs live in the probe the install supplies
-(`android.hypervisor_probe`); a probe that does not measure a platform returns
-its words for that ("not probed on darwin"), and the check prints them in its
-own line rather than reading them as a measurement. On the remote iOS route,
+(`android.hypervisor_probe`), and a probe that cannot measure a platform - macOS,
+where the accelerator is HVF and there is no `/dev/kvm` - answers NOT MEASURED.
+`check` then exits `1` naming that leg, after every leg it can measure, because
+exit `0` means proceed and nothing unmeasured may say that. The cost is stated
+rather than hidden: a Mac that runs both platforms reads `1` overall, so it
+checks each on its own (`check ios`, `check android`) and confirms the Android
+accelerator by hand with `emulator -accel-check`. On the remote iOS route,
 before it opens an ssh, it asks whether the Mac's hostname resolves - the one
 failure there that no key or host-key fix touches.
 
@@ -111,8 +116,10 @@ was written while still reading as authoritative. Ask the machine.
 
 ## The two scripts
 
-Every command block in this skill and in `technical/` is written in the grammar
-below. It is the interface the keys point at, and an install whose scripts take
+The dev script and the build script, plus the two files beside them that the
+skill also relies on: the env-config file the build script sources and the
+hypervisor probe. Every command block in this skill and in `technical/` is
+written in the grammar below. It is the interface the keys point at, and an install whose scripts take
 other arguments writes its own forms in its `CONTEXT.md`, which outranks the
 blocks here; the rest of each section still applies. The iOS rows - the
 simulator target's device choice, `-y`, `--sign` with a simulator target, and
@@ -137,6 +144,8 @@ that hold each step.
   read from.
 - It changes into its own directory before doing anything else, so the path it
   is invoked by selects the checkout it serves.
+- Its banner also prints the route a person takes to load the dev client on a
+  physical phone (trap 9), as the build script's device install does.
 
 **The build script, `<build.script> <ios|android> --env <env> --method <method>`:**
 
@@ -144,10 +153,11 @@ that hold each step.
   Metro; it is refused with no reachable Metro. `--method <build.method_embedded>`
   builds with the JS embedded.
 - `--target simulator` builds, installs and launches on a simulator or emulator,
-  and is accepted with `<build.method_metro>` only ("a simulator build loads its
-  JS from Metro"). On Android, `--emulator <avd>` implies it, boots that AVD if it
-  is down, and dies BEFORE building on an AVD name `emulator -list-avds` does not
-  print.
+  and is accepted with `<build.method_metro>` only, because a simulator build
+  loads its JS from Metro. On Android, `--emulator <avd>` implies it, boots that
+  AVD if it is down, and dies BEFORE building on an AVD name `emulator
+  -list-avds` does not print; with no `--emulator` it uses the single running
+  emulator and dies on zero or several rather than guessing.
 - `--no-build` (Android) relaunches the build ALREADY installed on the emulator:
   no build, no install, and it dies when the app is not there.
 - `--target file` with `--sign sideload` (Android, embedded) writes
@@ -170,16 +180,50 @@ that hold each step.
   `env_config <env> <field>` prints one (`app_identifier` is the embedded build's
   application id). `--dry-run` is the route to an identity everywhere else.
 
-**The hypervisor probe, `<android.hypervisor_probe>`**, a Python file in the
-repository: `check_hypervisor(<emulator path>)` returns `(ok, detail)`, and run
-as `python3 <android.hypervisor_probe> probe` it exits `0` usable, `1` a named
-cause with the admin command, `2` not measured here. `installation/check`
-imports it and the build script runs it when an AVD fails to attach, so both
-ask the question through ONE implementation.
+What the build script also does, which the rest of this skill states as fact
+and an implementation owes, because each one is a trap it closes:
 
-Paths in those keys are relative to the repository root, the install root that
-holds `.claude/fleet.json` - the checkout the operator builds from - because they
-are commands an operator runs from there.
+- It resolves the Android SDK in the order `technical/android.md` section 1
+  gives, the same order `installation/check` uses.
+- It REFUSES an explicitly exported `JAVA_HOME` that is a JRE or below the floor,
+  rather than building against a different JDK.
+- It starts the emulator `nohup`'d and detached, so the emulator outlives the
+  run that started it; on Linux with `$DISPLAY` and `$WAYLAND_DISPLAY` both empty
+  it boots headless (`-no-window -gpu swiftshader_indirect`) and windowed
+  otherwise, with a knob that forces either mode on every platform.
+- It waits for `sys.boot_completed=1` before installing, on every simulator
+  path.
+- It reads each APK's application id with `aapt2` and refuses an install whose
+  id is not the build's, which is why `installation/check` requires `aapt2`.
+- It dies rather than carry on when the build did not rewrite its artifact
+  during this run.
+- On a failed attach it tells a dead emulator process from a slow boot, and
+  runs the hypervisor probe to name the remedy (`technical/android.md`
+  section 1).
+
+**The hypervisor probe, `<android.hypervisor_probe>`**, a Python file in the
+repository. `check_hypervisor(<emulator path>)` returns `(ok, detail)`, where
+`ok` is `True` (usable), `False` (a named cause; `detail` carries the admin
+command) or `None` (NOT MEASURED here: a platform the probe does not measure, or
+a leg that could not run). **A probe answers `None` where it cannot measure,
+never `True` with words saying so**: `installation/check` reads `ok` and not the
+prose, so a `True` reads as usable whatever `detail` says. Run as
+`python3 <android.hypervisor_probe> probe` it exits `0` usable, `1` a named
+cause, `2` not measured. `installation/check` imports it and the build script
+runs it when an AVD fails to attach, so both ask the question through ONE
+implementation.
+
+**Repository paths.** These keys name files in the install's repository and
+resolve against the install root, the directory holding `.claude/fleet.json`
+(`/claude-skill` section 2): `build.script`, `build.dev_script`,
+`build.env_config_script`, `android.hypervisor_probe`,
+`docs.build_machine_components`, `device_e2e.runner` and `device_e2e.flows_dir`,
+and the files the scripts write at the root of the checkout they run in -
+`build.ports_artifact`, `ios.sim_artifact`, `android.apk_artifact` and
+`android.aab_artifact`. Every other path key resolves against `config.json`'s
+directory when relative: `device_e2e.driver_path` and `keystore.dir`, both
+normally absolute after expansion. `ios.remote.workdir` is a path on the remote
+Mac, and its `~` is left for the remote shell.
 
 ## The route
 
@@ -498,7 +542,7 @@ Every key `config.example.json` carries, and where it is used. The example's
 
 | Key | What it is |
 |---|---|
-| `project.name`, `project.artifact_prefix` | what the loops run for (prose only), and the leading component of the build script's emulator log and screenshot paths |
+| `project.name`, `project.artifact_prefix` | what the loops run for (prose only), and the leading component of the build script's emulator log and of the screenshot path `technical/android.md` section 5 writes |
 | `platforms.enabled` | the platforms THIS install runs; `check` checks each |
 | `build.script`, `build.dev_script`, `build.env_config_script` | the two scripts and the per-env value file (*The two scripts*) |
 | `build.dev_client_service`, `build.default_env`, `build.method_metro`, `build.method_embedded` | the words the route substitutes into those scripts' grammar |
@@ -519,7 +563,7 @@ Every key `config.example.json` carries, and where it is used. The example's
 ## Where the rest lives
 
 - **`/tooling-index`** - the install's tooling index: the build-script and
-  dev-script rows, every flag, the guard matrix, and both device loops, one line
+  dev-script rows, every flag and its refusals, and both device loops, one line
   each. Read it before assuming a helper is missing.
 - **`/repo-and-environments`** - what `--env` selects, why the Metro host is
   compiled into the build, and the native-feeding env sources (section 6.5).

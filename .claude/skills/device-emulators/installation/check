@@ -10,7 +10,9 @@ Prints ONE line and exits:
 
     0  installed, current      -> proceed
     1  installed, but stale    -> re-run INSTRUCTION.md, then re-check
-       (or no install context to read: the line says NO VERDICT)
+       (or NOT FULLY MEASURED: no install context to read, or a leg such as
+       the hypervisor that this machine's probe cannot measure - the line says
+       NO VERDICT and names the leg)
     2  not installed           -> follow INSTRUCTION.md
 
 With several platforms the exit is the WORST state found, and the line names
@@ -29,8 +31,9 @@ android.hypervisor_probe) resolve against the INSTALL ROOT, the directory holdin
 operator runs them from its root. When no install context resolves, nothing was
 looked at and the line says NO VERDICT. The fleet root comes from
 realpath(__file__): through an agent's personal skill link, abspath would name
-the link's directory. check.test.py beside this file drives every state below
-against the fleet's fixture install.
+the link's directory. check.test.py beside this file drives the states below
+against the fleet's fixture install; its header lists each case and the legs
+that have none.
 
 THIS FILE IS ALSO THE SKILL'S MACHINE INVENTORY, AND THE ONLY ONE. Nothing in
 SKILL.md, technical/, config.json or CONTEXT.md may transcribe a version, an
@@ -51,7 +54,10 @@ everything else, so it travels to machines that never ran the install. A
 single `host` field would make every OTHER machine report stale, and
 re-recording it would un-record the machine before it - so two machines could
 never both be installed. `versions` is a hostname -> record map and each
-machine records only itself.
+machine records only itself. The key is `versions`, where other fleet checks
+write `hosts`, because installs already hold per-host records under it and a
+renamed key would report every one of those machines stale for a record that
+is still true.
 
 WHY A PLATFORM YOU DO NOT RUN BELONGS OUT OF platforms.enabled. Exiting on the
 worst state means one absent SDK would otherwise report the whole skill as
@@ -81,10 +87,22 @@ asks the identical question at a different moment - when an AVD has failed to
 attach to adb, so that its die message can name the right remedy instead of
 telling an operator with an unbootable AVD to raise a TIMEOUT. ONE
 implementation, two thin consumers. The probe's interface is SKILL.md, "The two
-scripts": check_hypervisor(<emulator path>) -> (ok, detail). A probe that does
-not measure this platform returns its own words for that ("not probed on
-darwin"), and this check prints them in its line rather than inventing a
-verdict. Do not re-inline the legs here.
+scripts": check_hypervisor(<emulator path>) -> (ok, detail), where ok is True
+(usable), False (a named cause) or None (NOT MEASURED on this machine). Do not
+re-inline the legs here.
+
+WHY A HYPERVISOR THE PROBE CANNOT MEASURE IS EXIT 1 AND NEVER A PASS. A probe
+that does not measure a platform (macOS, where the accelerator is HVF and there
+is no /dev/kvm) knows nothing about whether an AVD boots there, and exit 0
+means proceed: reporting that as installed is the marker-file lie with the
+probe's words printed beside it. So None is NO VERDICT, exit 1, naming the leg
+and the probe's words, after every leg that CAN be measured has run. The cost
+is real and stated: `check` exits on the worst platform, so a Mac running both
+platforms reads 1 overall while its iOS leg is fine; it checks each platform
+on its own (`check ios`, `check android`) and confirms the Android accelerator
+by hand (`emulator -accel-check`). A probe that answers True with "not probed"
+words is read as True, because ok is the probe's verdict and the check does not
+parse its prose; SKILL.md tells a probe to answer None where it cannot measure.
 
 WHY THE iOS REMOTE ARM RESOLVES THE HOSTNAME BEFORE IT OPENS AN ssh. Every other
 failure on that arm has a remediation about keys, host keys or Xcode, and ssh
@@ -261,8 +279,6 @@ def load_hypervisor_probe(cfg):
                       "android.hypervisor_probe, so the hypervisor - the one thing that "
                       "decides whether ANY AVD here can boot - would go unmeasured")
     path = os.path.normpath(os.path.join(REPO, expand(rel)))
-    # A readiness check writes nothing: no __pycache__ beside the repository's probe.
-    sys.dont_write_bytecode = True
     try:
         import importlib.util as _ilu
         spec = _ilu.spec_from_file_location("android_hypervisor_probe", path)
@@ -535,8 +551,14 @@ def check_android(cfg):
     except Exception as e:  # noqa: BLE001 - a probe that raises measured nothing
         return False, (f"android: the hypervisor probe raised {type(e).__name__}: {e}, so "
                        f"whether any AVD on this machine can boot is UNMEASURED")
-    if not hv_ok:
+    if hv_ok is False:
         return False, hv
+    if hv_ok is not True and hv_ok is not None:
+        return False, (f"android: the hypervisor probe answered {hv_ok!r}, which is none of "
+                       f"True, False or None (SKILL.md, 'The two scripts'), so whether any AVD "
+                       f"on this machine can boot is UNMEASURED")
+    # hv_ok None: NOT MEASURED here. Every other leg still runs, so the line
+    # that reports it also says whether the rest of the platform is ready.
 
     # THE SUBJECT IS `javac`, NOT `java`, AND THE DIFFERENCE IS THE WHOLE
     # POINT OF THIS LEG. Gradle needs a JDK; a JRE is not one. A machine whose
@@ -590,8 +612,14 @@ def check_android(cfg):
                        f"-list-avds has {avds}. Create it, or clear android.avd.compat if this "
                        f"machine does not run the compat pass.")
 
-    return True, (f"android: JDK {have_major}, accel [{hv}], AVDs {avd_want}"
-                  + (f" + {avd_compat}" if avd_compat else ""))
+    avd_words = f"AVDs {avd_want}" + (f" + {avd_compat}" if avd_compat else "")
+    if hv_ok is None:
+        return None, (f"android: the hypervisor was NOT MEASURED by the probe ({hv}); "
+                      f"JDK {have_major} and {avd_words} are installed. Confirm by hand that "
+                      f"`{emu} -accel-check` exits 0; on a machine that runs both platforms, "
+                      f"check each on its own (check ios, check android)")
+    return True, f"android: JDK {have_major}, accel [{hv}], {avd_words}"
+
 
 
 PROBES = {"ios": check_ios, "android": check_android}
@@ -599,6 +627,9 @@ PROBES = {"ios": check_ios, "android": check_android}
 
 def main():
     global REPO, STATE
+    # A readiness check writes nothing: no __pycache__ in the fleet tree (fleetlib)
+    # or beside the repository's probe. First, before any import below.
+    sys.dont_write_bytecode = True
     want = declared_version()
 
     # ---- the install context -------------------------------------------------
@@ -691,10 +722,11 @@ def main():
 
     # ---- per platform --------------------------------------------------------
     results = [(p,) + PROBES[p](cfg) for p in platforms]
-    failed = [msg for _, ok, msg in results if not ok]
+    failed = [msg for _, ok, msg in results if ok is False]
     if failed:
         out(2, "NOT INSTALLED: " + " | ".join(failed))
-    inventory = ", ".join(msg for _, _, msg in results)
+    unmeasured = [msg for _, ok, msg in results if ok is None]
+    inventory = ", ".join(msg for _, ok, msg in results if ok is True)
 
     # ---- OPTIONAL: the device-e2e tap driver --------------------------------
     # Reported, never enforced. The driver is needed by the e2e suite and never
@@ -707,14 +739,18 @@ def main():
     # non-interactive caller has a working install and no driver on PATH.
     de = cfg.get("device_e2e") or {}
     if de.get("driver"):
-        cand = expand(de.get("driver_path") or "")
+        # Not a repository path: expanded, and a relative value resolves against
+        # config.json's directory (/claude-skill section 2).
+        cand = (str(paths.resolve_config_path(de["driver_path"], cfg_path))
+                if de.get("driver_path") else "")
         drv = cand if cand and os.access(cand, os.X_OK) else shutil.which(de["driver"])
         if drv:
             r = run([drv, "--version"], timeout=120)
             ver = ((r.stdout or "").strip().splitlines() or [""])[-1].strip() if r else ""
-            inventory += f", device-e2e: {de['driver']} {ver or 'present'}"
+            inventory += f", device-e2e: {de['driver']} {ver or 'present'} ({drv})"
         else:
             inventory += f", device-e2e: no {de['driver']} (optional; the dev loop does not need it)"
+        inventory = inventory.lstrip(", ")
 
     # ---- artifacts are all present. Only the recorded version can be wrong. --
     host = socket.gethostname()
@@ -747,6 +783,14 @@ def main():
         out(1, f"STALE: {host} recorded version {have}, NEWER than SKILL.md's {want}. "
                f"The fleet checkout is older than the one that recorded the install; "
                f"check `fleet status`.")
+
+    # NOT FULLY MEASURED: every measurable artifact is present and the record is
+    # current, but a leg the probe cannot measure says nothing either way. See
+    # the header: exit 1, never 0, and the line names the leg.
+    if unmeasured:
+        out(1, f"NO VERDICT: installed and current (version {want}) on {host} for every "
+               f"leg that was measured, but " + " | ".join(unmeasured)
+               + (f". Measured: {inventory}" if inventory else ""))
 
     out(0, f"OK: installed and current (version {want}) on {host} - {inventory}")
 

@@ -55,14 +55,14 @@ install -m 644 "<skill dir>/config.example.json" "$CONTEXT/config.json"
 `install -m 644`, not `cp`: the fleet tree is read-only and `cp` keeps that
 mode. Replace every placeholder. The `_comment` keys say what each value is and
 how to obtain it; `SKILL.md` *Config keys* is the same list in one table. The
-repository paths in it (`build.script`, `build.dev_script`,
-`build.env_config_script`, `android.hypervisor_probe`,
-`docs.build_machine_components`, `device_e2e.runner`) are relative to the
-repository root, the install root holding `.claude/fleet.json`, and each script
-they name implements the interface in `SKILL.md` *The two scripts*.
+keys that name files in the repository resolve against the install root holding
+`.claude/fleet.json`, and every other relative path against `config.json`'s own
+directory (`/claude-skill` section 2); `SKILL.md` *The two scripts*, "Repository
+paths", lists which is which, and each script a key names implements the
+interface that section states.
 
-**TWO keys `check` never reads, and they fail differently from every other
-key.** `keystore.dir` and `metro.host_cmd` are cited only by prose -
+**Two prose-only keys fail differently from every other key.** `keystore.dir`
+and `metro.host_cmd` are cited only by prose -
 `technical/android.md` section 3b and `technical/ios.md` section 4a - so a name
 that has gone out of step with `config.example.json` surfaces as an unresolved
 placeholder in a document, never as a failed check. Nothing is installed against
@@ -237,9 +237,11 @@ virtualization refused by the host - and the probe reports the emulator's own
 words for it rather than guessing.
 
 On macOS the accelerator is HVF and there is no `/dev/kvm`. A probe that does
-not measure macOS says so ("not probed on darwin"), and `check` prints those
-words in its line; running `emulator -accel-check` there by hand and recording
-the result is what lets the probe cover that platform too.
+not measure macOS answers NOT MEASURED (`None`, `SKILL.md` *The two scripts*),
+and `check` then exits `1` naming the leg, after every leg it can measure. On a
+Mac that runs both platforms, check each on its own (`check ios`, `check
+android`) and confirm the accelerator by hand with `emulator -accel-check`;
+measuring `-accel-check` in the probe is what lets it cover that platform.
 
 ## Android: 3. A JDK
 
@@ -325,7 +327,7 @@ python3 "<skill dir>/installation/check" ios      # or just one
 | Exit | Means | Do |
 |---|---|---|
 | `0` | installed and current | proceed |
-| `1` | no record for this machine, one against an older `version`, or NO VERDICT (no install context resolved) | re-read this file from the top, then redo the last step; for NO VERDICT, run it from the install or set `FLEET_CONTEXT_ROOT` |
+| `1` | no record for this machine, one against an older `version`, or NO VERDICT (no install context resolved, or a leg the probe could not measure, named in the line) | re-read this file from the top, then redo the last step; for NO VERDICT, run it from the install or set `FLEET_CONTEXT_ROOT`, or confirm the named leg by hand as the line says |
 | `2` | not installed: the line names which artifact is missing, per platform | fix that one thing, run it again |
 
 `check` is also this skill's **only** machine inventory: its `0` line prints the
@@ -341,8 +343,8 @@ python3 "<skill dir>/luma.test.py"                 # offline, generates its own 
 ```
 
 `check.test.py` builds throwaway installs and fake tools in a temporary
-directory and never touches a real SDK, device or Mac; every state `check`
-reports has a case that produces it. `config.test.mjs` reads the install's
+directory and never touches a real SDK, device or Mac; its header lists every
+state it drives and the legs it has no case for. `config.test.mjs` reads the install's
 `config.json` through `fleet where device-emulators config.json` (or
 `DEVICE_EMULATORS_CONFIG`), so running it from the install checks the install's
 own copy.

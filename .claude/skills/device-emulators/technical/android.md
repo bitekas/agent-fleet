@@ -399,8 +399,9 @@ that route in whatever bundle is already loaded, so it can never re-point one
 
 **`--emulator` and `--target simulator` are not available for
 `--method <build.method_embedded>`.** The build script rejects
-`--target simulator` with any method but `<build.method_metro>` ("a simulator
-build loads its JS from Metro"), and `--emulator` implies `--target simulator`.
+`--target simulator` with any method but `<build.method_metro>`, because a
+simulator build loads its JS from Metro, and `--emulator` implies
+`--target simulator`.
 An embedded build onto an emulator is therefore a **manual sideload**.
 
 VERIFIED 2026-09-02 - both refusals reproduced with `--dry-run`. The build in
@@ -419,13 +420,13 @@ from** - a worktree's build lands in that worktree, not in the main checkout.
 sideloaded; `--target file` is the only destination an embedded build has that
 leaves the artifact alone.)
 
-A build script worth trusting dies rather than carry on when the build did not
-rewrite that file during this run (a local-build override variable left in the
-shell is the measured cause: the build tool then exits 0 and writes nothing, and
-the script names the variable), so the file there after a successful run is this
-run's. Its own emulator and device installs also refuse an APK whose
-application id is not the build's; the manual `adb install` below has no such
-check.
+The build script dies rather than carry on when the build did not rewrite that
+file during this run (`SKILL.md` *The two scripts*; a local-build override
+variable left in the shell is the measured cause: the build tool then exits 0
+and writes nothing, and the script names the variable), so the file there after
+a successful run is this run's. Its own emulator and device installs also
+refuse an APK whose application id (read with `aapt2`) is not the build's; the
+manual `adb install` below has no such check.
 
 > **The shared non-store key this build signs with lives outside the checkout**,
 > at `<keystore.dir>/shared/`. One location per machine, so every worktree and

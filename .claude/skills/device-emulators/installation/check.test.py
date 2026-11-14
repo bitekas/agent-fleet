@@ -18,24 +18,43 @@ WHAT THIS PINS, and what removing each case would let through:
     recorded must go green, and a copy whose build script is not executable
     must name the COPY's path - the same check, a different install, a
     different answer.
-  - Every exit state: 0 OK; 1 STALE (older, newer, unreadable, absent record,
-    another host only) and NO VERDICT (no install context); 2 NOT INSTALLED for
-    each artifact leg, each naming its own cause.
-  - The hypervisor leg runs BEFORE the AVD leg: with both broken, the line names
-    the hypervisor. A probe that is missing, or raises, is NOT INSTALLED, never a
-    skipped leg. A probe's "not probed" words reach the OK line.
-  - The JDK leg qualifies on javac: a java with no javac is NOT INSTALLED.
+  - Exit 0 OK; exit 1 STALE (older, newer, no version in the record,
+    unreadable, absent record, another host only) and NO VERDICT (no install
+    context; a hypervisor the probe answers None for); exit 2 NOT INSTALLED for
+    each leg listed below, each naming its own cause.
+  - Config: absent, unparseable, a required key missing, an unknown platform,
+    a platform not enabled; build.script not executable (naming the COPY's
+    path) and build.script written ${VAR:-default} (expanded before use).
+  - Android, in order: no adb, no emulator, no aapt2; the probe missing,
+    defining no check_hypervisor, raising, answering False, answering none of
+    True/False/None; the hypervisor leg BEFORE the AVD leg (both broken, the line
+    names the hypervisor); a probe answering None is NO VERDICT naming the leg,
+    while the other legs still run (a missing AVD beside it is still exit 2); a
+    probe answering True with "not probed" words is read as True; no javac (a
+    JRE), a java with no version, a JDK below the floor; -list-avds failing, the
+    default AVD missing, the compat AVD missing.
   - The build CLI's session: no token and no stored session is NOT INSTALLED;
-    either one alone passes that leg.
+    either one alone passes that leg; a machine whose only platform is the
+    REMOTE iOS route needs neither.
+  - The optional driver: absent is reported without failing; found on PATH;
+    found at driver_path under HOME with nothing on PATH; a relative
+    driver_path resolves against config.json's directory.
   - realpath, never abspath: run through a symlinked skill directory, the check
     still finds fleetlib and its own SKILL.md.
-  - iOS off macOS: refused with no remote host; with one, the remote leg runs
-    through a fake ssh - the hostname is resolved first (an unresolvable name is
-    named as such, never as a key problem), a missing workdir is named as
-    such, and a green remote leg says the BUILD credential is not covered.
-    These cases run only off macOS, where they are the code path; on macOS the
-    local Xcode path would run against the real machine, so they are skipped
-    and the run says so.
+  - iOS off macOS, through a fake ssh: refused with no remote host; a remote
+    user missing; the hostname resolved first (an unresolvable name is named as
+    such, never as a key problem), and NOT resolved when ssh_config names a
+    ProxyJump or a live ControlMaster socket; an unreachable Mac named as a key
+    problem; the remote Xcode floor; no remote device; a missing workdir named
+    as such; the workdir's ~ (and a $HOME form) reaching the remote shell
+    UNQUOTED, which the fake ssh enforces by answering NO_WORKDIR to a quoted
+    one; a green remote leg says the BUILD credential is not covered.
+
+WHAT THIS DOES NOT COVER, so nobody reads the list above as "every state":
+the resolver-timeout branch of the hostname leg (it needs a nameserver that
+does not answer); the local iOS path on macOS (off macOS it is not the code
+path, and on macOS these cases skip themselves because it would measure the
+real Xcode); the iOS cases as a whole on macOS, for the same reason.
 
 NEGATIVE CONTROLS: each assertion is a pair with its opposite (STALE beside OK,
 the hypervisor message beside the AVD message), and the run fails with NO
@@ -192,6 +211,7 @@ def main():
             ("an unreadable state file", "{not json", "unreadable"),
             ("a state file with no versions map", {"host": ME, "version": 3}, "unreadable"),
             ("no state file", False, "records which version"),
+            ("a record with no version", {"versions": {ME: {"by": "INSTRUCTION.md"}}}, "recorded version -1"),
             ("another machine's record alone", {"versions": {"other-host": entry()}}, "other-host")):
         rc, out = run(copy(label.replace(" ", "-"), state=state), ok_bin)
         check(f"{label} is STALE (exit 1)", rc == 1 and out.startswith("STALE") and want in out,
@@ -229,6 +249,10 @@ def main():
     rc, out = run(noexec, ok_bin)
     check("a non-executable build.script is NOT INSTALLED, naming the copy's path",
           rc == 2 and names(script, out), "rc=%d out=%r" % (rc, out))
+    rc, out = run(copy("script-var", state=mine(), mutate=lambda c: c["build"].update(
+        script="${FIXTURE_BUILD_DIR:-.}/.claude/skills/device-emulators/fixture-scripts/build.sh")), ok_bin)
+    check("build.script written ${VAR:-default} is expanded before use", rc == 0,
+          "rc=%d out=%r" % (rc, out))
 
     # === 7. The build CLI's session.
     rc, out = run(both, ok_bin, EXAMPLE_BUILD_TOKEN=None)
@@ -255,9 +279,39 @@ def main():
     rc, out = run(both, ok_bin, FIXTURE_HYPERVISOR="raise")
     check("a probe that raises is NOT INSTALLED, never a skipped leg",
           rc == 2 and "UNMEASURED" in out, "rc=%d out=%r" % (rc, out))
-    rc, out = run(both, ok_bin, FIXTURE_HYPERVISOR="darwin")
-    check("a probe's 'not probed' words reach the OK line",
+    rc, out = run(both, ok_bin, FIXTURE_HYPERVISOR="unmeasured")
+    check("a probe answering None (not measured) is NO VERDICT, exit 1, naming the leg",
+          rc == 1 and out.startswith("NO VERDICT") and "hypervisor was NOT MEASURED" in out
+          and "not measured on darwin" in out, "rc=%d out=%r" % (rc, out))
+    check("...after the other legs ran: the line says the JDK and the AVD are installed",
+          "JDK 17" in out and "Example_Phone_API_35" in out and "accel [" not in out, "out=%r" % out)
+    rc, out = run(both, no_avd, FIXTURE_HYPERVISOR="unmeasured")
+    check("an unmeasured hypervisor beside a missing AVD is still NOT INSTALLED (exit 2)",
+          rc == 2 and "no AVD named" in out, "rc=%d out=%r" % (rc, out))
+    rc, out = run(both, ok_bin, FIXTURE_HYPERVISOR="legacy-words")
+    check("a probe answering True with 'not probed' words is read as True (exit 0)",
           rc == 0 and "accel [not probed on darwin]" in out, "rc=%d out=%r" % (rc, out))
+    rc, out = run(both, ok_bin, FIXTURE_HYPERVISOR="bad-answer")
+    check("a probe answering none of True, False or None is NOT INSTALLED",
+          rc == 2 and "none of" in out, "rc=%d out=%r" % (rc, out))
+    nofunc = copy("no-func", state=mine())
+    write(os.path.join(nofunc, REL, "fixture-scripts", "hypervisor_probe.py"), "VERDICT = True\n")
+    rc, out = run(nofunc, ok_bin)
+    check("a probe defining no check_hypervisor is NOT INSTALLED",
+          rc == 2 and "defines no check_hypervisor" in out, "rc=%d out=%r" % (rc, out))
+    rc, out = run(both, fakebin("no-emulator", **{k: v for k, v in ANDROID_OK.items() if k != "emulator"}))
+    check("no emulator is NOT INSTALLED naming it", rc == 2 and "emulator not found" in out,
+          "rc=%d out=%r" % (rc, out))
+    rc, out = run(both, fakebin("avds-fail", **dict(ANDROID_OK, emulator="exit 1")))
+    check("-list-avds failing is NOT INSTALLED", rc == 2 and "-list-avds did not run" in out,
+          "rc=%d out=%r" % (rc, out))
+    rc, out = run(copy("compat", state=mine(), mutate=lambda c: c["android"]["avd"].update(
+        compat="Example_Compat_API_30")), ok_bin)
+    check("a missing compat AVD is NOT INSTALLED naming android.avd.compat",
+          rc == 2 and "android.avd.compat" in out, "rc=%d out=%r" % (rc, out))
+    rc, out = run(both, fakebin("java-silent", **dict(ANDROID_OK, java=":")))
+    check("a java that reports no version is NOT INSTALLED",
+          rc == 2 and "does not report a version" in out, "rc=%d out=%r" % (rc, out))
     noprobe = copy("no-probe", state=mine())
     os.remove(os.path.join(noprobe, REL, "fixture-scripts", "hypervisor_probe.py"))
     rc, out = run(noprobe, ok_bin)
@@ -273,6 +327,19 @@ def main():
     rc, out = run(both, driver)
     check("an optional driver on PATH is reported with its version",
           rc == 0 and "device-e2e: example-driver example-driver 1.2.3" in out, "rc=%d out=%r" % (rc, out))
+    home_driver = os.path.join(HOME, ".example-driver", "bin", "example-driver")
+    write(home_driver, "#!/bin/sh\necho example-driver 9.9.9\n", 0o755)
+    rc, out = run(both, ok_bin)
+    check("the driver at driver_path is found with nothing on PATH (driver_path before PATH)",
+          rc == 0 and "example-driver 9.9.9" in out and names(home_driver, out), "rc=%d out=%r" % (rc, out))
+    os.remove(home_driver)
+    rel_driver = copy("rel-driver", state=mine(), mutate=lambda c: c["device_e2e"].update(
+        driver_path="fixture-driver/example-driver"))
+    write(os.path.join(rel_driver, REL, "fixture-driver", "example-driver"),
+          "#!/bin/sh\necho example-driver 7.7.7\n", 0o755)
+    rc, out = run(rel_driver, ok_bin)
+    check("a relative driver_path resolves against config.json's directory",
+          rc == 0 and "example-driver 7.7.7" in out, "rc=%d out=%r" % (rc, out))
 
     # === 9. realpath: through a symlinked skill directory.
     link = os.path.join(_tmp, "agent-skills", "device-emulators")
@@ -296,18 +363,72 @@ def main():
           rc == 2 and "exists only on macOS" in out, "rc=%d out=%r" % (rc, out))
 
     devices = json.dumps({"devices": {"rt": [{"name": "Example iPhone", "isAvailable": True}]}})
+    # The fake ssh. `-G` prints the ssh_config view (hostname, and a proxy or a
+    # control path when asked). Otherwise it plays a Mac where only HOME-relative
+    # directories exist: a workdir test whose ~ reaches it QUOTED names a
+    # directory literally called "~", which is not there, so it answers
+    # NO_WORKDIR exactly as a real remote shell would.
     ssh_ok = fakebin("ssh-ok", ssh='''for a in "$@"; do last="$a"; done
-if [ "$1" = "-G" ]; then echo "hostname $SSH_FAKE_HOSTNAME"; exit 0; fi
-case "$last" in *NO_WORKDIR*) [ -n "$SSH_FAKE_NO_WORKDIR" ] && { echo NO_WORKDIR; exit 9; } ;; esac
+if [ "$1" = "-G" ]; then
+  echo "hostname $SSH_FAKE_HOSTNAME"
+  [ -n "$SSH_FAKE_PROXY" ] && echo "proxyjump $SSH_FAKE_PROXY"
+  [ -n "$SSH_FAKE_CONTROL" ] && echo "controlpath $SSH_FAKE_CONTROL"
+  exit 0
+fi
+[ -n "$SSH_FAKE_UNREACHABLE" ] && { echo "ssh: connect to host port 22: Connection refused" >&2; exit 255; }
+case "$last" in
+  *"test -d ~/"*) [ -n "$SSH_FAKE_NO_WORKDIR" ] && { echo NO_WORKDIR; exit 9; } ;;
+  *"test -d"*) echo NO_WORKDIR; exit 9 ;;
+esac
 echo /Applications/Xcode.app/Contents/Developer
-echo "Xcode 16.4"
-echo 'DEVICES' ''' .replace("DEVICES", devices))
+echo "Xcode ${SSH_FAKE_XCODE:-16}.4"
+if [ -n "$SSH_FAKE_EMPTY_LIST" ]; then echo '{"devices": {}}'; else echo 'DEVICES'; fi''' .replace("DEVICES", devices))
     rc, out = run(ios, ssh_ok, IOS_REMOTE_HOST="localhost", SSH_FAKE_HOSTNAME="localhost")
     check("remote route green: the line says the BUILD credential is not covered",
           rc == 0 and "REMOTE route to ada@localhost" in out and "NOT covered" in out,
           "rc=%d out=%r" % (rc, out))
-    check("...and the remote workdir kept its ~ for the REMOTE shell",
+    check("...and the remote workdir reached the remote shell with its ~ UNQUOTED",
           "~/example-ios-builds present" in out, "out=%r" % out)
+    # Written in the config text, not exported: a value taken from the
+    # environment is data and is never re-scanned (fleetlib.expand).
+    rc, out = run(copy("ios-home", state=mine(), mutate=lambda c: (
+        c["platforms"].update(enabled=["ios"]),
+        c["ios"]["remote"].update(workdir="${IOS_REMOTE_WORKDIR:-$HOME/example-ios-builds}"))),
+        ssh_ok, IOS_REMOTE_HOST="localhost", SSH_FAKE_HOSTNAME="localhost")
+    check("a $HOME workdir in the config also means the REMOTE home",
+          rc == 0 and "~/example-ios-builds present" in out, "rc=%d out=%r" % (rc, out))
+    rc, out = run(ios, ssh_ok, IOS_REMOTE_HOST="localhost", SSH_FAKE_HOSTNAME="localhost",
+                  EXAMPLE_BUILD_TOKEN=None)
+    check("a machine whose only platform is the REMOTE route needs no local CLI session",
+          rc == 0, "rc=%d out=%r" % (rc, out))
+    rc, out = run(ios, ssh_ok, IOS_REMOTE_HOST="localhost", SSH_FAKE_HOSTNAME="localhost",
+                  SSH_FAKE_UNREACHABLE="1")
+    check("an unreachable Mac is named as a key problem with the setup command",
+          rc == 2 and "cannot reach the remote Mac" in out and "ssh-copy-id" in out,
+          "rc=%d out=%r" % (rc, out))
+    rc, out = run(ios, ssh_ok, IOS_REMOTE_HOST="localhost", SSH_FAKE_HOSTNAME="localhost",
+                  SSH_FAKE_XCODE="15")
+    check("a remote Xcode below ios.xcode_min_major is NOT INSTALLED",
+          rc == 2 and "older than the required 16" in out, "rc=%d out=%r" % (rc, out))
+    rc, out = run(ios, ssh_ok, IOS_REMOTE_HOST="localhost", SSH_FAKE_HOSTNAME="localhost",
+                  SSH_FAKE_EMPTY_LIST="1")
+    check("no available iPhone on the remote is NOT INSTALLED with the create command",
+          rc == 2 and "simctl create" in out, "rc=%d out=%r" % (rc, out))
+    rc, out = run(copy("ios-nouser", state=mine(), mutate=lambda c: (
+        c["platforms"].update(enabled=["ios"]), c["ios"]["remote"].update(user=""))),
+        ssh_ok, IOS_REMOTE_HOST="localhost", SSH_FAKE_HOSTNAME="localhost")
+    check("a remote host with no remote user is NOT INSTALLED",
+          rc == 2 and "not ios.remote.user" in out, "rc=%d out=%r" % (rc, out))
+    rc, out = run(ios, ssh_ok, IOS_REMOTE_HOST="localhost",
+                  SSH_FAKE_HOSTNAME="no-such-host.invalid", SSH_FAKE_PROXY="bastion.example.com")
+    check("with a ProxyJump the name is NOT resolved here (no false red)", rc == 0,
+          "rc=%d out=%r" % (rc, out))
+    control = os.path.join(_tmp, "control-socket")
+    write(control, "")
+    rc, out = run(ios, ssh_ok, IOS_REMOTE_HOST="localhost",
+                  SSH_FAKE_HOSTNAME="no-such-host.invalid", SSH_FAKE_CONTROL=control)
+    check("with a live ControlMaster socket the name is NOT resolved here", rc == 0,
+          "rc=%d out=%r" % (rc, out))
     rc, out = run(ios, ssh_ok, IOS_REMOTE_HOST="localhost", SSH_FAKE_HOSTNAME="localhost",
                   SSH_FAKE_NO_WORKDIR="1")
     check("a missing remote workdir is named as such, not as unreachable",
@@ -329,4 +450,5 @@ print("")
 if _failures:
     print(f"FAIL - {len(_failures)} case(s): " + "; ".join(_failures))
     sys.exit(1)
-print("PASS - every state installation/check reports was produced and named")
+print("PASS - every case above produced its state and named its cause "
+      "(the header lists what has no case)")

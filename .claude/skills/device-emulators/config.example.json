@@ -16,10 +16,17 @@
     "written. Machine state is discovered by installation/check, and no",
     "absolute path appears below.",
     "",
-    "REPOSITORY PATHS (build.script, build.dev_script, build.env_config_script,",
-    "android.hypervisor_probe, docs.build_machine_components, device_e2e.runner)",
-    "are relative to the repository root - the install root holding",
-    ".claude/fleet.json - because they are commands an operator runs from there.",
+    "PATHS, two kinds (/claude-skill section 2). REPOSITORY paths name files in",
+    "the install's repository and resolve against the install root, the",
+    "directory holding .claude/fleet.json: build.script, build.dev_script,",
+    "build.env_config_script, android.hypervisor_probe,",
+    "docs.build_machine_components, device_e2e.runner, device_e2e.flows_dir, and",
+    "the files the scripts write at the root of the checkout they run in -",
+    "build.ports_artifact, ios.sim_artifact, android.apk_artifact,",
+    "android.aab_artifact. Every OTHER path key resolves against this file's",
+    "directory when relative: device_e2e.driver_path and keystore.dir, both",
+    "normally absolute after expansion. ios.remote.workdir is a path on the",
+    "remote Mac.",
     "",
     "Required, and enforced by installation/check against real artifacts:",
     "project.name, build.script, platforms.enabled, plus per platform -",
@@ -88,7 +95,7 @@
     "jdk_min_major": 17
   },
   "keystore": {
-    "_comment": "Directory holding the Android signing keys, one subdirectory per identity (shared, and one per environment). Keep it OUTSIDE any checkout: a path inside one is a different directory in every worktree, so a signed build works from the checkout that has the keys and dies everywhere else. It is a credential directory, so it is named through FLEET_SECRETS_DIR with the install's default store as the fallback. ${VAR:-default}, $VAR / ${VAR} and a leading ~ are the accepted forms. Paths only: no key material, and no machine-specific absolute path, because a committed one is a machine leaking into a shared file.",
+    "_comment": "Directory holding the Android signing keys, one subdirectory per identity (shared, and one per environment). Not a repository path: a relative value resolves against this file's directory. Keep it OUTSIDE any checkout: a path inside one is a different directory in every worktree, so a signed build works from the checkout that has the keys and dies everywhere else. It is a credential directory, so it is named through FLEET_SECRETS_DIR with the install's default store as the fallback. ${VAR:-default}, $VAR / ${VAR} and a leading ~ are the accepted forms. Paths only: no key material, and no machine-specific absolute path, because a committed one is a machine leaking into a shared file.",
     "dir": "${FLEET_SECRETS_DIR:-$HOME/.acme-secrets}/keystores"
   },
   "metro": {
@@ -104,7 +111,7 @@
     "build_machine_components": "docs/your-build-machine-setup.md"
   },
   "device_e2e": {
-    "_comment": "OPTIONAL, and check reports it WITHOUT failing on it: the tap driver is needed by a device e2e suite, never by the operator loop, so a machine that only runs dev builds is fully installed without it. driver_path is tried BEFORE PATH on purpose - Maestro's installer appends to shell rc files, which non-interactive shells never read, so a PATH-first probe tells CI to install what it already has. runner and flows_dir are repository-relative.",
+    "_comment": "OPTIONAL, and check reports it WITHOUT failing on it: the tap driver is needed by a device e2e suite, never by the operator loop, so a machine that only runs dev builds is fully installed without it. driver_path is tried BEFORE PATH on purpose - Maestro's installer appends to shell rc files, which non-interactive shells never read, so a PATH-first probe tells CI to install what it already has. runner and flows_dir are repository paths; driver_path is not, and a relative value resolves against this file's directory.",
     "driver": "maestro",
     "driver_path": "~/.maestro/bin/maestro",
     "runner": "scripts/your-device-e2e-runner.sh",
