@@ -208,6 +208,18 @@ def expand(value, local=True):
     return fx.value(value, env=dict(os.environ, HOME="~"))
 
 
+def repo_path(value):
+    """A config value that names a file in the install's repository, as that
+    file's path: expanded, and a relative result joined to the install root
+    (/claude-skill section 2: repository paths resolve against the install root,
+    every other relative path against config.json's directory). The root is
+    taken through realpath before the join, as fleetlib resolves a config path.
+
+    This is fleetlib.paths.resolve_repo_path's job; it lives here until that
+    helper is on this branch, and then this function becomes a call to it."""
+    return os.path.normpath(os.path.join(os.path.realpath(REPO), expand(value)))
+
+
 def android_sdk_tool(name):
     """Absolute path of an Android SDK binary, or None. See the header for why
     PATH alone is the wrong oracle. Returns a path, never a bare name, so no
@@ -278,7 +290,7 @@ def load_hypervisor_probe(cfg):
         return None, ("android: config.json is missing required key "
                       "android.hypervisor_probe, so the hypervisor - the one thing that "
                       "decides whether ANY AVD here can boot - would go unmeasured")
-    path = os.path.normpath(os.path.join(REPO, expand(rel)))
+    path = repo_path(rel)
     try:
         import importlib.util as _ilu
         spec = _ilu.spec_from_file_location("android_hypervisor_probe", path)
@@ -682,7 +694,7 @@ def main():
         out(2, "NOT INSTALLED: config.json platforms.enabled is empty; nothing to check")
 
     # ---- the build script this skill is the operator's route through ---------
-    script = os.path.normpath(os.path.join(REPO, expand(cfg["build"]["script"])))
+    script = repo_path(cfg["build"]["script"])
     if not (os.path.isfile(script) and os.access(script, os.X_OK)):
         out(2, f"NOT INSTALLED: build.script is not an executable file at {script} "
                f"(resolved against the install root {REPO})")
