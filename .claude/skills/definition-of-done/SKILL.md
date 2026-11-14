@@ -42,11 +42,14 @@ requires_install: false
 any project with a user interface: Rule 5 every change to a screen or component,
 Rule 6 every feature merge, its pass run on the development build `CONTEXT.md`
 names. Rule 5's screenshots are never conditional. Exactly two facts about a
-project lift a step, and each step says so where it applies: a project with no
-user interface at all, which Rules 5 and 6 do not bind; and a project with no
-design file (`figma.file_key` set to `null`), for which Rule 5's design-parity
-half, the checklist's design sections (1a, 1b, 1c and 4) and the design pack in
-Rule 6's presentation lift, and the checker accepts those sections empty. Rule
+project lift a whole step, and each step says so where it applies: a project
+with no user interface at all, which Rules 5 and 6 do not bind; and a project
+with no design file (`figma.file_key` set to `null`), for which Rule 5's
+design-parity half, the checklist's design sections (1a, 1b, 1c and 4) and the
+design pack in Rule 6's presentation lift, and the checker accepts those
+sections empty. One key lifts part of one step: `figma.registry_probe` set to
+`null` lifts only the probe run in Rule 5's third proof, never the registry the
+probe would read. Nothing else lifts anything. Rule
 7's surface list is written for an app with a server half, shipped to users
 through stores; for each surface the feature states what it ships there or
 `none`, with the reason (Rule 7).
@@ -77,8 +80,8 @@ ROLE, and `CONTEXT.md` names the install's skill or document that fills it:
 **A role the install does not fill is not a skip.** `CONTEXT.md` then states how
 the install meets the rule that role serves by other means. Where it cannot, the
 change that rule binds is blocked, and the reason is reported to the human
-principal; it is never reported as skipped. Only the two facts under "Where it
-applies" lift a step.
+principal; it is never reported as skipped. Only what "Where it applies" lists
+lifts a step, or part of one.
 
 **Seven rules, and their NUMBERS are part of the contract.** Agent charters,
 other skills, prompts and design documents cite these sections by number
@@ -564,9 +567,8 @@ the hand-off:
    frame leaves the mirror permanently wrong, sitting next to a deletion nobody
    will later dare make; a leftover in-build mark tells every later reader that
    shipped work is still in flight.
-3. **The install's design-id registry, where it has one, was written, and where
-   the install has a registry probe (`figma.registry_probe`), the probe is
-   green.** A freeze mints a new node id for every frame it copies and writes
+3. **The install's design-id registry was written, and where the install has a
+   registry probe (`figma.registry_probe`), the probe is green.** A freeze mints a new node id for every frame it copies and writes
    each into the one registry (`CONTEXT.md` names it), and a node id is a
    STRING - no typecheck, lint or spec can see one go dead, so without the
    registry the only symptom is a later agent getting `null` back with no way to
@@ -590,8 +592,10 @@ the hand-off:
    re-derived and therefore cannot be corrected. `figma.registry_probe` set to
    `null`: the install has no such probe, and only the probe half lapses - the
    registry is still written and read back, and the report says the probe half
-   did not run rather than reading as covered. An install that keeps no
-   design-id registry says so in `CONTEXT.md`.
+   did not run rather than reading as covered. An install with a design file
+   and no design-id registry states in `CONTEXT.md` how a frozen frame's new id
+   is recorded and found stale instead; where it cannot, the parity gate
+   blocks.
 
 **A full-page audit of the whole current page is a SEPARATE job**, commissioned
 when the human principal wants one. It is not run per task, and a task that did

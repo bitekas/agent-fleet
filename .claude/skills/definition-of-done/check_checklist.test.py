@@ -513,6 +513,19 @@ rc, out = run([os.path.join(root, CL)], config=NO_DESIGN_CFG)
 check("no design file: the presentation row is still owed, with the videos only",
       rc == 1 and "has no `6 - presented to the requester` row" in out
       and "a video of the feature per platform (N/A" in out and "diff maps" not in out, out)
+# Null lifts the design sections and nothing else: the sections it does not
+# lift stay owed under the null config, each with its one finding.
+for what, body, needle in [
+        ("an empty section 2 (scope)", emptied(BARE, "## 2. ", "## 3. "),
+         "2 has no rows: a feature has at least one scope item"),
+        ("a missing section 4b (the bug hunt)",
+         BARE.replace(BARE[BARE.index("## 4b. "):BARE.index("## 5. Definition-of-done gates")], ""),
+         "no section 4b: the bug hunt")]:
+    root = repo({CL: body})
+    rc, out = run([os.path.join(root, CL)], config=NO_DESIGN_CFG)
+    found = [l for l in out.splitlines() if l.startswith(root)]
+    check("no design file lifts nothing else: %s is still refused" % what,
+          rc == 1 and len(found) == 1 and needle in found[0], out)
 absent = load_json(CONFIG)
 del absent["figma"]["file_key"]
 root = repo({CL: BARE})
