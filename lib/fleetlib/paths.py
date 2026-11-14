@@ -297,7 +297,7 @@ def resolve_config_path(value, config_file):
     A value that names a file in the install's REPOSITORY (a script the skill
     runs, a directory of the project's documents) is resolve_repo_path's.
     """
-    return _resolve(value, os.path.dirname(os.fspath(config_file)) or ".")
+    return _resolve(value, lambda: os.path.dirname(os.fspath(config_file)) or ".")
 
 
 def resolve_repo_path(value, root=None):
@@ -309,17 +309,21 @@ def resolve_repo_path(value, root=None):
     which a worktree of it answers for itself - never against the config file's
     directory: the install context sits inside .claude/skills/<skill>/, and a
     repository path written relative to it would climb out of it. `root` is
-    taken through realpath, as the config file's directory is. No install root
-    is install_root()'s EnvironmentFault (exit 3).
+    taken through realpath, as the config file's directory is. The root is
+    looked up only for a relative value: an absolute one needs no install, and a
+    relative one with no install root is install_root()'s EnvironmentFault
+    (exit 3).
     """
-    return _resolve(value, install_root() if root is None else root)
+    return _resolve(value, lambda: install_root() if root is None else root)
 
 
 def _resolve(value, base):
+    """`value` expanded; when relative, joined to `base()` (called only then)
+    through realpath and normalized."""
     p = Path(expand.value(str(value)))
     if p.is_absolute():
         return p
-    return Path(os.path.normpath(os.path.join(os.path.realpath(os.fspath(base)), p)))
+    return Path(os.path.normpath(os.path.join(os.path.realpath(os.fspath(base())), p)))
 
 
 def secrets_dir(cwd=None):

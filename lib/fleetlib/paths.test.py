@@ -422,6 +422,13 @@ class ResolveRepoPathTest(IsolatedTest):
         self.assertFleetError(EnvironmentFault, paths.resolve_repo_path, "x", exit_code=3,
                               variable="FLEET_CONTEXT_ROOT")
 
+    def test_an_absolute_value_needs_no_install(self):
+        # As resolve_config_path never reads its config file's directory for one: the
+        # install root is looked up only for a value that needs it.
+        del os.environ["FLEET_CONTEXT_ROOT"]
+        self.assertEqual(paths.resolve_repo_path("/tmp/fleet-t3a-abs/x"), Path("/tmp/fleet-t3a-abs/x"))
+        self.assertEqual(paths.resolve_repo_path("~/k"), self.home / "k")
+
 
 class SecretsDirTest(IsolatedTest):
     def setUp(self):
