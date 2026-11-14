@@ -150,8 +150,9 @@ event name - is **shared vocabulary** across the design files, the route table,
 the source filenames, test configs and analytics tokens. A reused identifier
 silently means two things at once, and nothing can detect it. So: retire it
 permanently, keep the retirement note at the identifier's own home (the route
-table, not only the map), and record the retirement in the map so the absence
-reads as deliberate rather than as an omission.
+table or event registry that defines it, not only the map), and record the
+retirement in the map so the absence reads as deliberate rather than as an
+omission.
 
 Its counterpart: **a surface that MOVED rather than died keeps its vocabulary.**
 An analytics field naming the surface that owns a control stays valid across the
