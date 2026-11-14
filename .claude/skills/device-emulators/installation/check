@@ -210,14 +210,11 @@ def expand(value, local=True):
 
 def repo_path(value):
     """A config value that names a file in the install's repository, as that
-    file's path: expanded, and a relative result joined to the install root
-    (/claude-skill section 2: repository paths resolve against the install root,
-    every other relative path against config.json's directory). The root is
-    taken through realpath before the join, as fleetlib resolves a config path.
-
-    This is fleetlib.paths.resolve_repo_path's job; it lives here until that
-    helper is on this branch, and then this function becomes a call to it."""
-    return os.path.normpath(os.path.join(os.path.realpath(REPO), expand(value)))
+    file's path: fleetlib.paths.resolve_repo_path, against the install root this
+    check resolved (/claude-skill section 2: repository paths resolve against the
+    install root, every other relative path against config.json's directory)."""
+    from fleetlib import paths
+    return str(paths.resolve_repo_path(value, root=REPO))
 
 
 def android_sdk_tool(name):
