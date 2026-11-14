@@ -4,26 +4,26 @@ An install tells the fleet how it works through two parts of its install manifes
 
 ## Conventions slot
 
-**The fleet ships no development convention.** Where a fleet skill needs one, it names a convention key and reads the install's value with `fleet settings conventions.<key>`. The vocabulary is fixed by the fleet:
+**A fleet skill that needs a development convention names its key and reads the install's value** with `fleet settings conventions.<key>`. The fleet ships an optional software-development group of skills, defined in `templates/skill-groups.json`, whose skills fill the keys that file names: an install that takes the group points those keys at its skills, and one that does not fills them with skills or documents of its own, or leaves them `null`. The vocabulary is fixed by the fleet:
 
 | Key | What it answers | Read by |
 |---|---|---|
-| `definition_of_done` | the check a task passes before it is reported complete | the `agent` skill, section 4; persona templates |
-| `feature_checklist` | where a feature's working checklist lives, re-read after a compaction | the `agent` skill, section 4 |
-| `branch_naming` | how branches and commit subjects are named | the `agent` skill, section 4; persona templates |
-| `workspace` | where and how a write to a repository happens | persona templates |
-| `release` | how a release is cut and shipped | persona templates |
-| `environments` | which environments exist and what deploys where | persona templates |
+| `definition_of_done` | the check a task passes before it is reported complete | the `agent` skill, section 4; persona templates; the `software-development` skill |
+| `feature_checklist` | where a feature's working checklist lives, re-read after a compaction | the `agent` skill, section 4; the `software-development` skill |
+| `branch_naming` | how branches and commit subjects are named | the `agent` skill, section 4; persona templates; the `software-development` skill |
+| `workspace` | where and how a write to a repository happens | persona templates; the `software-development` skill |
+| `release` | how a release is cut and shipped | persona templates; the `software-development` skill |
+| `environments` | which environments exist and what deploys where | persona templates; the `software-development` skill |
 | `people_notes` | where the install records standing requests from people, such as how a person wants to receive questions | the `talking-to-humans` skill, rules 1, 4 and 5 |
 
 A value is one of:
 
-- `{"skill": "<name>"}` - load that skill, the install's own `.claude/skills/<name>/SKILL.md`;
-- `{"doc": "<repo-relative path>"}` - read that file; `<placeholders>` such as `<feature-slug>` are allowed inside the path, filled in when it is read (a value that is one `<...>` as a whole with a space inside, such as `<Your Name>`, is the template's placeholder, and the manifest is refused naming its key); `fleet settings` refuses a skill or a doc path, placeholders aside, that names no file in the install;
+- `{"skill": "<name>"}` - load that skill: the install's own `.claude/skills/<name>/SKILL.md`, or a fleet skill the manifest's `skills` lists, such as one of a group's; `fleet settings` refuses a name that is neither, saying which is missing (a fleet skill that `skills` does not list is not linked, which is where an install that declined a group but kept its value stands);
+- `{"doc": "<repo-relative path>"}` - read that file; `<placeholders>` such as `<feature-slug>` are allowed inside the path, filled in when it is read (a value that is one `<...>` as a whole with a space inside, such as `<Your Name>`, is the template's placeholder, and the manifest is refused naming its key); `fleet settings` refuses a doc path, placeholders aside, that names no file in the install;
 - either of the two with an optional `"section": "<heading or number>"` - read only that part;
 - `null`.
 
-**Absent or `null` means the install has no such convention.** The reading skill skips that step and says it skipped it. It never substitutes a default process.
+**Absent or `null` means the install has no such convention.** The reading skill skips that step and says it skipped it. It never substitutes a default process, and a group's values are not one: an install has them only once its manifest names them.
 
 ## House rules
 

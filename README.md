@@ -89,7 +89,9 @@ default, and `<tag>` the newest release. `SETUP.md` is the rest of the way.
 
 - **Skills** every agent loads by name: the standing agent rules, scheduling,
   chat, the stall watchdog, revival and usage health, the knowledge-store
-  conventions, and the conventions for writing a skill (the list is below).
+  conventions, and the conventions for writing a skill; and an optional group
+  an install takes as one unit, on how agents develop, land and release
+  software (the list is below).
 - **Daemons** per agent - a scheduler and one watcher per working chat
   transport - as systemd user units rendered from `systemd/` (launchd
   LaunchAgents on macOS), plus a refresh timer that restarts a daemon whose
@@ -100,9 +102,10 @@ default, and `<tag>` the newest release. `SETUP.md` is the rest of the way.
   outdated or not linked), links each agent's skills, upgrades and rolls back
   the host checkout, resolves an install's settings, runs every skill's install
   check, and reports drift.
-- **Templates** (`templates/`): the install manifest, three persona charters
-  (a lead engineer, a health doctor, a root orchestrator), the agent's system
-  unit and its launchd form, and the root of an empty knowledge store.
+- **Templates** (`templates/`): the install manifest, the optional skill groups
+  (`skill-groups.json`), three persona charters (a lead engineer, a health
+  doctor, a root orchestrator), the agent's system unit and its launchd form,
+  and the root of an empty knowledge store.
   `examples/knowledge-base/` is an example store with a handful of generic
   lessons.
 - **A commit gate**: hooks and CI that refuse private values, secrets and
@@ -117,7 +120,7 @@ names, ids, paths, people, and how that organisation builds and ships software.
 | In the fleet (COMMON) | In the install (SPECIFIC) |
 |---|---|
 | each skill's `SKILL.md`, scripts, tests, `config.example.json`, `installation/INSTRUCTION.md` and `installation/check` | each skill's `CONTEXT.md`, `config.json`, `installation/.install-state.json`, `override/` and `temporary/`, under `.claude/skills/<skill>/` |
-| the conventions vocabulary (`CONVENTIONS.md`) | its own development conventions - definition of done, branch naming, workspace, release, environments, feature checklist - as skills or documents of its own |
+| the conventions vocabulary (`CONVENTIONS.md`), and the optional software-development group of skills that fills some of its keys | its development conventions - definition of done, branch naming, workspace, release, environments, feature checklist - each a skill of that group where the install takes it, a skill or document of its own, or none |
 | house-rule defaults | its house-rule values |
 | persona templates | its agents' charters, `.claude/agents/<agent-name>.md` |
 | the knowledge-store mechanism and an empty store root | its filled knowledge store |
@@ -130,10 +133,12 @@ live, and the identity its agents use when they contribute to the fleet.
 manifest through `lib/fleetlib/`; `fleet settings` prints the resolved values
 and `fleet where <skill>` prints where a skill's SPECIFIC files live.
 
-**The fleet ships no development process.** Where a skill needs one - when is a
-task done, how is a branch named - it reads a convention key, and an install
-that leaves a key `null` has no such convention: the skill skips that step and
-says so.
+**The fleet's development process is optional.** Where a skill needs one - when
+is a task done, how is a branch named - it reads a convention key. An install
+that takes the software-development group points those keys at the group's
+skills; one that does not points them at skills or documents of its own, or
+leaves a key `null`, and then has no such convention: the skill skips that step
+and says so.
 
 ## The host-checkout model
 
@@ -176,8 +181,22 @@ it is.
 - **Fleet health:** `agent-health` (the usage sweep and the account handover),
   `agent-revive` (triaging a stuck agent and signing it back in).
 - **Integrations:** `google-spreadsheet`, `notion-workspace`,
-  `web-hierarchy-server` (a live web page of an agent's delegation tree),
-  `rate-graphic` (a model's pre-flight check on a generated image).
+  `figma-workspace`, `web-hierarchy-server` (a live web page of an agent's
+  delegation tree), `rate-graphic` (a model's pre-flight check on a generated
+  image).
+- **Software development** (optional, taken as one unit; the group is defined
+  in `templates/skill-groups.json`, and its skills fill the conventions keys
+  that file names):
+  [software-development](.claude/skills/software-development/SKILL.md) (the
+  practice: short rules with their reasons),
+  [definition-of-done](.claude/skills/definition-of-done/SKILL.md),
+  [worktree-workflow](.claude/skills/worktree-workflow/SKILL.md),
+  [tooling-index](.claude/skills/tooling-index/SKILL.md),
+  [architecture-map](.claude/skills/architecture-map/SKILL.md),
+  [e2e-suite](.claude/skills/e2e-suite/SKILL.md),
+  [repo-and-environments](.claude/skills/repo-and-environments/SKILL.md),
+  [release](.claude/skills/release/SKILL.md),
+  [device-emulators](.claude/skills/device-emulators/SKILL.md).
 
 ## Requirements
 

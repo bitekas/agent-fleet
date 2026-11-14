@@ -3,6 +3,9 @@
     "FIXTURE install manifest for the fleet's own tests (FLEET_CONTEXT_ROOT=tests/fixtures/install).",
     "Every value is synthetic. Every house rule differs from its fleet default, so a test can tell",
     "a value read from here from a default; the conventions use all three value forms.",
+    "It takes the software-development skill group (templates/skill-groups.json): skills lists every",
+    "skill of the group, and the conventions name the group's skills, except branch_naming, which",
+    "points at a document of the install's own, as an install that keeps one may.",
     "transports.enabled names slack: load it with the registry at tests/fixtures/transports",
     "(FLEET_TRANSPORTS_DIR, or the skills_dir argument) until the fleet tree carries the real",
     "slack-communication/transport.json; the fixture descriptor holds the same values."
@@ -14,16 +17,18 @@
     "soft-restart", "stall-watchdog", "slack-communication", "agent-revive", "agent-health",
     "knowledge-base", "claude-skill", "web-hierarchy-server", "google-spreadsheet",
     "notion-workspace", "rate-graphic", "chat-transport", "adding-an-agent",
-    "install-agent-fleet", "safe-box"
+    "install-agent-fleet", "safe-box", "figma-workspace",
+    "software-development", "definition-of-done", "worktree-workflow", "tooling-index",
+    "architecture-map", "e2e-suite", "repo-and-environments", "release", "device-emulators"
   ],
   "transports": { "enabled": ["slack"], "default": "slack" },
   "conventions": {
-    "definition_of_done": { "skill": "example-definition-of-done" },
+    "definition_of_done": { "skill": "definition-of-done" },
     "feature_checklist": { "doc": "docs/checklists/<feature-slug>.md" },
     "branch_naming": { "doc": "docs/example-process.md", "section": "Branch names" },
-    "workspace": { "skill": "example-workspace", "section": 3 },
-    "release": null,
-    "environments": null
+    "workspace": { "skill": "worktree-workflow", "section": 3 },
+    "release": { "skill": "release" },
+    "environments": { "skill": "repo-and-environments" }
   },
   "house_rules": {
     "questions_per_message": 2,

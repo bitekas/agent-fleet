@@ -354,14 +354,18 @@ Replace every value of the manifest; each `_comment` says what it is. Then, from
 `fleet settings` prints the resolved settings with the fleet defaults applied.
 `fleet settings` refuses a manifest with an unknown, mistyped or missing key, a
 value still in the template's placeholder form (one `<...>` with a space
-inside), or a convention or `upstream.deny_list` that names a file this checkout
-does not have (a convention skill is `.claude/skills/<name>/SKILL.md`; a doc path
-holding a `<placeholder>` is not followed), by naming the key.
+inside), or a convention or `upstream.deny_list` that names a file that is not
+there (a convention skill is the checkout's own `.claude/skills/<name>/SKILL.md`,
+or a fleet skill that `skills` lists and the fleet has; a doc path holding a
+`<placeholder>` is not followed), by naming the key.
 
 - **`conventions`** is the slot for your development process (`CONVENTIONS.md`).
-  Point a key at one of your own skills or documents, or leave it `null`: then
-  you have no such convention, and the skills that read it skip that step and
-  say so.
+  To take the fleet's optional software-development group, add every name in
+  its `skills` (`templates/skill-groups.json`) to the manifest's `skills`, and
+  set the keys its `conventions` names to those values. Any other key, or one
+  you keep your own, points at one of your own skills or documents, or is left
+  `null`: then you have no such convention, and the skills that read it skip
+  that step and say so.
 - **`house_rules`** are the fleet's writing and cadence defaults; change only
   what you want different (`CONVENTIONS.md`).
 - **`upstream`** matters only if your agents contribute to the fleet:

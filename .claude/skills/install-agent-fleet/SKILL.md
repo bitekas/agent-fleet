@@ -216,7 +216,15 @@ and 9 are asked either way. In this order:
    a stuck agent back in through a browser on the target, which needs the
    browser's system libraries there. Keep the ones the person wants and remove
    the rest from `skills`; adding one later is a manifest edit plus that
-   skill's `installation/INSTRUCTION.md`.
+   skill's `installation/INSTRUCTION.md`. **Each group in
+   `<clone>/templates/skill-groups.json` is ONE more item**, read from that
+   file when asking, never from a list written here: its name and, in one
+   line, what its `_comment` says it is, and that its skills fill conventions
+   keys of question 7. Yes adds every name in the group's `skills` to the
+   manifest's `skills`; no adds nothing, and the manifest stays as the template
+   writes it. The proposal, when the request does not answer it: yes when
+   `<project>` is a code repository the agents will change, no otherwise; the
+   person decides.
 4. **Where credentials and the knowledge store live on the target** ->
    `secrets.default_dir` (SETUP section 1 step 5; the template's
    `~/.fleet-secrets` is the proposal) and the knowledge store's root
@@ -232,12 +240,16 @@ and 9 are asked either way. In this order:
 6. **Reference cities** -> `house_rules.times.cities`: the clocks every time a
    person reads is shown in, in order. Propose the city of question 5's zone.
 7. **Development conventions** -> the `conventions` keys in
-   `CONVENTIONS.md`'s table. Look through `<project>` first - a contributing
-   guide, a `docs/` directory, the project's own `.claude/skills/` - and propose
-   a value per key: `{"doc": "<repo-relative path>"}`, `{"skill": "<name>"}`
-   (the project's own `.claude/skills/<name>/SKILL.md`), or `null`. `null` is a
-   full answer: the fleet ships no conventions, and a skill that reads a `null`
-   key skips that step and says so.
+   `CONVENTIONS.md`'s table. When question 3 took a group, propose the values
+   its `conventions` in `<clone>/templates/skill-groups.json` gives, as they
+   stand, for the keys it fills. For every other key, and for every key when no
+   group was taken, look through `<project>` - a contributing guide, a `docs/`
+   directory, the project's own `.claude/skills/` - and propose a value:
+   `{"doc": "<repo-relative path>"}`, `{"skill": "<name>"}` (the project's own
+   `.claude/skills/<name>/SKILL.md`, or a fleet skill `skills` lists), or
+   `null`. The project's own skill or document may stand in for a group's value
+   when the person prefers it. `null` is a full answer: a skill that reads a
+   `null` key skips that step and says so.
 8. **Claude accounts** -> how many Claude accounts the person has for the
    agents. With two or more, step 9 offers a `doctor` agent and the account
    pool: doctor moves an agent onto the account with the most headroom before a
@@ -580,3 +592,14 @@ named; the questions are here.
    (`/<skill> step N`) that a renumbered skill no longer resolves is a `DRIFT`
    row naming the charter and its line, which the charter's owner fixes.
    `<clone>` here moves to the same tag [here].
+
+**Taking a skill group later** - the install declined it, or it is new in this
+release - is a change to the project, made, shown and committed as step 6 of
+the install makes one: in `.claude/fleet.json`, add every name in the group's
+`skills` (`<fleet>/templates/skill-groups.json`) to `skills`, set each key its
+`conventions` names to that value unless the person keeps the install's own,
+and raise `fleet.min_tag` to a release that carries the group. `fleet settings`
+in `<work>` exits 0 before the diff is shown. Once the commit is on the branch
+the agents track, `fleet link <agent-name>` for each agent [target], then each
+group skill's `installation/INSTRUCTION.md`, where it has one, and `fleet
+status`.

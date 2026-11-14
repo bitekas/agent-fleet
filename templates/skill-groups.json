@@ -1,0 +1,40 @@
+{
+  "_comment": [
+    "The fleet's optional skill groups. A group is a set of fleet skills an install takes as one unit,",
+    "and the conventions values those skills fill. JSON has no comments, so every key starting with _ is",
+    "documentation a reader skips.",
+    "",
+    "Each group, under its name: skills, the fleet skills it adds to the install manifest's `skills`",
+    "(each a .claude/skills/<name>/SKILL.md in this tree); conventions, the conventions keys",
+    "(CONVENTIONS.md) its skills fill, each value in the manifest's {\"skill\": \"<name>\"} form, naming",
+    "one of the group's skills.",
+    "",
+    "Taking a group is a manifest edit and nothing else: add every name in its `skills` to the",
+    "manifest's `skills`, and set the conventions keys it fills to its values, or to the install's own",
+    "skill or document where the install keeps one (a key the group fills is still the install's to",
+    "set). A manifest that takes no group is exactly what templates/fleet.example.json writes.",
+    "The install-agent-fleet skill offers each group as one item; its Upgrade section says how an",
+    "existing install takes one later. This file is the one list of a group's skills: the installer,",
+    "the skill-references gate and the manifest tests read it, and README.md's bullet for the group",
+    "is held to it."
+  ],
+  "software-development": {
+    "_comment": [
+      "How agents develop, land and release software: practice (software-development) and the",
+      "process skills that fill the definition_of_done, branch_naming, workspace, release and",
+      "environments keys. For an install whose agents change a code repository. A group skill cites a",
+      "sibling by name; fleet prose outside the group cites the conventions key instead."
+    ],
+    "skills": [
+      "software-development", "definition-of-done", "worktree-workflow", "tooling-index",
+      "architecture-map", "e2e-suite", "repo-and-environments", "release", "device-emulators"
+    ],
+    "conventions": {
+      "definition_of_done": { "skill": "definition-of-done" },
+      "branch_naming": { "skill": "worktree-workflow" },
+      "workspace": { "skill": "worktree-workflow" },
+      "release": { "skill": "release" },
+      "environments": { "skill": "repo-and-environments" }
+    }
+  }
+}

@@ -8,7 +8,9 @@ import os
 import re
 import shutil
 import sys
+import tempfile
 import unittest
+from pathlib import Path
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
@@ -538,6 +540,95 @@ class ConventionsDocTest(unittest.TestCase):
             self.assertEqual(json.loads(rows[name]), want, name)
 
 
+
+def skill_groups():
+    return manifest.strip_comments(read_json(REPO / "templates" / "skill-groups.json"))
+
+
+README_LINK = re.compile(r"\[([a-z0-9][a-z0-9-]*)\]\(\.claude/skills/([a-z0-9][a-z0-9-]*)/SKILL\.md\)")
+
+
+def readme_bullet(text, group):
+    """The names README.md's bullet for `group` links, in order, or None when it has
+    no bullet: the bullet whose bold heading, lower-cased with spaces as hyphens, is
+    the group's name, through its indented continuation lines."""
+    lines = text.split("\n")
+    for i, line in enumerate(lines):
+        m = re.match(r"- \*\*([^*]+)\*\*", line)
+        if m and m.group(1).strip().lower().replace(" ", "-") == group:
+            body = [line] + [x for x in _continuation(lines[i + 1:])]
+            links = README_LINK.findall(" ".join(body))
+            assert all(a == b for a, b in links), f"a link's text is not its skill directory: {links}"
+            return [a for a, _ in links]
+    return None
+
+
+def _continuation(lines):
+    for x in lines:
+        if not x.startswith("  ") or not x.strip():
+            return
+        yield x
+
+
+class SkillGroupsTest(unittest.TestCase):
+    """templates/skill-groups.json, the one list of each skill group, held to the
+    tree: each group's skills are fleet skills, its conventions are schema keys
+    whose values name its own skills, a manifest that takes it passes `fleet
+    settings`' path check against this fleet tree, README.md's bullet for it links
+    exactly its skills, and the fixture install takes it whole."""
+
+    def setUp(self):
+        self.GROUPS = skill_groups()  # per test: an unreadable file reds these tests, not the module
+
+    def test_the_software_development_group_is_defined(self):
+        self.assertIn("software-development", self.GROUPS)
+        self.assertEqual(self.GROUPS["software-development"]["skills"][0], "software-development")
+
+    def test_every_group_skill_has_a_skill_md(self):
+        for g, d in self.GROUPS.items():
+            with self.subTest(g):
+                self.assertEqual(len(set(d["skills"])), len(d["skills"]), "a skill listed twice")
+                missing = [n for n in d["skills"] if not (REPO / ".claude/skills" / n / "SKILL.md").is_file()]
+                self.assertEqual(missing, [], f"group {g}: these skills have no .claude/skills/<name>/SKILL.md")
+
+    def test_every_convention_is_a_schema_key_naming_a_group_skill(self):
+        for g, d in self.GROUPS.items():
+            for k, v in d["conventions"].items():
+                with self.subTest(group=g, key=k):
+                    self.assertIn(k, manifest.CONVENTION_KEYS)
+                    self.assertEqual(sorted(v), ["skill"], 'not {"skill": <name>}')
+                    self.assertIn(v["skill"], d["skills"], "names a skill outside the group")
+
+    def test_a_manifest_taking_the_group_passes_the_path_check(self):
+        # What the installer writes when the person takes a group: its skills added,
+        # its conventions as they stand. No install-own skill exists, so every value
+        # resolves through the fleet tree (this repository) or not at all.
+        for g, d in self.GROUPS.items():
+            with self.subTest(g), tempfile.TemporaryDirectory(prefix="fleet-groups-") as tmp:
+                m = copy.deepcopy(MINIMAL)
+                m["skills"] += d["skills"]
+                m["conventions"] = copy.deepcopy(d["conventions"])
+                root = make_install(Path(tmp) / "inst", m)
+                loaded = manifest.load(root, skills_dir=FIXTURE_TRANSPORTS)
+                try:
+                    manifest.check_paths(loaded, root)
+                except ManifestError as err:
+                    self.fail(f"group {g}: {err}")
+
+    def test_readme_links_exactly_each_group(self):
+        text = (REPO / "README.md").read_text(encoding="utf-8")
+        for g, d in self.GROUPS.items():
+            with self.subTest(g):
+                got = readme_bullet(text, g)
+                self.assertIsNotNone(got, f"README.md has no bullet headed **{g.replace('-', ' ').capitalize()}**")
+                self.assertEqual(sorted(got), sorted(d["skills"]))
+                self.assertEqual(len(set(got)), len(got), "a skill linked twice")
+
+    def test_the_fixture_install_takes_every_group_whole(self):
+        have = set(fixture()["skills"])
+        for g, d in self.GROUPS.items():
+            with self.subTest(g):
+                self.assertEqual([n for n in d["skills"] if n not in have], [])
 
 if __name__ == "__main__":
     unittest.main()

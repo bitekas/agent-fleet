@@ -15,7 +15,10 @@
     "schema: always 1 for this fleet version.",
     "skills: the fleet skills `fleet link` links into each agent's .claude/skills/. It must",
     "include chat-transport and the skill of every enabled transport (slack-communication for",
-    "slack). Remove a skill to stop linking it.",
+    "slack). Remove a skill to stop linking it. The fleet's optional skill groups, such as",
+    "software-development (how agents develop, land and release software), are not listed here:",
+    "templates/skill-groups.json defines each one, and an install takes a group by adding every",
+    "name in its `skills` to this list and setting the conventions keys it fills.",
     "Required keys: schema, fleet, skills, transports. Every other key is optional; an absent",
     "key takes the fleet default shown in CONVENTIONS.md."
   ],
@@ -33,7 +36,7 @@
     "soft-restart", "stall-watchdog", "slack-communication", "agent-revive", "agent-health",
     "knowledge-base", "claude-skill", "web-hierarchy-server", "google-spreadsheet",
     "notion-workspace", "rate-graphic", "chat-transport", "adding-an-agent",
-    "install-agent-fleet", "safe-box"
+    "install-agent-fleet", "safe-box", "figma-workspace"
   ],
   "transports": {
     "_comment": [
@@ -50,8 +53,10 @@
       "{\"skill\": \"<name>\"} (load that skill) or {\"doc\": \"<repo-relative path>\"} (read that file;",
       "<placeholders> allowed), either with an optional \"section\", or null. Absent or null means",
       "your install has no such convention: the reading skill skips that step and says so.",
-      "A skill is the install's own .claude/skills/<name>/SKILL.md; `fleet settings` refuses a",
-      "skill or a doc path (placeholders aside) that names no file in the install.",
+      "A skill is the install's own .claude/skills/<name>/SKILL.md, or a fleet skill listed in",
+      "skills, such as one of a skill group's (templates/skill-groups.json names the values a group",
+      "fills). `fleet settings` refuses a skill that is neither, and a doc path (placeholders",
+      "aside) that names no file in the install.",
       "people_notes is where your install records standing requests from people, such as a",
       "person who wants every open question collected into one daily digest.",
       "The keys and who reads them: CONVENTIONS.md."
