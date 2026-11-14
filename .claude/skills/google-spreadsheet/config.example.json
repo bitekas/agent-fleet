@@ -29,7 +29,7 @@
     "subject_template": "{agent}@example.com"
   },
   "credential": {
-    "_comment": "PATH to the service-account key JSON, never the key. `{agent}`, `{default_subject}` and `{home}` are substituted first, then ${VAR:-default} and $VAR, then a leading ~. `{home}` is that agent's home, <agents_root>/<agent>, with the agents root read from the fleet's host settings (host.json, written by `fleet install`). `{default_subject}` is THIS INSTALL'S own user and deliberately not whatever --as asked for: impersonating another user does not change which key file signs. The account behind this key must hold domain-wide delegation for the scopes below on the Workspace the subject lives in - a key without that grant mints nothing (`unauthorized_client`), whatever else it could do.",
+    "_comment": "PATH to the service-account key JSON, never the key. `{agent}`, `{default_subject}` and `{home}` are substituted first, then ${VAR:-default} and $VAR, then a leading ~, and the result must be an ABSOLUTE path. `{home}` is that agent's home, <agents_root>/<agent>, with the agents root read from the fleet's host settings (host.json, written by `fleet install`). `{default_subject}` is THIS INSTALL'S own user and deliberately not whatever --as asked for: impersonating another user does not change which key file signs. The account behind this key must hold domain-wide delegation for the scopes below on the Workspace the subject lives in - a key without that grant mints nothing (`unauthorized_client`), whatever else it could do.",
     "key_path": "{home}/secrets/personal/{default_subject}-service-account.json"
   },
   "api": {

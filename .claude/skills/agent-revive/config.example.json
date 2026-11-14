@@ -103,7 +103,8 @@
     "_comment": [
       "The Claude login's ACCOUNT POOL. The login governs the token quota and nothing",
       "else, so its accounts belong to no agent: any agent may be signed in with any",
-      "pool account, and SKILL.md step 5 says which one.",
+      "pool account, and SKILL.md step 5 says which one. Every path in this block is an",
+      "ABSOLUTE path, as its placeholder says; a leading ~ is expanded.",
       "",
       "pool_file: PATH to the pool - a JSON LIST of { username, password, token_file,",
       "home_agent }, mode 0600, outside this tree. NOT a credential - a path to one.",

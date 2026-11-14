@@ -40,7 +40,9 @@
       "",
       "⚠️ Deleting this file does NOT stop the schedules. Every task re-arms from an empty",
       "state on its next evaluation and fires nothing until its next due time - so a daily",
-      "job quietly skips a day and reports nothing. Use `sched.py cancel`, never `rm`."
+      "job quietly skips a day and reports nothing. Use `sched.py cancel`, never `rm`.",
+      "",
+      "path: an ABSOLUTE path; a leading ~ is expanded."
     ],
     "path": "<agents-root>/<agent>/state/scheduler/tasks.db",
     "busy_timeout_secs": 5
@@ -131,6 +133,7 @@
       "                there is ONE roster on the machine and not a second copy here",
       "                that drifts. Read on demand, never at import: an install with no",
       "                roster, or one whose copy is briefly unreadable, must still run.",
+      "                An ABSOLUTE path; a leading ~ is expanded.",
       "directory_key:  the dotted path to the id-to-name object inside that file.",
       "id_pattern:     what an unresolved id LOOKS like. A `--requester` matching this",
       "                that the directory cannot resolve is REFUSED outright. null (the",
