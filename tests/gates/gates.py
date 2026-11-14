@@ -8,8 +8,11 @@ Usage: python3 tests/gates/gates.py <gate>
 Gates (design 4.12):
   skill-references  every backticked `/name` in fleet prose resolves to
                     .claude/skills/<name>/SKILL.md, unless NOT_SKILLS names it;
-                    and fleet prose never names an install's skill where a
-                    conventions key belongs (INSTALL_SKILLS)
+                    and fleet prose outside a skill group never names a skill
+                    that fills a conventions key for that group, where the key
+                    belongs (key_skills: the group's `conventions` values in
+                    templates/skill-groups.json); the group's own skill
+                    directories cite their siblings freely
   bash-safe         every extensionless Python script carries, as line 2, the
                     shell hand-off line claude-skill section 3 prints, byte for byte
   layout            no SPECIFIC file under .claude/skills/ (CONTEXT.md,
@@ -169,12 +172,44 @@ NOT_SKILLS = {
     "run": "absolute filesystem path",
     "tmp": "absolute filesystem path",
 }
-# Skills an install keeps for its own development process. Fleet prose cites
-# the conventions key that points at one (CONVENTIONS.md), never the skill. A
-# name in any `/name` form is refused; the hyphenated ones also when backticked
-# bare (`release` is itself a conventions key, so only `/release` is refused).
-INSTALL_SKILLS = ("definition-of-done", "worktree-workflow", "repo-and-environments",
-                  "e2e-suite", "release")
+GROUPS = "templates/skill-groups.json"
+
+
+def skill_groups(root):
+    """{group: {"skills": [...], "conventions": {key: {"skill": name}}}} from
+    templates/skill-groups.json, every _-prefixed key skipped: the one list of
+    each group's skills. A file this gate cannot read as groups is NO VERDICT."""
+    try:
+        data = json.loads((root / GROUPS).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise NoVerdict(f"{GROUPS} cannot be read as JSON: {e}")
+    groups = {k: v for k, v in data.items() if not k.startswith("_")} if isinstance(data, dict) else {}
+    for name, g in groups.items():
+        if not (isinstance(g, dict) and isinstance(g.get("skills"), list) and isinstance(g.get("conventions"), dict)
+                and all(isinstance(v, dict) and isinstance(v.get("skill"), str)
+                        for k, v in g["conventions"].items() if not k.startswith("_"))):
+            raise NoVerdict(f"{GROUPS}: group {name!r} is not {{\"skills\": [...], \"conventions\": "
+                            f"{{<key>: {{\"skill\": <name>}}}}}}")
+    if not groups:
+        raise NoVerdict(f"{GROUPS} defines no group")
+    return groups
+
+
+def key_skills(groups):
+    """{skill: {group, ...}}: the fleet skills that fill a conventions key, with the
+    groups whose `conventions` name them. Fleet prose outside such a group cites
+    the key (CONVENTIONS.md), never the skill: an install may decline the group,
+    or fill the key with a skill or document of its own. A name in any `/name`
+    form is refused; a hyphenated one also when backticked bare (`release` is
+    itself a conventions key, so only `/release` is refused)."""
+    out = {}
+    for name, g in groups.items():
+        for k, v in g["conventions"].items():
+            if not k.startswith("_"):
+                out.setdefault(v["skill"], set()).add(name)
+    if not out:
+        raise NoVerdict(f"{GROUPS}: no group fills a conventions key, so this half of the gate has nothing to see")
+    return out
 
 
 def check_skill_references(root):
@@ -183,17 +218,24 @@ def check_skill_references(root):
                 for n in names if not re.fullmatch(r"[a-z][a-z0-9-]*", n)]
     known = set(names)
     seen = set()
-    slash_install = re.compile(r"(?<![\w./-])/(%s)(?![\w-])" % "|".join(map(re.escape, INSTALL_SKILLS)))
-    bare_install = re.compile(r"`(%s)`" % "|".join(re.escape(n) for n in INSTALL_SKILLS if "-" in n))
+    groups = skill_groups(root)
+    fills = key_skills(groups)
+    slash_fill = re.compile(r"(?<![\w./-])/(%s)(?![\w-])" % "|".join(map(re.escape, sorted(fills))))
+    bare_fill = re.compile(r"`(%s)`" % "|".join(re.escape(n) for n in sorted(fills) if "-" in n))
     for path in prose(root):
+        parts = path.split("/")
+        mine = {g for g, d in groups.items()
+                if len(parts) > 3 and parts[:2] == [".claude", "skills"] and parts[2] in d["skills"]}
         for no, line in enumerate(lines_of(root, path), 1):
             for name in TOKEN.findall(line):
                 seen.add(name)
-                if name not in known and name not in NOT_SKILLS and name not in INSTALL_SKILLS:
+                if name not in known and name not in NOT_SKILLS and (name not in fills or fills[name] & mine):
                     findings.append(f"{path}:{no}: `/{name}` does not resolve to .claude/skills/{name}/SKILL.md")
-            for m in list(slash_install.finditer(line)) + list(bare_install.finditer(line)):
-                findings.append(f"{path}:{no}: names the install's skill '{m.group(1)}'; "
-                                f"cite a conventions key (CONVENTIONS.md) instead")
+            for m in list(slash_fill.finditer(line)) + list(bare_fill.finditer(line)):
+                if not fills[m.group(1)] & mine:
+                    findings.append(f"{path}:{no}: names '{m.group(1)}', a skill that fills a conventions key; "
+                                    f"outside its group ({', '.join(sorted(fills[m.group(1)]))}) cite the key "
+                                    f"(CONVENTIONS.md) instead")
     for name, reason in NOT_SKILLS.items():
         if name in known:
             findings.append(f"tests/gates/gates.py: NOT_SKILLS row '{name}' ({reason}) names a fleet skill; delete the row")
@@ -203,20 +245,40 @@ def check_skill_references(root):
 
 
 def control_skill_references(copy):
-    first = skills(copy)[0]
+    groups = skill_groups(copy)
+    group, members = next((g, d["skills"]) for g, d in groups.items() if d["skills"])
+    fill = sorted(n for n, gs in key_skills(groups).items() if group in gs)
+    bare = [n for n in fill if "-" in n]
+    if len(fill) < 2 or not bare:
+        raise NoVerdict(f"{GROUPS}: group {group!r} fills fewer than two keys, or none with a hyphenated "
+                        f"skill, so the control cannot plant both forms")
+    a, b, h = fill[0], fill[-1], bare[0]
+    first = next(n for n in skills(copy) if not any(n in d["skills"] for d in groups.values()))
     skill_md = f".claude/skills/{first}/SKILL.md"
-    append(copy, skill_md, "\nSee `/no-such-skill`.\n")
+    append(copy, skill_md, f"\nSee `/no-such-skill`.\nCut it as `/{a}` section 2 says.\n")
     created = {p: "See `/no-such-skill`.\n" for p in
                ("templates/zz-gate-control.md", "examples/zz-gate-control.md", "zz-gate-control.md")}
     for p, text in created.items():
         write(copy, p, text)
-    append(copy, "README.md", "\nThe install's /definition-of-done applies.\n")
+    append(copy, "zz-gate-control.md", f"Follow `{h}` there.\n")
+    append(copy, "README.md", f"\nThe install's /{a} applies.\n")
+    # Inside the group: a sibling that fills a key is cited freely (decoy), and one
+    # missing from the tree still does not resolve (fault).
+    if not (copy / f".claude/skills/{a}/SKILL.md").is_file():
+        write(copy, f".claude/skills/{a}/SKILL.md", f"---\nname: {a}\n---\n")
+    shutil.rmtree(copy / ".claude/skills" / b, ignore_errors=True)
+    inside = f".claude/skills/{members[0]}"
+    write(copy, f"{inside}/zz-group-decoy.md", f"Cut it as `/{a}` section 2 says, and as /{a} says; `{h}` too.\n")
+    write(copy, f"{inside}/zz-group-fault.md", f"See `/{b}` section 1.\n")
     # decoys: a path, an allowed built-in, a fixture's prose
     write(copy, f".claude/skills/{first}/zz-decoy.md", "Read `/etc/hosts`; type `/compact`.\n")
     write(copy, f".claude/skills/{first}/fixtures/zz-decoy.md", "See `/no-such-fixture-ref`.\n")
     expected = [(p, "`/no-such-skill` does not resolve") for p in [skill_md, *created]]
-    expected.append(("README.md", "install's skill 'definition-of-done'"))
-    return expected, ["no-such-fixture-ref", "/etc", "zz-decoy.md"]
+    expected += [(skill_md, f"names '{a}', a skill that fills a conventions key"),
+                 ("README.md", f"names '{a}', a skill that fills a conventions key"),
+                 ("zz-gate-control.md", f"names '{h}', a skill that fills a conventions key"),
+                 (f"{inside}/zz-group-fault.md", f"`/{b}` does not resolve")]
+    return expected, ["no-such-fixture-ref", "/etc", "zz-decoy.md", "zz-group-decoy.md"]
 
 
 # --------------------------------------------------------------- bash-safe
