@@ -111,9 +111,9 @@ as lingering does on Linux. So the agents user is the automatic-login account.
   included, and the tmux the watchdog runs with every directory searched
   before it on the job's PATH. That PATH is rendered from where tmux and
   `python3` are, so on a Mac without Homebrew, where the agents user installed
-  them in its own `~/.local/bin` (the layout of the fleet's own macOS CI
-  runner, `CONTRIBUTING.md` section 9), the check FAILs both: the watched
-  agent could replace either. The layout that passes is Homebrew's, installed
+  them in a directory of its own such as `~/.local/bin` (the layout of the
+  fleet's own macOS CI runners, `CONTRIBUTING.md` section 9), the check FAILs
+  both: the watched agent could replace either. The layout that passes is Homebrew's, installed
   as `<user>`.
   **A LaunchDaemon has no window server and no login Keychain, so these agents
   sign in only with a token or an API key**: `/adding-an-agent` refuses a full

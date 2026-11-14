@@ -19,8 +19,8 @@ WHAT EACH CHECK IS FOR
      its PATH (naming tmux and the PATH searched); a tmux that is found but does
      not run; an interpreter that does not exist.
   RS the session job (`--job session`, templates/claude-agent.plist.example) on a
-     Mac WITHOUT Homebrew: tmux, claude and python3 in one temp `.local/bin`, as the
-     macOS CI runner keeps them. The rendered job runs that python3, its boot
+     Mac WITHOUT Homebrew: tmux, claude and python3 in one temp `.local/bin`, a
+     directory of the user's own. The rendered job runs that python3, its boot
      message's three follower commands name it too, nothing in it runs
      Homebrew's python3, its PATH starts with that `.local/bin` and then keeps
      every directory of KEEP_SESSION in order (the PIN: Homebrew's, /usr/local/bin,

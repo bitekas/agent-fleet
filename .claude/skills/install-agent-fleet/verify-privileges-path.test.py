@@ -10,8 +10,9 @@ reaches. An agents user that can change that file, or put a `tmux` in a director
 searched before it, runs its own program wherever the watchdog runs tmux - and a tmux
 that answers every capture with an idle pane switches the protected watchdog off. On
 macOS the renderer writes the job's PATH from where tmux and the interpreter are, so a
-tmux in the agents user's own ~/.local/bin (the CI Mac mini's layout) puts that
-directory first on the job's PATH.
+tmux in a directory the agents user owns, such as ~/.local/bin (the user-installed
+layout: a Mac whose user installed tmux itself, as the fleet's macOS CI runners do),
+puts that directory first on the job's PATH.
 
 THE HARNESS is verify-privileges.test.py's, imported, not copied: its fake systemctl,
 sudo, pkcheck and id, its World of real files, and its stand-in for a root-owned
@@ -34,7 +35,7 @@ WHAT EACH CHECK IS FOR
         and that source.
      S2 the unit's own Environment=PATH wins over the manager's (whose PATH here
         reaches no tmux): ok, naming Environment= as the source.
-     S3 the CI Mac mini's layout, on systemd: tmux in a ~/.local/bin this user owns:
+     S3 the user-installed layout, on systemd: tmux in a ~/.local/bin this user owns:
         FAIL naming "the tmux the watchdog runs", exit 1; UNPROTECTED, exit 4, with
         --no-admin.
      S4 a directory this user may write, searched before a protected tmux: FAIL naming
@@ -54,7 +55,7 @@ WHAT EACH CHECK IS FOR
      L1 (control) the plist's PATH reaches a protected tmux: five ok lines, the tmux's
         naming the plist's EnvironmentVariables as the source.
      L2 no PATH key: the line names launchd's default PATH as the source.
-     L3 the CI Mac mini's layout as render-plist.py renders it there: python3 and tmux
+     L3 the user-installed layout as render-plist.py renders it: python3 and tmux
         in this user's own ~/.local/bin, PATH=<that>:/usr/bin:/bin:/usr/sbin:/sbin:
         FAIL for the tmux AND for the interpreter.
      L4 a directory this user may write, searched before a protected tmux: FAIL
@@ -207,7 +208,7 @@ def systemd(base):
         layout = f"{mine.parent}:/usr/bin:/bin:/usr/sbin:/sbin"
         r = go(layout)
         check(r.returncode == 1 and vt.line(r, "FAIL", "the tmux the watchdog runs", str(mine)),
-              f"S3: the CI Mac mini's layout: a tmux in a ~/.local/bin ada owns FAILs, exit 1 "
+              f"S3: the user-installed layout: a tmux in a ~/.local/bin ada owns FAILs, exit 1 "
               f"(got {r.returncode}: {vt.tail(r)})")
         r = go(layout, "--no-admin")
         check(r.returncode == 4 and vt.line(r, "UNPROTECTED", "the tmux the watchdog runs", str(mine)),
@@ -316,7 +317,7 @@ def launchd(base):
         got = checks(interp=local / "python3", path=f"{local}:/usr/bin:/bin:/usr/sbin:/sbin")
         check(has(got, "FAIL", "the tmux the watchdog runs", str(mtmux))
               and has(got, "FAIL", "the interpreter the watchdog runs", str(local / "python3")),
-              f"L3: the CI Mac mini's layout, as render-plist.py renders it: FAIL for the tmux and for the "
+              f"L3: the user-installed layout, as render-plist.py renders it: FAIL for the tmux and for the "
               f"interpreter ({got})")
         shadow = mine / "shadow-bin"
         shadow.mkdir()

@@ -138,9 +138,10 @@ LOAD-BEARING PROPERTIES - each one is here because removing it opens a hole:
     A layout passes when tmux sits in a directory the administrator owns
     (Homebrew's /opt/homebrew/bin installed as the administrator, the system's
     /usr/bin) and every entry before it is out of the user's reach. A tmux in
-    the agents user's own ~/.local/bin - the layout of a Mac whose agents user
-    installed tmux and Python itself, as on the fleet's own macOS CI runner
-    (CONTRIBUTING.md section 9) - FAILs, and so does its interpreter there.
+    a directory the agents user owns (~/.local/bin, say) - the layout of a Mac
+    whose agents user installed tmux and Python itself, as on the fleet's own
+    macOS CI runners (CONTRIBUTING.md section 9) - FAILs, and so does its
+    interpreter there.
 
   * THE POLKIT QUESTION CARRIES NO UNIT. systemd authorizes a non-root
     `systemctl stop` through polkit's org.freedesktop.systemd1.manage-units, and
