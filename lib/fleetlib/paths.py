@@ -293,12 +293,33 @@ def resolve_config_path(value, config_file):
     taken through realpath before the value is joined and normalized, so a
     `..` in the value climbs the directory the file really is in, not the link
     it was reached through.
+
+    A value that names a file in the install's REPOSITORY (a script the skill
+    runs, a directory of the project's documents) is resolve_repo_path's.
     """
+    return _resolve(value, os.path.dirname(os.fspath(config_file)) or ".")
+
+
+def resolve_repo_path(value, root=None):
+    """A path value read from a config file that names a file in the install's
+    repository, as the file it names.
+
+    Expanded as resolve_config_path expands it; a relative result resolves
+    against `root`, default install_root() - the repository the manifest is in,
+    which a worktree of it answers for itself - never against the config file's
+    directory: the install context sits inside .claude/skills/<skill>/, and a
+    repository path written relative to it would climb out of it. `root` is
+    taken through realpath, as the config file's directory is. No install root
+    is install_root()'s EnvironmentFault (exit 3).
+    """
+    return _resolve(value, install_root() if root is None else root)
+
+
+def _resolve(value, base):
     p = Path(expand.value(str(value)))
     if p.is_absolute():
         return p
-    base = os.path.realpath(os.path.dirname(os.fspath(config_file)) or ".")
-    return Path(os.path.normpath(os.path.join(base, p)))
+    return Path(os.path.normpath(os.path.join(os.path.realpath(os.fspath(base)), p)))
 
 
 def secrets_dir(cwd=None):

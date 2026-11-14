@@ -384,6 +384,45 @@ class ResolveConfigPathTest(IsolatedTest):
                          self.tmp / "inst" / ".claude" / "x")
 
 
+class ResolveRepoPathTest(IsolatedTest):
+    """resolve_repo_path(): a config value that names a file in the install's
+    repository resolves against the install root, never against the config file's
+    directory or the working directory. The control for every case is the same value
+    through resolve_config_path, which lands somewhere else."""
+
+    def setUp(self):
+        super().setUp()
+        self.root = make_install(self.tmp / "inst")
+        self.cfg = write_json(self.root / ".claude" / "skills" / "rg" / "config.json", {})
+        os.environ["FLEET_CONTEXT_ROOT"] = str(self.root)
+        (self.tmp / "elsewhere").mkdir()
+        os.chdir(self.tmp / "elsewhere")
+
+    def test_relative_resolves_against_the_install_root(self):
+        self.assertEqual(paths.resolve_repo_path("scripts/build.sh"), self.root / "scripts" / "build.sh")
+        self.assertNotEqual(paths.resolve_config_path("scripts/build.sh", self.cfg),
+                            self.root / "scripts" / "build.sh", "the two resolvers agree, so this proves nothing")
+
+    def test_a_given_root_wins(self):
+        other = make_install(self.tmp / "other")
+        self.assertEqual(paths.resolve_repo_path("docs/x.md", other), other / "docs" / "x.md")
+
+    def test_absolute_is_unchanged_and_the_value_is_expanded_first(self):
+        self.assertEqual(paths.resolve_repo_path("/tmp/fleet-t3a-abs/x"), Path("/tmp/fleet-t3a-abs/x"))
+        self.assertEqual(paths.resolve_repo_path("~/k"), self.home / "k")
+        self.assertEqual(paths.resolve_repo_path("${FLEET_T3A_UNSET:-sub}/f"), self.root / "sub" / "f")
+
+    def test_a_root_reached_through_a_link_resolves_physically(self):
+        link = self.tmp / "inst-link"
+        link.symlink_to(self.root)
+        self.assertEqual(paths.resolve_repo_path("a/../b", link), self.root / "b")
+
+    def test_no_install_is_install_roots_fault(self):
+        del os.environ["FLEET_CONTEXT_ROOT"]
+        self.assertFleetError(EnvironmentFault, paths.resolve_repo_path, "x", exit_code=3,
+                              variable="FLEET_CONTEXT_ROOT")
+
+
 class SecretsDirTest(IsolatedTest):
     def setUp(self):
         super().setUp()

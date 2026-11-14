@@ -2,7 +2,8 @@
 
 Modules:
   paths       where things are: the host settings file, the install root, a
-              skill's install context, config-relative paths, the secrets dir.
+              skill's install context, config- and repository-relative paths, the
+              secrets dir.
   manifest    the install manifest (.claude/fleet.json): load and validate
               schema 1, and the settings view with the fleet defaults applied.
   transports  the chat-transport registry: every transport.json in the fleet

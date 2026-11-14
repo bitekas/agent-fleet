@@ -108,10 +108,20 @@ directory, so the same rule puts both halves side by side.
   `configFile('<skill>', '<VAR>')` returns `$<VAR>` when set and otherwise asks
   `fleet where <skill> config.json`. A script never re-implements that lookup
   and never keeps its own copy of it.
-- **A relative path inside a SPECIFIC `config.json` resolves against that
-  file's directory** (`fleetlib.paths.resolve_config_path`), never against the
-  script's, so the value keeps meaning the same file wherever the mechanism is
-  checked out.
+- **A relative path inside a SPECIFIC `config.json` resolves against the base
+  its key's `_comment` in `config.example.json` names**, because the value
+  alone cannot say, and the wrong base names a file that is not there, or
+  worse, one that is. A script resolves it through fleetlib, never against its
+  own directory, and takes one of two bases. The config file's directory is
+  the default (`fleetlib.paths.resolve_config_path`): a log, a state file, a
+  dataset kept beside the config. A file in the install's REPOSITORY - a
+  script the skill runs, a directory of the project's documents - resolves
+  against the install root (`fleetlib.paths.resolve_repo_path`, whose default
+  root is `fleetlib.paths.install_root()`), since the install context sits
+  inside `.claude/skills/<skill>/` and a repository path written relative to
+  it would have to climb out of it. A value an agent uses in its own session,
+  rather than a script, may take another base when that is what it is for
+  (the agent's state directory, its worktree), named the same way.
 - **A test runs against the fleet's fixture install** (`tests/fixtures/install/`,
   synthetic values only), selected with `FLEET_CONTEXT_ROOT`, so it needs no
   real install to pass.
