@@ -24,7 +24,7 @@
     "worktrees_dir": "/path/to/your/checkout-workspaces",
     "landing_branch": "main",
     "install_command": "npm ci && npm ci --prefix subpackage-a && npm ci --prefix subpackage-b",
-    "dev_stack_command": "./dev.sh up"
+    "dev_stack_command": "./scripts/dev-stack up"
   },
   "environments": {
     "_comment": "The environment names this install uses, in the shared role vocabulary the repo-and-environments skill defines. SKILL.md references only 'live', when it says which branch a fix for the live line cuts from; the rest are here so the branch table in CONTEXT.md can be written in the same words. The branch-to-environment map itself is NOT here: it is single-sourced by the repo-and-environments skill, and a second copy of it is a second thing to drift. 'live_copy' is a non-live environment holding a copy of live's data; omit the key where the install has none.",
