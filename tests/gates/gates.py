@@ -584,7 +584,7 @@ def control_actions_pinned(copy):
 #     runners, and a reference is the first step towards one.
 FORK_GATE = ("github.event_name != 'pull_request' || "
              "github.event.pull_request.head.repo.full_name == github.repository")
-SELF_HOSTED = (["self-hosted", "Linux", "ARM64", "agent-fleet-linux"],
+SELF_HOSTED = (["self-hosted", "Linux", "X64", "agent-fleet-linux"],
                ["self-hosted", "macOS", "ARM64", "agent-fleet-mac"])
 TRIGGERS = ("push", "pull_request", "workflow_dispatch")
 WF_KEY = re.compile(r"""(?P<k>[A-Za-z0-9_.-]+|"[^"]*"|'[^']*')\s*:(?:\s+(?P<v>.*?))?\s*""")
@@ -734,12 +734,12 @@ def control_workflow_safety(copy):
     write(copy, ".github/workflows/zz-control.yml",
           "on:\n  push:\n  pull_request_target:\npermissions: write-all\njobs:\n  near:\n"
           "    if: github.event.pull_request.head.repo.fork == false\n"
-          "    runs-on: [self-hosted, Linux, ARM64, agent-fleet-linux]\n"
+          "    runs-on: [self-hosted, Linux, X64, agent-fleet-linux]\n"
           "    permissions:\n      contents: write\n"
           "    steps:\n      - run: echo \"$T\"\n        env:\n          T: ${{ secrets.ZZ_TOKEN }}\n")
     write(copy, ".github/workflows/zz-control-perm.yaml",
           "on: [push]\npermissions:\n  contents: read\n  pull-requests: write\njobs:\n  a:\n"
-          f"    if: {FORK_GATE}\n    runs-on: [self-hosted, Linux, ARM64, agent-fleet-linux]\n    steps:\n"
+          f"    if: {FORK_GATE}\n    runs-on: [self-hosted, Linux, X64, agent-fleet-linux]\n    steps:\n"
           "      - run: echo a\n")
     zz = ".github/workflows/zz-control.yml"
     expected += [(zz, "trigger(s) pull_request_target"), (zz, "not exactly contents: read"),

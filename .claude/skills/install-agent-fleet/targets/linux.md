@@ -16,12 +16,13 @@ run as a separate user without sudo, which the bootstrap creates).
 ## 1. The supported system
 
 **Ubuntu Server 26.04 LTS, amd64.** The fleet's CI runs every test, the
-structural gates and the leak check on Ubuntu 26.04 with Python 3.14 and Node
-22, on an arm64 machine (CONTRIBUTING.md section 9). What CI does not cover is
-amd64 itself: no CI run uses an amd64 build, so the architecture-specific
-pieces of an amd64 host, such as the `linux_x64` gitleaks build and the amd64
-Chromium the sign-in driver downloads, are exercised by no CI run. Ubuntu 26.04
-packages every dependency itself, Python 3.14 and Node 22 included.
+structural gates and the leak check on Ubuntu 26.04 amd64 with Python 3.14 and
+Node 22 (CONTRIBUTING.md section 9), so the architecture-specific pieces of an
+amd64 host, such as the `linux_x64` gitleaks build and the amd64 Chromium the
+sign-in driver downloads, run on every push. What CI does not cover is arm64
+Linux: the installer supports it, but no CI run uses the `linux_arm64` gitleaks
+build or an arm64 Chromium. Ubuntu 26.04 packages every dependency itself,
+Python 3.14 and Node 22 included.
 
 **Any Debian or Ubuntu release whose own `/usr/bin/python3` is 3.11 or newer**
 passes `bootstrap-target.sh --check` (Ubuntu 24.04 and later, Debian 12 and

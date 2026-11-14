@@ -9,7 +9,7 @@
 #                   line (tools/commit-hygiene/ai-attribution.sh check-range)
 #
 # Where it runs: the repository owner's self-hosted Linux runner, labels
-# [self-hosted, Linux, ARM64, agent-fleet-linux]. What that runner carries and
+# [self-hosted, Linux, X64, agent-fleet-linux]. What that runner carries and
 # how it behaves is the runner contract in CONTRIBUTING.md section 9; the test
 # job's first step checks it. Its tool cache is /opt/hostedtoolcache, the prefix
 # setup-python's Linux builds are compiled for: no step here may set
@@ -58,7 +58,7 @@ jobs:
     # The runner is Ubuntu 26.04 for x11vnc 0.9.17, the first with more than 5 mouse
     # buttons: share.test.mjs proves side buttons 6-8 cannot reach X, and on 0.9.16
     # its control cannot deliver them at all, so the test (correctly) issues no verdict.
-    runs-on: [self-hosted, Linux, ARM64, agent-fleet-linux]
+    runs-on: [self-hosted, Linux, X64, agent-fleet-linux]
     timeout-minutes: 20
     steps:
       - name: Runner contract (CONTRIBUTING.md section 9)
@@ -138,7 +138,7 @@ jobs:
 
   gates:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, Linux, ARM64, agent-fleet-linux]
+    runs-on: [self-hosted, Linux, X64, agent-fleet-linux]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -152,7 +152,7 @@ jobs:
 
   leak:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, Linux, ARM64, agent-fleet-linux]
+    runs-on: [self-hosted, Linux, X64, agent-fleet-linux]
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -184,7 +184,7 @@ jobs:
 
   commit-hygiene:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, Linux, ARM64, agent-fleet-linux]
+    runs-on: [self-hosted, Linux, X64, agent-fleet-linux]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

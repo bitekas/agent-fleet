@@ -113,14 +113,14 @@ Five checks run on every push to this repository (any branch, and `v*` tags), on
 
 | Check | Workflow | Runner labels |
 |---|---|---|
-| `test`, `gates`, `leak`, `commit-hygiene` | `.github/workflows/ci.yml` | `self-hosted`, `Linux`, `ARM64`, `agent-fleet-linux` |
+| `test`, `gates`, `leak`, `commit-hygiene` | `.github/workflows/ci.yml` | `self-hosted`, `Linux`, `X64`, `agent-fleet-linux` |
 | `test-macos` | `.github/workflows/ci-macos.yml` | `self-hosted`, `macOS`, `ARM64`, `agent-fleet-mac` |
 
-The four `ci.yml` checks are the ones section 6 waits for and `fleet upgrade` requires on a tag (`CI_CHECKS` in `bin/fleet`); `test-macos` is not one of them. Both runners are the repository owner's own machine.
+The four `ci.yml` checks are the ones section 6 waits for and `fleet upgrade` requires on a tag (`CI_CHECKS` in `bin/fleet`); `test-macos` is not one of them. Both runners are machines of the repository owner, one per system.
 
 **The runner contract.** A job cannot install anything system-wide, so what the tests need from the system comes with the runner. Each test job's first step checks its runner's half and fails naming every command that is missing.
 
-- **Linux** (`agent-fleet-linux`): Ubuntu 26.04, arm64. 26.04 because its x11vnc, 0.9.17, is the first with more than 5 mouse buttons: `share.test.mjs` proves side buttons 6-8 cannot reach X, and with 0.9.16 its control cannot deliver them at all, so the test issues no verdict. Jobs run as an unprivileged user without sudo. The runner carries these packages, each installed with `--no-install-recommends`:
+- **Linux** (`agent-fleet-linux`): Ubuntu 26.04, x86_64. 26.04 because its x11vnc, 0.9.17, is the first with more than 5 mouse buttons: `share.test.mjs` proves side buttons 6-8 cannot reach X, and with 0.9.16 its control cannot deliver them at all, so the test issues no verdict. The runner and its jobs run as a dedicated unprivileged user without sudo, in a service that gives them their own `/tmp`, `/var/tmp` and `/dev/shm`, hides other users' processes and home directories, and makes the rest of the file system read-only except that user's home and the tool cache. The runner carries these packages, each installed with `--no-install-recommends`:
   - the browser tests' tools: `xvfb`, `x11vnc`, `websockify`, `xinput`, `x11-utils`, `x11-apps`, `imagemagick`;
   - the libraries Playwright's Chromium loads on Ubuntu 26.04, with no font package: `libasound2t64`, `libatk-bridge2.0-0t64`, `libatk1.0-0t64`, `libatspi2.0-0t64`, `libcairo2`, `libcups2t64`, `libdbus-1-3`, `libdrm2`, `libgbm1`, `libglib2.0-0t64`, `libnspr4`, `libnss3`, `libpango-1.0-0`, `libx11-6`, `libxcb1`, `libxcomposite1`, `libxdamage1`, `libxext6`, `libxfixes3`, `libxkbcommon0`, `libxrandr2`, `libfontconfig1`, `libfreetype6`;
   - the base the jobs and tests use: `git`, `curl`, `ca-certificates`, `xz-utils`, `xauth`, `tmux`, `coreutils`, `systemd`.
