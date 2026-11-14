@@ -187,10 +187,11 @@ def skill_groups(root):
         raise NoVerdict(f"{GROUPS} cannot be read as JSON: {e}")
     groups = {k: v for k, v in data.items() if not k.startswith("_")} if isinstance(data, dict) else {}
     for name, g in groups.items():
-        if not (isinstance(g, dict) and isinstance(g.get("skills"), list) and isinstance(g.get("conventions"), dict)
+        if not (isinstance(g, dict) and isinstance(g.get("skills"), list) and g["skills"]
+                and all(isinstance(s, str) for s in g["skills"]) and isinstance(g.get("conventions"), dict)
                 and all(isinstance(v, dict) and isinstance(v.get("skill"), str)
                         for k, v in g["conventions"].items() if not k.startswith("_"))):
-            raise NoVerdict(f"{GROUPS}: group {name!r} is not {{\"skills\": [...], \"conventions\": "
+            raise NoVerdict(f"{GROUPS}: group {name!r} is not {{\"skills\": [<name>, ...], \"conventions\": "
                             f"{{<key>: {{\"skill\": <name>}}}}}}")
     if not groups:
         raise NoVerdict(f"{GROUPS} defines no group")
@@ -248,16 +249,23 @@ def check_skill_references(root):
 
 def control_skill_references(copy):
     groups = skill_groups(copy)
-    group, members = next((g, d["skills"]) for g, d in groups.items() if d["skills"])
-    fill = sorted(n for n, gs in key_skills(groups).items() if group in gs)
-    if len(fill) < 2:
-        raise NoVerdict(f"{GROUPS}: group {group!r} fills fewer than two keys, so the control cannot "
-                        f"plant a cited one and a missing one")
+    fills = key_skills(groups)
+    # The control needs a group that fills two keys (one cited, one removed); any group
+    # that does serves, wherever it sits in the file.
+    usable = [(g, d["skills"], sorted(n for n, gs in fills.items() if g in gs)) for g, d in groups.items()]
+    usable = [u for u in usable if len(u[2]) >= 2]
+    if not usable:
+        raise NoVerdict(f"{GROUPS}: no group fills two keys, so the control cannot plant a cited one "
+                        f"and a missing one")
+    group, members, fill = usable[0]
     a, b = fill[0], fill[-1]
-    first = next(n for n in skills(copy) if not any(n in d["skills"] for d in groups.values()))
+    first = next((n for n in skills(copy) if not any(n in d["skills"] for d in groups.values())), None)
+    if first is None:
+        raise NoVerdict("every fleet skill is in a group, so the control has no outside skill to plant in")
     skill_md = f".claude/skills/{first}/SKILL.md"
     append(copy, skill_md, f"\nSee `/no-such-skill`.\nCut it as `/{a}` section 2 says.\n")
-    created = {p: "See `/no-such-skill`.\n" for p in
+    # one file per region outside the skills: templates/, examples/, the root documents
+    created = {p: f"See `/no-such-skill`.\nCut it as `/{a}` says.\n" for p in
                ("templates/zz-gate-control.md", "examples/zz-gate-control.md", "zz-gate-control.md")}
     for p, text in created.items():
         write(copy, p, text)
@@ -266,20 +274,23 @@ def control_skill_references(copy):
     # writes it (decoy, matched by its own line).
     append(copy, "SETUP.md", f"\n- [ ] `{a}` - `zz.example_key`\n")
     bare_line = f"SETUP.md:{len(lines_of(copy, 'SETUP.md')) - 1}:"
-    # Inside the group: a sibling that fills a key is cited freely (decoy), and one
-    # missing from the tree still does not resolve (fault).
+    # Inside the group: a sibling that fills a key is cited freely (decoy: in the LAST
+    # member, a level down, so an exemption of the first member alone or of files
+    # directly in a member's directory alone does not pass), and one missing from the
+    # tree still does not resolve (fault).
     if not (copy / f".claude/skills/{a}/SKILL.md").is_file():
         write(copy, f".claude/skills/{a}/SKILL.md", f"---\nname: {a}\n---\n")
     shutil.rmtree(copy / ".claude/skills" / b, ignore_errors=True)
     inside = f".claude/skills/{members[0]}"
-    write(copy, f"{inside}/zz-group-decoy.md", f"Cut it as `/{a}` section 2 says, and as /{a} says.\n")
+    write(copy, f".claude/skills/{members[-1]}/zz-sub/zz-group-decoy.md",
+          f"Cut it as `/{a}` section 2 says, and as /{a} says.\n")
     write(copy, f"{inside}/zz-group-fault.md", f"See `/{b}` section 1.\n")
     # decoys: a path, an allowed built-in, a fixture's prose
     write(copy, f".claude/skills/{first}/zz-decoy.md", "Read `/etc/hosts`; type `/compact`.\n")
     write(copy, f".claude/skills/{first}/fixtures/zz-decoy.md", "See `/no-such-fixture-ref`.\n")
     expected = [(p, "`/no-such-skill` does not resolve") for p in [skill_md, *created]]
-    expected += [(skill_md, f"names '{a}', a skill that fills a conventions key"),
-                 ("README.md", f"names '{a}', a skill that fills a conventions key"),
+    expected += [(p, f"names '{a}', a skill that fills a conventions key") for p in [skill_md, *created]]
+    expected += [("README.md", f"names '{a}', a skill that fills a conventions key"),
                  (f"{inside}/zz-group-fault.md", f"`/{b}` does not resolve")]
     return expected, ["no-such-fixture-ref", "/etc", "zz-decoy.md", "zz-group-decoy.md", bare_line]
 
