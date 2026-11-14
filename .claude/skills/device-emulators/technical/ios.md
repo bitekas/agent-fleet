@@ -5,37 +5,24 @@ Universal. Values come from this skill's `config.json` in the install context
 that key's value. Measured facts carry the date and the platform they were
 measured on, because the date is a re-check trigger.
 
-**The commands in sections 4, 4a and 7 call the install's own scripts through
-one interface, and an interface is not a config value.** `build.script` names
-the build script and `build.dev_script` the dev script, but the subcommands and
-flags after them are the interface in the table below. **Everything else in
-this file is stock platform tooling** (Xcode, `simctl`, `plutil`, `ssh`,
-`rsync`) and holds on any machine. An install whose scripts take other
-arguments writes its own forms in its `CONTEXT.md` for this skill, and those
-outrank the blocks here; the rest of each section still applies. The boundary
-is stated because it is invisible from inside a command block: one that opens
-with `<build.script>` looks portable until you read the flags after it.
+**The command blocks here are written in the grammar of SKILL.md *The two
+scripts***, the interface the install's build and dev scripts implement; where
+its scripts take other arguments, the install's `CONTEXT.md` carries its own
+forms and outranks the blocks here. **Everything else in this file is stock
+platform tooling** (Xcode, `simctl`, `plutil`, `ssh`, `rsync`) and holds on any
+machine. The iOS rows of that interface, which sections 1, 4 and 4a rely on:
 
-| The interface | What the sections below rely on |
+| The iOS rows | What the sections below rely on |
 |---|---|
-| `<build.dev_script> up <build.dev_client_service> --env <env>` | serves metro (and, for a local env, the backend stack) and prints a banner naming the host it resolved. **The banner is the authority on the host** |
-| `<build.script> ios --env <env> --method <build.method_metro> --target simulator` | builds an unsigned simulator build, installs it onto the FIRST booted simulator `xcrun simctl list devices` prints (with none booted, it boots the first available iPhone, and with none available it dies `no available iPhone simulator to boot`), and launches it pointed at metro. It names the device it chose in one line, `[ios-sim] Using already-booted simulator <UDID>` |
-| `-y`, `--dry-run` | skip the build's confirmation prompt; print the routing, `identity=` and `scheme=`, and build nothing |
+| device choice, `<build.script> ios ... --target simulator` | it takes no device id: it installs onto the first simulator the TEXT form of `xcrun simctl list devices` prints as booted, with `xcrun` found through PATH (the section 4 shim relies on both); with none booted it boots the first available iPhone, and with none available it dies `no available iPhone simulator to boot`. It names the device it chose in one line, `[ios-sim] Using already-booted simulator <UDID>` |
+| the `.app` it installs | unpacked from `<ios.sim_artifact>` at the root of the checkout it ran in; it dies if the build did not rewrite that tarball during this run, or if the `.app`'s `CFBundleIdentifier` is not the identity it built for |
+| its closing banner | names the simulator UDID it installed to and the Metro URL it pointed the app at |
+| `-y` | skips the build's confirmation prompt |
 | `--sign <mode>` with `--target simulator` | `release` is refused as contradictory; any other mode is accepted, warned about and dropped, and the build continues unsigned |
-| `HOST_IP=<serving host>` in the build's environment | names the machine serving metro when it is not the one building (section 4a) |
+| `HOST_IP=<serving host>` in the build's environment | names the machine serving Metro when it is not the one building (section 4a) |
 
-**What the install's `CONTEXT.md` records for this file**, so an adopter knows
-what to fill in: its own form of each interface row its scripts take
-differently; the package names behind section 1.1 and where its dev script resolves
-the backend CLI and the JVM; the startup log lines that prove the backend
-(section 4.1); its scripted pointing launch and the test pinning the launcher
-internal it relies on, where it has them (sections 4 and 8); the build
-credential's channel on the remote route and what else runs on the build Mac
-(sections 4a.1 and 4a.3); its measured build and loop timings (sections 4 and
-4a.2); its device e2e runner's invocation from a non-Mac host (section 7);
-whether its build script preflights the React Native prebuilt artifacts
-(section 8); and whether a simulator capture satisfies its UI evidence gate
-(section 6).
+Every place below that hands a value to "the install's `CONTEXT.md`" is a line
+an adopter fills in there.
 
 ## 1. Prerequisites (any machine)
 
@@ -46,7 +33,7 @@ whether its build script preflights the React Native prebuilt artifacts
 | >= 1 iOS **runtime** | `xcrun simctl runtime list` | a device with no runtime is not "available" and cannot boot |
 | >= 1 available iPhone **device** | `xcrun simctl list devices available` | the build script picks the FIRST booted one (section 4), else the first available iPhone; with none it dies |
 | CocoaPods | `pod --version` | the prebuild step runs `pod install`; absent, the build dies `spawn pod ENOENT` |
-| Node + the repo's dependencies | `node -v`; the repo's dependency install (`/worktree-workflow` section 1) | metro and the build CLI |
+| Node + the repo's dependencies | `node -v`; the repo's dependency install (`/worktree-workflow` section 1.3) | Metro and the build CLI |
 | Build CLI authenticated | `ci.eas_token_env` set, or a stored session | the local build declares a logged-in context (SKILL.md trap 6) |
 | python3 | `python3 -V` | the scheme-approval write (section 3) and a scripted read of the dev launcher's registry (section 4) parse binary plists with `plistlib`. `installation/check` is itself python3, so it proves this only when run ON the Mac, never on the remote route |
 
@@ -149,7 +136,7 @@ Also on CI, and only on CI:
 Without this, opening a URL in the app's scheme raises a confirmation dialog and
 `openurl` exits 0 having launched nothing (SKILL.md trap 5). It binds every URL
 open: a hand `openurl`, and a flow's `openLink` of a screen deep link. It does
-**not** bind the pointing launch in section 4, which passes the metro URL as a
+**not** bind the pointing launch in section 4, which passes the Metro URL as a
 launch argument and opens no URL at all - that is one of the reasons it is the
 launch. The approval lives per simulator, in a plist keyed by scheme:
 
@@ -252,7 +239,7 @@ than the runtime, which invents failures on a platform nobody ships on.
 ## 4. The loops
 
 **Ports and host first.** Both come from the running stack, never from a
-document: the host from the dev script's banner, the metro port from
+document: the host from the dev script's banner, the Metro port from
 `build.ports_artifact` under key `build.metro_port_key` (SKILL.md trap 2 for the
 port, trap 4 for the host).
 
@@ -274,12 +261,9 @@ with a warning. So a signed build is one of the things you cannot get by asking
 twice: read the warning line, because the run that follows it is not the run
 you typed.
 
-The build writes its artifact to `<ios.sim_artifact>` at the root of the
-checkout it ran from - a worktree's build lands in that worktree - and unpacks
-the `.app` out of it before installing. It dies instead if the build did not
-rewrite the tarball during this run, or if the `.app`'s `CFBundleIdentifier` is
-not the identity it built for. You never handle the tarball; it is named
-here because a failed extraction is diagnosed from it.
+You never handle `<ios.sim_artifact>` (the table at the top); a worktree's build
+lands it in that worktree, and it is named here because a failed extraction is
+diagnosed from it.
 
 **To choose WHICH simulator**, boot it before step 2 - and on a machine where
 nobody else has one booted, that is all it takes: the build script uses an
@@ -291,11 +275,12 @@ xcrun simctl boot "$UDID" && xcrun simctl bootstatus "$UDID"
 ```
 
 **The build script takes no device id: it installs onto the FIRST booted
-simulator `xcrun simctl list devices` prints**, so on a machine where anyone
-else has one booted, booting yours does not select it. **Symptom**: a green
-build, install and launch - onto a device you never booted, terminating and
-replacing the app someone else was running there, while yours sits empty. The
-build names the device it chose in one line:
+simulator `xcrun simctl list devices` prints**, so where another session under
+the same macOS account has one booted, booting yours does not select it.
+(Device sets are per macOS user, so sessions under separate accounts never
+collide.) **Symptom**: a green build, install and launch - onto a device you
+never booted, terminating and replacing the app someone else was running there,
+while yours sits empty. The build names the device it chose in one line:
 `[ios-sim] Using already-booted simulator <UDID>`. **Constraint**: make your
 simulator the only booted one `xcrun simctl` shows for that one call, with a
 PATH shim that passes every `xcrun` call through unchanged except the text form
@@ -333,14 +318,15 @@ available iPhone", which may be the neighbour's. Without it, a typo'd or
 shut-down UDID quietly degrades to the very install this shim exists to
 prevent. JSON listings (`-j`, `--json`) pass through untouched, so a tool that
 parses them is unaffected. Remove the shim directory by its literal path when
-the build is done. Measured 2026-09-26 on macOS with a second user's simulator
-booted, in a login shell with the shim first on PATH: a first-booted selection
-over `xcrun simctl list devices` returned the named booted device, and with a
-shut-down UDID it returned nothing where without the shim it returned the other
-user's; the rewrite of a second booted device to `(Shutdown)` was checked
-against a listing with two booted. A device e2e runner (`device_e2e.runner`)
-that defaults to the first booted simulator has the same exposure unless it is
-handed a device; the install's `CONTEXT.md` names how its runner takes one.
+the build is done. Measured 2026-09-26 on macOS with another session's simulator
+booted under the same account, in a login shell with the shim first on PATH: a
+first-booted selection over `xcrun simctl list devices` returned the named
+booted device, and with a shut-down UDID it returned nothing where without the
+shim it returned the other session's; the rewrite of a second booted device
+to `(Shutdown)` was checked against a listing with two booted. A device e2e
+runner (`device_e2e.runner`) that defaults to the first booted simulator has the
+same exposure unless it is handed a device; the install's `CONTEXT.md` names how
+its runner takes one.
 
 **Re-running without a build.** There is no `--no-build` on iOS. There is
 something better, because a JS change needs no new binary at all:
@@ -348,15 +334,15 @@ something better, because a JS change needs no new binary at all:
 | Change | Do |
 |---|---|
 | JS / TS only | **nothing.** Fast Refresh already delivered it |
-| app restarted, or you killed it | point it at your metro and verify it took (below). A bare `xcrun simctl launch "$UDID" "$BUNDLE_ID"` loads the LAST-OPENED bundle, which on a box running several serves is often another worktree's (SKILL.md trap 9) |
-| pointing it at a different metro | the same launch, with the other metro's URL |
+| app restarted, or you killed it | point it at your Metro and verify it took (below). A bare `xcrun simctl launch "$UDID" "$BUNDLE_ID"` loads the LAST-OPENED bundle, which on a box running several serves is often another worktree's (SKILL.md trap 9) |
+| pointing it at a different Metro | the same launch, with the other Metro's URL |
 | native config, a config plugin, a native module, an `EXPO_PUBLIC_*` key | step 2 again |
 
 The first build on a machine is cold - prebuild, `pod install` and the whole
 Xcode build - and is measured in minutes; the install's `CONTEXT.md` records
 what it measured. The relaunch paths above are seconds.
 
-**Pointing the client at YOUR metro, and proving it took.** The port comes from
+**Pointing the client at YOUR Metro, and proving it took.** The port comes from
 the running stack's port artifact (SKILL.md trap 2), never from a document:
 
 ```bash
@@ -364,20 +350,21 @@ xcrun simctl launch --terminate-running-process "$UDID" "$BUNDLE_ID" \
   --initialUrl "http://<host>:<port>"
 ```
 
-Script it once, with the proof below, and have the build script and
-`device_e2e.runner` both call that one implementation, so the launch and its
-proof exist in one place; the install's `CONTEXT.md` names it where it has one.
+The build script's own launch IS this pointing launch plus the registry proof
+below (SKILL.md *The two scripts*). A device e2e runner that points the app calls
+the same implementation, so the launch and its proof exist once; the install's
+`CONTEXT.md` names it.
 
 **NOT `simctl openurl` of the dev-client URL on a cold app: it loads the app
 TWICE, and the second load kills it.** A build that bakes a default launcher URL
 (the dev-client plugin's `defaultLaunchURL`) loads that URL from the launcher's
 start-up path when it is cold-launched BY URL, and then loads the same URL again
-when the URL is delivered ~200 ms later. When the baked URL is a live metro - the
+when the URL is delivered ~200 ms later. When the baked URL is a live Metro - the
 normal case, because the build and the serve come from one worktree - two React
 hosts initialise at once and the app dies at its first mount with the `SIGTRAP`
 in section 8. Measured 2026-09-23, same simulator, same build, 10 cold launches
 each, counting the launcher's manifest fetches at a logging proxy in front of
-metro: the cold `openurl` made **2 per launch**, and launches crashed in that
+Metro: the cold `openurl` made **2 per launch**, and launches crashed in that
 run; the launch above made **1 per launch and crashed 0 of 10**. The
 `--initialUrl` argument is read at process start and loaded with an early
 return, before both the last-opened entry and the baked default, so it is one
@@ -385,10 +372,11 @@ load by code and not by timing; `--terminate-running-process` is what makes
 every launch the cold one that reads it. It is a launcher internal rather than
 a documented API, so pin its statement with a test over the installed vendor
 source, which goes red when an upgrade moves it; `/tooling-index` carries that
-test's row where the install has one. **Counting BUNDLE requests cannot show the double load**: the dropped
-host is replaced before it fetches the bundle, so both forms fetch it once
+test's row where the install has one. **Counting BUNDLE requests cannot show
+the double load**: the dropped host is replaced before it fetches the bundle, so
+both forms fetch it once
 (measured 2026-09-23 from per-launch process logs; the bundle request goes to
-metro directly, not through a proxy that fronts only the URL you launched with).
+Metro directly, not through a proxy that fronts only the URL you launched with).
 The manifest fetch (`HEAD /` then `GET /` with `expo-platform: ios`) is the
 per-load signal.
 
@@ -424,7 +412,7 @@ domain, not just the registry.
 Two other instruments corroborate it, and neither is redundant - the registry
 says which serve the client ASKED for, these say what it is running.
 **Metro's own output** (section 4.1): the `iOS Bundled ... (N modules)` line and
-the app's `LOG` lines travel the metro websocket, so they cannot appear on a
+the app's `LOG` lines travel the Metro websocket, so they cannot appear on a
 machine the app is not attached to. And a **bundle marker only the intended
 serve carries** - a testID or string the branch introduces, measured ABSENT from
 every other serve on the box - observed in the running client.
@@ -436,21 +424,22 @@ that route in whatever bundle is already loaded, so it can never re-point one
 ### 4.1 Proving it loads from YOUR stack, and not from a cloud one
 
 This is trap 5's positive evidence for this loop, and it is **two** claims, not
-one: the JS came from your metro, and the app is talking to your backend. A
+one: the JS came from your Metro, and the app is talking to your backend. A
 build made before the stack was up, or from a different worktree, satisfies
 neither while looking completely healthy - it renders, it navigates, and it is
 pointed somewhere else.
 
-- **The JS**: metro's own output prints `iOS Bundled ... (N modules)` as the app
+- **The JS**: Metro's own output prints `iOS Bundled ... (N modules)` as the app
   attaches, and the app's own `LOG` lines follow on the same terminal. Those
-  travel the metro websocket, so they cannot appear on a machine the app is not
+  travel the Metro websocket, so they cannot appear on a machine the app is not
   attached to - which is what makes them conclusive and the `Bundled` line
   alone not (section 4a.2).
-- **The backend**: the app's startup log names the backend base URL it will
-  call. Against a local stack that is a `http://<host>:<port>/...` on the
-  serving machine, the port being the backend's entry in
-  `build.ports_artifact`; against a cloud environment it is the provider's own
-  domain, and **that difference is the whole check**. The install's `CONTEXT.md`
+- **The backend**: where the app logs the backend base URL it will call at
+  startup (an app run on a device should), that line is the check. Against a
+  local stack it is a `http://<host>:<port>/...` on the serving machine, the
+  port being the backend's entry in `build.ports_artifact`; against a cloud
+  environment it is the provider's own domain, and **that difference is the
+  whole check**. The install's `CONTEXT.md`
   names that log line, the later line that corroborates it on a local build (a
   call answered by a local emulator), and the build-time entry that carries the
   ports a build was actually given, for when the host is right and you suspect
@@ -459,20 +448,21 @@ pointed somewhere else.
 ## 4a. Remote: a non-Mac host driving the simulator over SSH
 
 **The operator's machine is not a Mac, and the simulator only exists on one.**
-This section is the loop for that: metro and the backend stack stay on the
+This section is the loop for that: Metro and the backend stack stay on the
 operator's host, while the build, the install, the launch and the simulator all
 happen on a Mac over SSH. It is section 4 with the two halves on two machines,
 so everything above still applies and only what the split changes is written
 here.
 
-**Why the split is not free.** The metro host is compiled INTO the native shell
+**Why the split is not free.** The Metro host is compiled INTO the native shell
 (SKILL.md trap 4), so the build has to be TOLD which machine is serving; a dev
 script and a build script that each resolve "the host" as "my own address" are
 right only on one box. **That rule is not restated here.** It belongs to the
-install's dev script - its cross-machine usage example, and the comment at the
-function that resolves the address - and the install's `CONTEXT.md` names where
-it is written. **Read it there**: a copy in this file is one more place for it
-to drift from.
+install's scripts, which state it where each machine meets it - a cross-machine
+usage example read before anything starts, the build's refusal on the building
+machine, the serving banner's handover line on the machine that resolved the
+address - and the install's `CONTEXT.md` names those places. **Read it
+there**: a copy in this file is one more place for it to drift from.
 
 What section 4a adds on top of that rule is everything the SSH layer brings and
 the dev script has no reason to mention: how the tree reaches the Mac, why the
@@ -488,8 +478,8 @@ how to get the same answer without starting a stack.
 ### 4a.1 Setup: once per machine pair
 
 Six things, each with the one-line proof that it is done. Run the proofs; a
-setup step believed rather than measured is the one that fails inside a
-twenty-minute build.
+setup step believed rather than measured is the one that fails inside a long
+cold build.
 
 | # | What | Prove it |
 |---|---|---|
@@ -515,8 +505,8 @@ top of this file and half of these are not one:**
 |---|---|
 | `<remote>` | `<ios.remote.user>@<ios.remote.host>` - the Mac, written short because it appears in every command |
 | `<workdir>` | `ios.remote.workdir`, a path ON THE MAC |
-| `<serving host>` | the machine running metro, from the dev script's banner or from `metro.host_cmd` |
-| `<port>` | the metro port, from `build.ports_artifact` / `build.metro_port_key` |
+| `<serving host>` | the machine running Metro, from the dev script's banner or from `metro.host_cmd` |
+| `<port>` | the Metro port, from `build.ports_artifact` / `build.metro_port_key` |
 | `<repo>` | the checkout's directory name inside `<workdir>`. **Not a key** |
 | `<login shell>` | the Mac's login shell. **Not a key** - see below |
 | `<automation actor>` | a name and address for the snapshot commit's author. **Not a key** |
@@ -572,7 +562,7 @@ See 4a.3.
 **On step 4, the remote install is the app root only.** The build runs there and
 runs nothing else, so the secondary dependency roots that a full gate needs are
 not needed on the Mac. (This is the one place that differs from the per-worktree
-install rule in `/worktree-workflow` section 1, and only because nothing on the
+install rule in `/worktree-workflow` section 1.3, and only because nothing on the
 Mac ever runs a gate.)
 
 **And the tree must be a git repository**, because the build CLI's local build
@@ -616,7 +606,7 @@ hold a different port slot, and a port read from prose points the build at a
 neighbour's stack.
 
 ```bash
-# 2. Confirm the Mac can actually reach that metro. One curl, and it is the
+# 2. Confirm the Mac can actually reach that Metro. One curl, and it is the
 #    cheapest possible answer to "is the network up in the direction I need".
 ssh <remote> 'curl -s --max-time 5 http://<serving host>:<port>/status'
 #    -> packager-status:running
@@ -638,8 +628,8 @@ Add `--dry-run` first when you need the identity and the scheme: it prints
 MAC, so the paths it prints are the ones that will exist.
 
 **What it prints when it is right**: the build ends on a banner naming the
-simulator UDID it installed to and the metro URL it was pointed at. On the
-SERVING machine, metro's own log is the proof the bundle came from there:
+simulator UDID it installed to and the Metro URL it was pointed at. On the
+SERVING machine, Metro's own log is the proof the bundle came from there:
 
 ```
 iOS Bundled <ms>ms <the app's entry file> (<N> modules)
@@ -647,14 +637,14 @@ iOS Bundled <ms>ms <the app's entry file> (<N> modules)
 ```
 
 **The app's `LOG` lines arriving on the serving machine are the conclusive
-half, not the `Bundled` line.** They travel the metro websocket, so they cannot
+half, not the `Bundled` line.** They travel the Metro websocket, so they cannot
 appear on a machine that is not the one the app is attached to. A `Bundled` line
 alone is consistent with a bundle served to something else.
 
 ```bash
 # 5. THE LOOP. Edit JS on your own machine. Nothing else.
 #    Fast Refresh delivers it to the simulator on the Mac in seconds, with no
-#    rebuild, no reinstall, no re-sync and no re-commit: metro is reading YOUR
+#    rebuild, no reinstall, no re-sync and no re-commit: Metro is reading YOUR
 #    working tree, and the snapshot on the Mac is only ever the native shell.
 ```
 
@@ -663,7 +653,7 @@ miss: the rsync/commit dance of 4a.1 is a NATIVE-shell concern. Once the shell
 is installed, the JS you are iterating on never goes near the Mac's copy.
 So the re-sync is owed only for the things that need a rebuild at all -
 `technical/hot-reload.md`'s table, reached from section 5: a native module,
-native config, an `EXPO_PUBLIC_*` key, the env, the metro host - and every one
+native config, an `EXPO_PUBLIC_*` key, the env, the Metro host - and every one
 of those needs step 4 again anyway.
 
 **Re-running without a build** is section 4's table, over `ssh`. The one you
@@ -703,9 +693,10 @@ install, prebuild, `pod install`, xcodebuild); the first bundle served across
 the link; an edit on the operator's machine to the app's log line coming back
 from the simulator; a relaunch with no build; and copying a recording back.
 Measured 2026-09-04 on an Apple-silicon Mac over an overlay network rather than
-a LAN, the shape is the one that matters: **the cold build is the one step
-measured in minutes, and the loop you actually work in - edit to log line, or a
-relaunch - is the same seconds-long loop as a local one.**
+a LAN, the shape is the one that matters: **the cold build and the first
+dependency install on the Mac are the steps measured in minutes, both once per
+setup, and the loop you actually work in - edit to log line, or a relaunch - is
+the same seconds-long loop as a local one.**
 
 ### 4a.3 Gotchas and pitfalls
 
@@ -782,14 +773,15 @@ presents as something other than what it is.
 
 - **The serving host must be named to the BUILD, and its absence does not look
   like a missing flag.** **Symptom**: the build refuses
-  `--method <build.method_metro>` and advises you to start a dev stack, while
-  the dev stack is up and healthy on the other machine. The advice is right
-  about the rule and wrong about your situation. **Constraint**: the dev
+  `--method <build.method_metro>` for want of a reachable Metro (SKILL.md *The
+  two scripts*), which reads as "start a dev stack" while the dev stack is up
+  and healthy on the other machine. The refusal is right about the rule and
+  wrong about your situation. **Constraint**: the dev
   script's cross-machine rule, above - this entry exists to name the SYMPTOM,
   because that is the part the rule's own home does not tell you how to
   recognise.
 
-- **The metro port is per worktree slot.** **Symptom**: everything connects and
+- **The Metro port is per worktree slot.** **Symptom**: everything connects and
   you are looking at a neighbour's code. **Constraint**: read it from
   `build.ports_artifact` (SKILL.md trap 2).
 
@@ -882,7 +874,7 @@ has to come from a driver.
 | **Maestro** | installs its own XCTest driver onto the simulator at run time. **Nothing in the Xcode project**, which is what makes it viable where there is no checked-in project (below) |
 | **`idb`** - `idb ui tap <x> <y>` | a companion daemon per simulator, and a dependency outside the Xcode toolchain. Coordinates only: element lookup and waiting are yours to write |
 | **An XCUITest target** driven by `xcodebuild test` | a real test target in the project, and a build per run |
-| **AXe** - `axe tap --id <testID>` / `-x <x> -y <y>`, `axe swipe`, `axe describe-ui` | one self-contained release tarball unpacked in your own workdir, no daemon and no XCTest, so it runs while Maestro's driver cannot attach (Xcode's pending first launch). About 300 ms per step, so it cannot place two taps closer than that |
+| **AXe** - `axe tap --id <testID>` / `-x <x> -y <y>`, `axe swipe`, `axe describe-ui` | one self-contained release tarball unpacked in your own workdir, no daemon and no XCTest, so it runs while Maestro's driver cannot attach (Xcode's pending first launch). About 300 ms per step (AXe 1.8.0, measured 2026-10-16), so it cannot place two taps closer than that |
 
 The install's choice of driver is `device_e2e.driver`.
 
@@ -925,27 +917,29 @@ should not be there.
 ### The device e2e suite
 
 Where the install has one, `device_e2e.runner` is its route through all of
-this: it resolves a booted simulator, checks the stack the build loads from,
-points the app the selected flows drive at that stack with the pointing launch
-of section 4 (and refuses to run a flow if the load is not proven), records the
-run to video (section 6), runs the flows in `device_e2e.flows_dir` with
-`device_e2e.driver`, and collects the artifacts. **It points one app or none**:
-the app id comes from the flows' own `appId:`, and when the selected flows name
-more than one it points none and says so, because one serve cannot be right for
-two identities - run one flow per identity to pin each. `/tooling-index` has the
+this, and what such a runner owes is: resolve a booted simulator, check the
+stack the build loads from, run the flows in `device_e2e.flows_dir` with
+`device_e2e.driver`, record the run to video (section 6), and collect the
+artifacts. Where it points the app the selected flows drive at that stack, it
+does so with the pointing launch of section 4 and refuses to run a flow if the
+load is not proven; the install's `CONTEXT.md` says on which platforms its
+runner points. **It points one app or none**: the app id comes from the flows'
+own `appId:`, and when the selected flows name more than one it points none and
+says so, because one serve cannot be right for two identities - run one flow per
+identity to pin each. `/tooling-index` has the
 runner's row, and `/e2e-suite` owns what a change owes it in coverage; the
 install's `CONTEXT.md` names what its runner adds beyond this (another
 platform, a per-flow check over the screenshots a flow took).
 
-**From a non-Mac host it runs ON the Mac**, against the metro served from the
+**From a non-Mac host it runs ON the Mac**, against the Metro served from the
 operator's machine: sync the tree to a directory of your own under
 `ios.remote.workdir` (4a.1 step 3, plus whatever dependency install the
 selected flows need), then run the runner there over `ssh`, through the login
-shell, naming the SERVING worktree's host and metro port and the simulator's
+shell, naming the SERVING worktree's host and Metro port and the simulator's
 UDID; the install's `CONTEXT.md` has the invocation. The serving host and port
 are named because the tree on the Mac serves nothing and its own port artifact
-describes no stack. The runner points the app at that metro itself; by hand it
-is the pointing launch, never `simctl openurl` (section 4). Copy the output
+describes no stack. A runner that points the app does so at that Metro itself;
+by hand it is the pointing launch, never `simctl openurl` (section 4). Copy the output
 directory back with `scp -r`.
 
 Things a device run establishes that are worth knowing here:
@@ -954,7 +948,7 @@ Things a device run establishes that are worth knowing here:
   surfaces as the accessibility identifier on iOS, so flows stay stable across
   layout changes. Verified 2026-09-03 against a running dev build.
 - **Do not use Maestro's `clearState` on a dev-client build.** It wipes the
-  saved metro URL along with app data, so the next launch lands on the
+  saved Metro URL along with app data, so the next launch lands on the
   dev-launcher screen and every assertion fails for a reason unrelated to the
   app.
 - **The Simulator has no camera**, so camera-backed screens render empty, and a
@@ -991,7 +985,8 @@ installing cmake makes things worse rather than better.** It is what an upstream
 artifact-hosting problem looks like from here. `pod install` decides
 prebuilt-vs-source by `curl -I -L`-ing three React Native iOS tarballs; when they
 are not retrievable - Maven Central has served them 404 intermittently while
-their sibling `.pom` and `.sha1` returned 200 - React Native does not fail: it
+their sibling `.pom` and `.sha1` returned 200 (observed 2026-09-09) - React
+Native does not fail: it
 **silently reverts to building itself and Hermes from source**, and
 `Pod::Executable::which!('cmake')` is called at exactly one site in all of
 react-native, inside that from-source podspec branch. The log line just above
@@ -1128,16 +1123,17 @@ what attributes it to the driver. Treat it as a cost of the driver, not a fault
 in the app, and do not go looking for it in a flow's assertions.
 
 **`SIGTRAP` at start-up is the DOUBLE LOAD, and the pointing launch does not
-cause it.** The app dies 6-18 s after a cold start with `EXC_BREAKPOINT` in a
-Swift `_assertionFailure` under `ExpoFabricView.injectInitializer`, mid Fabric
-mount; the process log says `ExpoFabricView.swift:197: Fatal error: The app
-context has been lost` (expo/expo#48575, open with no fix as of 2026-09-23).
+cause it.** The app dies seconds after a cold start, at its first Fabric mount,
+with `EXC_BREAKPOINT` in a Swift `_assertionFailure` under
+`ExpoFabricView.injectInitializer`; the process log says
+`ExpoFabricView.swift:197: Fatal error: The app context has been lost`
+(expo/expo#48575, open with no fix as of 2026-09-23).
 macOS raises its own crash-reporter dialog for it. The cause is two React hosts
 initialising at once: expo-modules-core caches the Fabric view classes for the
 process with an initializer that holds one host's context weakly, and when the
 DROPPED host injects last, the surviving host's first mount finds it gone. The
 two hosts come from a cold `simctl openurl` of the dev-client URL on a build
-whose baked default launcher URL is a live metro (section 4). Measured
+whose baked default launcher URL is a live Metro (section 4). Measured
 2026-09-23 on one simulator and one build, 10 cold launches each: the cold
 `openurl` crashed in that run, the pointing launch
 (`simctl launch --terminate-running-process ... --initialUrl ...`) **0 of 10**,
@@ -1153,10 +1149,11 @@ reload of a running app still replaces its host, and overlapping reloads are
 expo/expo#48653's family (a `jsi::Pointer` `EXC_BAD_ACCESS` after a long
 session), not this one.
 
-**Where the install scripts the pointing launch** (section 4; its `CONTEXT.md`
-names it), the build script and `device_e2e.runner` both launch through it: the
-pointing launch plus the registry proof of section 4, failing loudly when the
-client records no load of the requested metro. The consequence it keys on is
+**The build script launches through the pointing launch** (SKILL.md *The two
+scripts*), and so does `device_e2e.runner` where it points the app (the
+install's `CONTEXT.md` names the one implementation): the pointing launch plus
+the registry proof of section 4, failing loudly when the client records no load
+of the requested Metro. The consequence it keys on is
 the registry, never `simctl launch`'s exit status (SKILL.md trap 5); `simctl
 spawn <udid> launchctl list` does name a running app as `UIKitApplication:<bundle
 id>` on iOS 26.5 (measured 2026-09-23: 1 while running, 0 after the crash), which
