@@ -96,9 +96,10 @@ one reader who is already blocked and copy-pasting, at the moment they have the
 least ability to notice it is wrong.
 
 **What it costs when it fires:** a build script's newly required flag that
-reaches none of its automation's call sites breaks every build that goes
-through them, on every branch, and the reader it stops is handed a remediation
-that names the form which no longer works.
+reaches none of its automation's call sites and none of its own rejection
+messages breaks every build that goes through them, on every branch, and the
+reader it stops is handed a remediation that names the form which no longer
+works.
 
 Two corollaries, both of which look like reassurance and are not:
 
@@ -135,27 +136,32 @@ working. **One tool, two modes** - and one copy of the shared part.
 Where the repository is built on a framework that ships its own compatible
 package set (`packages.ecosystem`), a package belonging to it is added or
 bumped **ONLY** through the framework's own installer
-(`packages.add_command`). A plain package-manager install of one is unsafe
-there. Where `packages.ecosystem` is `null`, the repository has no such
-framework and this section does not apply.
+(`packages.add_command`). A plain package-manager install of one is always
+unsafe in such a repository, whatever its packages declare. Where
+`packages.ecosystem` is `null`, the repository has no such framework and this
+section does not apply.
 
 **The mechanism, not just the instruction**, because the mechanism is what makes
-it invisible: where those packages declare their peer dependency on the
-framework as a wildcard, the package manager has **no constraint to check** -
-no warning, no peer conflict, no lockfile complaint, ever. The ecosystem's
-normal safety net is structurally disabled by design, and **only the
-framework's own compatibility table can see a mismatch**; the installer is the
-tool that consults it. Read one of the framework's own package manifests to
-know which case you are in, and record in the install's `CONTEXT.md` which
-package you read.
+it invisible: the package manager can check only the peer range each package
+declares on the framework, and **only the framework's own compatibility table
+can see a mismatch**; the installer is the tool that consults it. Where those
+packages declare that range as a wildcard, the package manager has **no
+constraint to check** - no warning, no peer conflict, no lockfile complaint,
+ever - and the ecosystem's normal safety net is structurally disabled by
+design. Where they declare a real range, it checks only that range, which is
+usually wider than the table. **The rule holds either way; the declaration
+decides only how silent the failure is.** Read one of the framework's own
+package manifests to know which case you are in, record in the install's
+`CONTEXT.md` which package you read and at which framework version, and read it
+again when the framework is upgraded.
 
-**What it costs when it fires:** nothing warns while the dependency set drifts
-behind the framework's table, so the first symptom is a built binary that fails
-at launch - on a framework with native modules, on a missing native symbol -
-after the build has already gone out. Recovery and alignment are
-`packages.fix_command`, then `packages.doctor_command` until it exits clean.
-Where `packages.doctor_command` is `null` the framework ships no doctor, and
-the installer is the only instrument that sees a mismatch.
+**What it costs when it fires:** nothing warns, or only the declared range
+does, while the dependency set drifts behind the framework's table, so the
+first symptom can be a built artifact that fails at launch - on a framework
+with native modules, a missing native symbol - after it has shipped. Recovery
+and alignment are `packages.fix_command`, then `packages.doctor_command` until
+it exits clean. Where `packages.doctor_command` is `null` the framework ships no
+doctor, and the installer is the only instrument that sees a mismatch.
 
 **A gate that enforces this reads the EXIT CODE, never the number of checks the
 doctor reports.** The tally moves with the framework version, so a pinned count
