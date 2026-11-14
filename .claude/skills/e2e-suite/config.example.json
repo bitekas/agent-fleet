@@ -1,0 +1,104 @@
+{
+  "_comment": [
+    "TEMPLATE. Copy to config.json in this skill's install context",
+    "(`fleet where e2e-suite config.json` prints the path) and replace every placeholder.",
+    "",
+    "Everything harness- and project-specific this skill refers to. SKILL.md names",
+    "none of it: it refers to the keys below, so the same rules and the same",
+    "instrument traps serve any browser-driven e2e harness run through a wrapper",
+    "that owns a local dev stack. The install's CONTEXT.md carries the invocations,",
+    "the phases and every measurement; this file carries the values with a shape.",
+    "",
+    "Nothing here is read by a script at run time: every value is read by the AGENT",
+    "(greps it, types it, matches a log line against it). config.test.py beside",
+    "SKILL.md holds this file, SKILL.md's key references and the install's",
+    "config.json to one key set.",
+    "",
+    "A block carrying \"_optional\": true may be left out of config.json entirely",
+    "when the install has no such thing; every other key is required. Inside a",
+    "required block, a key whose comment says null may be set to null.",
+    "",
+    "No credential appears here and none ever should: every value is a path, a",
+    "project name, an env-var name, a command or a string the harness prints.",
+    "JSON has no comments, so every _comment key here is documentation; keep or",
+    "delete them in your config.json, nothing reads them."
+  ],
+  "e2e": {
+    "_comment": "The harness itself. 'runner' is the single entry point, as invoked from the repository root - the skill's rule that the runner owns the server lifecycle means nothing if this points at the test binary instead of at the wrapper that boots and tears down the stack. 'specs_dir' is what you grep to identify the specs a change affects, and what both fan-out rules grep.",
+    "runner": "./scripts/your-e2e-runner.sh",
+    "specs_dir": "e2e/",
+    "projects": {
+      "_comment": "The test runner's project names. 'parallel' is the phase that runs concurrently, 'serial' the phase that must not, and 'exclusive' the serial project for tests with whole-database reach. Set 'exclusive' to null if the harness has no such project; the scoping defect class in SKILL.md section 10 then does not apply.",
+      "parallel": "app",
+      "serial": "app-serial",
+      "exclusive": "app-exclusive"
+    },
+    "verdict": {
+      "_comment": "The exact strings the runner prints as its verdict, without any decoration around them. A poll loop matches these UNANCHORED: a runner that decorates the line (box-drawing characters, a timestamp, a colour code) defeats a '^'-anchored match, which can then never fire, and a clean green run reads as 'process gone, no verdict'. Getting these wrong is silent in the direction that matters.",
+      "pass": "E2E PASSED",
+      "fail": "E2E FAILED"
+    },
+    "exclusive_tag": {
+      "_comment": "Substring in a test title that routes it to the exclusive project. Only whole-database reach qualifies; slow or stateful does not. Ignored when projects.exclusive is null.",
+      "tag": "@exclusive"
+    },
+    "workers_env_var": {
+      "_comment": "Environment variable setting the parallel phase's worker count, and the default it carries. The default sits on the safe side of the measured plateau, not at the nominal fastest; the install's CONTEXT.md carries the measurement. The runner should accept a positive integer and nothing else: the value is interpolated into the test runner's command line, so an unvalidated one is an argument injection, not a typo.",
+      "name": "E2E_WORKERS",
+      "default": 8
+    },
+    "artifacts": {
+      "_comment": "Where a run's server logs and the test runner's output are collected, MACHINE-WIDE and outside any checkout, plus the env var that overrides it. Outside the checkout on purpose: a repository-relative path is private to one worktree, so no agent can read another's failing run, and the test runner wipes its own output directory at the start of every run - including a run that aborts in global setup. The runner prunes under this root, so it validates an override before using it (SKILL.md section 6).",
+      "root": "/tmp/your-project-e2e",
+      "root_env_var": "E2E_ARTIFACTS_ROOT"
+    },
+    "lock": {
+      "_comment": "The machine-wide run lock (SKILL.md section 7.1): one e2e run per machine at a time, a waiting run names the holder, the wait is bounded and ends in its own exit code. 'dir_default' is a machine-global, per-user state root, ideally the SAME one any other machine-wide claim of this repository uses (the port slots); it may name environment variables, which the runner expands. 'lock_file' is the lock target inside that directory and 'holders_dir' the subdirectory with one information-only sidecar per holder. 'timeout_exit_code' must differ from the runner's suite-failed and usage-error codes, because it means 'nothing ran'. 'share_flag' takes the lock SHARED for functional iteration beside another run, with the worker cap the two share_workers keys set. 'library' is where the lock mechanism lives, and what to grep a checkout for to tell whether it takes the lock at all.",
+      "dir_env_var": "E2E_LOCK_DIR",
+      "dir_default": "${XDG_STATE_HOME:-$HOME/.local/state}/your-project/e2e",
+      "lock_file": "run.lock",
+      "holders_dir": "holders",
+      "timeout_env_var": "E2E_LOCK_TIMEOUT_S",
+      "timeout_default_s": 900,
+      "heartbeat_env_var": "E2E_LOCK_HEARTBEAT_S",
+      "heartbeat_default_s": 30,
+      "timeout_exit_code": 75,
+      "share_flag": "--share-box",
+      "share_workers_env_var": "E2E_SHARE_BOX_WORKERS",
+      "share_workers_default": 2,
+      "library": "scripts/your-e2e-run-lock.sh"
+    },
+    "ports": {
+      "_comment": "The per-worktree artifact the harness derives every port from, so concurrent stacks in sibling worktrees do not collide. Named rather than hardcoded because a literal port in a spec or a poll loop is what breaks the moment two worktrees run at once. Set to null if the harness uses fixed ports.",
+      "slot_artifact": ".your-dev-ports.json"
+    },
+    "device": {
+      "_comment": "The second harness: drives the NATIVE build on a simulator or emulator instead of the browser. Leave the whole block out if this install has no device suite. 'driver' names the tap driver; its machine-level install belongs to the device-emulators skill, not here.",
+      "_optional": true,
+      "runner": "./scripts/your-device-e2e-runner.sh",
+      "flows_dir": "e2e/device/flows",
+      "driver": "maestro"
+    },
+    "instrument_fault": {
+      "_comment": "The instrument-fault re-measurement (SKILL.md section 4). 'marker' is the string a spec puts in its failure message to disown a load-corrupted measurement; it has exactly one home, 'declaration_module', whose helper every declaring spec calls. 'classifier' is the runner-side script that matches the marker in the JSON report, 'teeth' the check that pins the two sides together, and 'remeasure_workers' the worker count of the one re-run. Leave the whole block out if the harness has no such policy; every failure is then an ordinary red.",
+      "_optional": true,
+      "marker": "INSTRUMENT FAULT",
+      "declaration_module": "e2e/fixtures/your-instrument-fault.ts",
+      "classifier": "scripts/your-instrument-fault-classifier.mjs",
+      "teeth": "scripts/your-instrument-fault.test.sh",
+      "remeasure_workers": 1
+    }
+  },
+  "app": {
+    "_comment": "The app-side symbols the navigation fan-out rule (SKILL.md section 2.1) greps for. 'navigation_calls' is every call form that NAMES a route in this stack's router: include the component form (a redirect element carrying the route in a prop), which matches no grep for the router verb, and any back helper that carries a fallback route; leave out a bare 'go back', which names nothing a spec could be pointed at. 'route_table' is the symbol whose members are the route constants, so a route can be grepped through it. REQUIRED wherever the app has routes: the rule tells a commit that moves a navigation to retarget the specs that drove it, and it can only do that by naming what to grep for.",
+    "navigation_calls": ["router.push", "router.replace", "<Redirect href"],
+    "route_table": "ROUTES"
+  },
+  "checks": {
+    "_comment": "The type-checks or equivalent static gates that run with every e2e pass, in order. REQUIRED even if empty: the skill states they are part of done, and an empty list is a claim that this project has none.",
+    "commands": [
+      "npx tsc --noEmit",
+      "your-backend-typecheck-command"
+    ]
+  }
+}

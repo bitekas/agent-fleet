@@ -1,0 +1,64 @@
+{
+  "_comment": [
+    "FIXTURE config for the fleet's own tests (FLEET_CONTEXT_ROOT=tests/fixtures/install).",
+    "Every value is synthetic. It leaves out the optional e2e.device block on purpose, so",
+    "config.test.py exercises the optional-block rule against a real file, and it carries",
+    "the optional e2e.instrument_fault block, so a present optional block is held complete."
+  ],
+  "e2e": {
+    "runner": "./scripts/example-e2e.sh",
+    "specs_dir": "tests/e2e/",
+    "projects": {
+      "parallel": "web",
+      "serial": "web-serial",
+      "exclusive": null
+    },
+    "verdict": {
+      "pass": "EXAMPLE SUITE PASSED",
+      "fail": "EXAMPLE SUITE FAILED"
+    },
+    "exclusive_tag": {
+      "tag": "@solo"
+    },
+    "workers_env_var": {
+      "name": "EXAMPLE_E2E_WORKERS",
+      "default": 4
+    },
+    "artifacts": {
+      "root": "/tmp/example-e2e-artifacts",
+      "root_env_var": "EXAMPLE_E2E_ARTIFACTS_ROOT"
+    },
+    "lock": {
+      "dir_env_var": "EXAMPLE_E2E_LOCK_DIR",
+      "dir_default": "${XDG_STATE_HOME:-$HOME/.local/state}/example-project/e2e",
+      "lock_file": "run.lock",
+      "holders_dir": "holders",
+      "timeout_env_var": "EXAMPLE_E2E_LOCK_TIMEOUT_S",
+      "timeout_default_s": 600,
+      "heartbeat_env_var": "EXAMPLE_E2E_LOCK_HEARTBEAT_S",
+      "heartbeat_default_s": 20,
+      "timeout_exit_code": 75,
+      "share_flag": "--alongside",
+      "share_workers_env_var": "EXAMPLE_E2E_SHARE_WORKERS",
+      "share_workers_default": 1,
+      "library": "scripts/example-run-lock.sh"
+    },
+    "ports": {
+      "slot_artifact": null
+    },
+    "instrument_fault": {
+      "marker": "EXAMPLE INSTRUMENT FAULT",
+      "declaration_module": "tests/e2e/fixtures/example-fault.ts",
+      "classifier": "scripts/example-fault-classifier.mjs",
+      "teeth": "scripts/example-fault.test.sh",
+      "remeasure_workers": 1
+    }
+  },
+  "app": {
+    "navigation_calls": ["navigate(", "<Redirect to"],
+    "route_table": "Paths"
+  },
+  "checks": {
+    "commands": ["npm run typecheck"]
+  }
+}
