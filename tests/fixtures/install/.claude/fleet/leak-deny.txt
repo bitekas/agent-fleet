@@ -1,0 +1,11 @@
+# FIXTURE deny list: comments only, and it must stay that way.
+#
+# The fixture install's upstream.deny_list names this file. `fleet settings`
+# needs it to be a file. The leak gate refuses a deny list with no entries
+# (exit 3, "has no entries"), so if this fixture context ever reaches a commit
+# hook (FLEET_CONTEXT_ROOT left exported), the commit is refused rather than
+# checked against a harmless fixture list in place of the host's own.
+#
+# Adding an entry here turns that refusal into a pass. A test that needs a deny
+# list writes one under its own temporary root and passes it with
+# FLEET_LEAK_DENY_FILE.

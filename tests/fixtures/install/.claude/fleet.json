@@ -1,9 +1,10 @@
 {
   "_comment": [
     "FIXTURE install manifest for the fleet's own tests (FLEET_CONTEXT_ROOT=tests/fixtures/install).",
-    "Every value is synthetic. Every house rule differs from its fleet default, so a test can tell",
-    "a value read from here from a default; the conventions use all three value forms, people_notes",
-    "being the explicit null.",
+    "Every value is synthetic except upstream.identity, the fleet repository's public commit",
+    "identity (CONTRIBUTING section 4). Every house rule differs from its fleet default, so a",
+    "test can tell a value read from here from a default; the conventions use all three value",
+    "forms, people_notes being the explicit null.",
     "It takes the software-development skill group (templates/skill-groups.json): skills lists every",
     "skill of the group, and the conventions name the group's skills, except branch_naming, which",
     "points at a document of the install's own, as an install that keeps one may; workspace reads",
@@ -46,11 +47,11 @@
   "secrets": { "legacy_env": "EXAMPLE_SECRETS_DIR", "default_dir": "~/.example-secrets" },
   "upstream": {
     "_comment": [
-      "deny_list names a file that deliberately does not exist. If this fixture context ever",
-      "reaches a commit hook (FLEET_CONTEXT_ROOT left exported), the leak gate cannot read the",
-      "list and refuses the commit (exit 3), instead of running its deny half with a harmless",
-      "fixture list. A test that needs a deny list writes one under its own temporary root and",
-      "passes it with FLEET_LEAK_DENY_FILE."
+      "deny_list names a file that deliberately holds no entry, only comments: `fleet settings`",
+      "finds the file, and if this fixture context ever reaches a commit hook (FLEET_CONTEXT_ROOT",
+      "left exported), the leak gate refuses a list with no entries and the commit (exit 3),",
+      "instead of running its deny half with a harmless fixture list. A test that needs a deny",
+      "list writes one under its own temporary root and passes it with FLEET_LEAK_DENY_FILE."
     ],
     "identity": { "name": "Viktor Korsun", "email": "3628395+bitekas@users.noreply.github.com" },
     "deny_list": ".claude/fleet/leak-deny.txt",
