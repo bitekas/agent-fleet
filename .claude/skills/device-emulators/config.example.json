@@ -1,0 +1,113 @@
+{
+  "_comment": [
+    "TEMPLATE. Install it as config.json in this skill's install context",
+    "(`fleet where device-emulators config.json`) with `install -m 644`, and replace",
+    "every placeholder.",
+    "",
+    "Everything install-specific that SKILL.md and technical/ refer to by KEY",
+    "instead of by value. Those documents name no script, no device, no AVD, no",
+    "bundle id and no project, so the same mechanism serves a different repository",
+    "by editing config.json alone. SKILL.md 'Config keys' lists every key in one",
+    "table; SKILL.md 'The two scripts' is the interface the script keys point at.",
+    "",
+    "WHAT DOES NOT GO IN HERE: anything that varies per MACHINE. This file is",
+    "committed and travels, so a machine's Xcode version, SDK location,",
+    "runtimes or tool versions would be wrong everywhere but where they were",
+    "written. Machine state is discovered by installation/check, and no",
+    "absolute path appears below.",
+    "",
+    "REPOSITORY PATHS (build.script, build.dev_script, build.env_config_script,",
+    "android.hypervisor_probe, docs.build_machine_components, device_e2e.runner)",
+    "are relative to the repository root - the install root holding",
+    ".claude/fleet.json - because they are commands an operator runs from there.",
+    "",
+    "Required, and enforced by installation/check against real artifacts:",
+    "project.name, build.script, platforms.enabled, plus per platform -",
+    "ios.sim_artifact, ios.device_type, ios.device_type_id / android.avd.default,",
+    "android.hypervisor_probe. Everything else carries a default named in its own",
+    "_comment.",
+    "",
+    "This file holds NO credential. The build CLI's token is read from the",
+    "ENVIRONMENT VARIABLE named by ci.eas_token_env; only the name is here.",
+    "",
+    "JSON has no comments, so every _comment key is documentation. Keep them",
+    "or delete them in your config.json; nothing reads them."
+  ],
+  "project": {
+    "_comment": "REQUIRED. name is what the loops are run FOR, used in prose only. artifact_prefix is load-bearing: it is the leading component of the emulator log the build script writes (${TMPDIR:-/tmp}/<artifact_prefix>-emulator-<avd>.log) and of the screenshot path, so a value that disagrees with the build script sends a reader to a file that does not exist.",
+    "name": "Example App",
+    "artifact_prefix": "exampleapp"
+  },
+  "platforms": {
+    "_comment": "REQUIRED. Which platforms THIS install runs. `check` with no argument checks each of these and exits on the worst state. A platform this machine does not run belongs OUT of this list, not in it failing: otherwise one absent SDK reports the whole skill as uninstalled and blocks the platform that works. `ios` is refused outright on a non-macOS host unless ios.remote.host names a Mac.",
+    "enabled": [
+      "ios",
+      "android"
+    ]
+  },
+  "build": {
+    "_comment": "The repository's own entry points and the words substituted into the grammar SKILL.md 'The two scripts' declares. script is REQUIRED and is checked for existence and the executable bit, resolved against the install root. dev_client_service is the dev script's service that serves Metro for the dev client in the foreground; default_env is the env whose serve also boots the local backend emulators; method_metro and method_embedded are the build script's --method values for a Metro-loading dev client and an embedded-JS build. env_config_script is the shell file defining env_config <env> <field>. ports_artifact/metro_port_key are how the Metro port is DISCOVERED rather than assumed: parallel worktrees each hold their own ports, so a port read from a document points a build at a neighbour's stack.",
+    "script": "./your-build-script.sh",
+    "dev_script": "./your-dev-script.sh",
+    "dev_client_service": "dev-client",
+    "env_config_script": "scripts/your-env-config.sh",
+    "default_env": "local",
+    "method_metro": "metro",
+    "method_embedded": "embedded",
+    "ports_artifact": ".dev-stack-ports.json",
+    "metro_port_key": "metro"
+  },
+  "ios": {
+    "_comment": "sim_artifact is the tarball the build script writes and then unpacks the .app from; a value that disagrees with the build script sends a reader to a file that does not exist. device_type is the DISPLAY name `simctl list devices` shows; device_type_id is the identifier `simctl create` demands - both are needed because an agent with no device must create one and the two forms are not interchangeable. These name the device the team STANDARDISES on, not the devices a given machine happens to have. dev_menu_onboarding_key is the preference whose write suppresses the dev client's first-run developer-menu sheet WHEN that sheet appears, which it MAY or may not on any given build, so writing it is insurance rather than a fix for something observed (technical/ios.md section 8, 'Observed failures', which carries the measurement and the three-leg control that is the only thing able to say which case you are in). xcode_min_major is a FLOOR check enforces, not a pin. sweep_extra_device_types is OPTIONAL: the further simulators an install's visual sweep runs on beside device_type, each a {name, id} pair in the same two forms as device_type and device_type_id, chosen to stand for the smallest and the largest phone screen the app supports, so it is revisited when either end moves. A device type that ships with Xcode needs nothing installed: a missing simulator is created with `xcrun simctl create '<name>' '<id>'`. An empty list means the sweep runs on device_type alone.",
+    "sim_artifact": "build-your-app-ios-sim.tar.gz",
+    "device_type": "iPhone 17 Pro",
+    "device_type_id": "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro",
+    "dev_menu_onboarding_key": "EXDevMenuIsOnboardingFinished",
+    "xcode_min_major": 16,
+    "sweep_extra_device_types": [
+      { "name": "iPhone 16e", "id": "com.apple.CoreSimulator.SimDeviceType.iPhone-16e" },
+      { "name": "iPhone 16 Plus", "id": "com.apple.CoreSimulator.SimDeviceType.iPhone-16-Plus" }
+    ],
+    "remote": {
+      "_comment": "OPTIONAL, and it is what makes the iOS loop available from a machine that is not a Mac: Metro and the backend stack stay on the operator's own host while the build, the install and the simulator run on this Mac over SSH. Leave host EMPTY (it expands to empty) and there is no remote route, and installation/check refuses ios on a non-macOS host. Every value is ${VAR:-default}, and that form is the point rather than a convenience: a hostname and an account name are ONE MACHINE'S state, and this file is committed and travels, so the default records the team's standing choice while the variable lets any machine or person override it WITHOUT editing a shared file. ${VAR:-default}, $VAR / ${VAR} and a leading ~ are expanded before use; installation/check does. host/user are what `ssh <user>@<host>` must reach with KEY auth and no prompt - a password-authenticated host makes every command in the loop hang with nobody to type into it. host must be a name the OPERATOR'S machine resolves, and installation/check proves that before it opens an ssh: on a mesh network it is the mesh's DNS name, which is NOT the node's human-readable display name - a display name paraphrased into a hostname resolves nowhere and every later leg then reports a key or host-key problem it does not have. Write the NAME and never an address: the mesh owns the name-to-address mapping, and an IP transcribed into this committed file is one machine's state that goes stale in silence. workdir is the operator's OWN directory on that Mac, and it must sit outside every CI runner's work tree: a build started inside one is inside a directory the runner may check out over, and it competes for the same machine. A leading ~ (or $HOME) in workdir means the REMOTE home and is left for the remote shell to expand; no absolute path under somebody's home, because a committed one is a machine leaking into a shared file. Nothing here is a credential: how the BUILD credential reaches that Mac is a deployment decision, recorded in CONTEXT.md, not a key.",
+      "host": "${IOS_REMOTE_HOST:-mac-build-host.example.internal}",
+      "user": "${IOS_REMOTE_USER:-jane.doe}",
+      "workdir": "${IOS_REMOTE_WORKDIR:-~/ios-remote-builds}"
+    }
+  },
+  "android": {
+    "_comment": "avd.default is REQUIRED when android is enabled and must be a name `emulator -list-avds` PRINTS, not the friendly name Android Studio's Device Manager displays: it is the one argument the build script cannot guess, and a typo is otherwise discovered ~20 minutes into a Gradle run. avd.compat is the second AVD a change is checked against; leave it empty on a machine with only one and `check` will not look for it. jdk_min_major is a FLOOR (the Gradle build needs a JDK, not a JRE; the emulator needs neither). installation/check enforces it as a readiness leg, and an install's build script may read this file at run time to decide which JDK to export as JAVA_HOME (the install's CONTEXT.md says whether it does) - in which case this key is not skill-local documentation: changing it changes what a build does. Both consumers qualify a JDK on javac and never on java, and config.test.mjs pins that predicate as well as the number when the build script carries its fallback literal (SKILL.md 'The two scripts'), because agreeing on '17 or newer' while disagreeing about what a JDK is puts them in conflict over exactly the machines the floor was written for. jdk_min_major is a FLOOR AND NOT A RANGE: the Android Gradle plugin also has a ceiling, which is a property of the AGP version rather than of a machine, so no maximum is written here; the pinned combination a build machine needs is in docs.build_machine_components. hypervisor_probe names the repository script holding the ONE implementation of the KVM/accelerator legs that decide whether ANY AVD on a machine can boot (interface: SKILL.md 'The two scripts'): installation/check imports it and the build script invokes it, so a second copy is the bug this key prevents. Path relative to the repository root, like build.script; REQUIRED when android is enabled, and check reports NOT INSTALLED rather than skipping the leg if it is absent. sweep_short_screen is OPTIONAL: the display override that turns avd.default into a short phone for an install's visual sweep. size is what `adb shell wm size` takes (device pixels, WxH) and density what `adb shell wm density` takes (dpi); the screen drawn is size x 160 / density, in dp. The override belongs to the emulator, not to the app, so the pass ends with `wm size reset` and `wm density reset`, and `wm size` printing no `Override size` line is the proof (technical/android.md section 4). Absent means no short-screen pass.",
+    "hypervisor_probe": "scripts/your-hypervisor-probe.py",
+    "apk_artifact": "build-your-app-android.apk",
+    "aab_artifact": "build-your-app-android.aab",
+    "avd": {
+      "default": "Pixel_7_API_34",
+      "compat": "Pixel_4_API_30"
+    },
+    "sweep_short_screen": { "size": "1080x1920", "density": 461 },
+    "jdk_min_major": 17
+  },
+  "keystore": {
+    "_comment": "Directory holding the Android signing keys, one subdirectory per identity (shared, and one per environment). Keep it OUTSIDE any checkout: a path inside one is a different directory in every worktree, so a signed build works from the checkout that has the keys and dies everywhere else. It is a credential directory, so it is named through FLEET_SECRETS_DIR with the install's default store as the fallback. ${VAR:-default}, $VAR / ${VAR} and a leading ~ are the accepted forms. Paths only: no key material, and no machine-specific absolute path, because a committed one is a machine leaking into a shared file.",
+    "dir": "${FLEET_SECRETS_DIR:-$HOME/.acme-secrets}/keystores"
+  },
+  "metro": {
+    "_comment": "OPTIONAL, needed only with ios.remote: how to ask THIS machine for the address it serves Metro on. The build compiles that address into the native shell, so the serving host has to be NAMED to the building machine - the two scripts each resolve `the host` as `my own address`, which is right only when they run on the same box. The dev script's own banner is the authority; this is the way to ask for the same answer without starting a stack, so it MUST agree with the rule the dev script uses. A command, not a value: an address is machine state and does not belong in a committed file.",
+    "host_cmd": "your-vpn-cli ip -4"
+  },
+  "ci": {
+    "_comment": "NAME of the environment variable holding the build CLI's access token, never the token. A non-interactive agent has no stored session, and the local build still declares a logged-in context, so without this the job fails at the build rather than at a login step.",
+    "eas_token_env": "EXPO_TOKEN"
+  },
+  "docs": {
+    "_comment": "Repository-relative path of the document pinning which SDK components, build tools and JDK a build machine needs. technical/ defers to it rather than copying the versions, so they cannot drift apart.",
+    "build_machine_components": "docs/your-build-machine-setup.md"
+  },
+  "device_e2e": {
+    "_comment": "OPTIONAL, and check reports it WITHOUT failing on it: the tap driver is needed by a device e2e suite, never by the operator loop, so a machine that only runs dev builds is fully installed without it. driver_path is tried BEFORE PATH on purpose - Maestro's installer appends to shell rc files, which non-interactive shells never read, so a PATH-first probe tells CI to install what it already has. runner and flows_dir are repository-relative.",
+    "driver": "maestro",
+    "driver_path": "~/.maestro/bin/maestro",
+    "runner": "scripts/your-device-e2e-runner.sh",
+    "flows_dir": "e2e/your-device-flows"
+  }
+}

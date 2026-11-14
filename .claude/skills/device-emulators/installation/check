@@ -1,0 +1,755 @@
+#!/usr/bin/env python3
+"""[" -f "${BASH_SOURCE:-$0}" ] || { echo "a Python script: run it with python3" >&2; exit 126; }; exec python3 "${BASH_SOURCE:-$0}" "$@" || exit # sh/bash: hand off to python3 before reading the docstring
+Is this skill installed on THIS machine, and is it current?
+
+    python3 check              every platform in config.json platforms.enabled
+    python3 check ios          one platform
+    python3 check android
+
+Prints ONE line and exits:
+
+    0  installed, current      -> proceed
+    1  installed, but stale    -> re-run INSTRUCTION.md, then re-check
+       (or no install context to read: the line says NO VERDICT)
+    2  not installed           -> follow INSTRUCTION.md
+
+With several platforms the exit is the WORST state found, and the line names
+each platform's contribution.
+
+STATE 1 IS THE REASON THIS EXISTS. Absent is loud: the tool is not there, the
+build dies naming it, nothing runs. Stale is silent: every binary answers,
+every command runs, and the behaviour is subtly the old one.
+
+THE SPECIFIC FILES ARE READ FROM THE INSTALL CONTEXT, THROUGH fleetlib, NEVER
+BESIDE THIS SCRIPT. config.json and installation/.install-state.json live in
+fleetlib.paths.skill_context('device-emulators'); the fleet's skill directory
+holds COMMON files only. The repository paths config names (build.script,
+android.hypervisor_probe) resolve against the INSTALL ROOT, the directory holding
+.claude/fleet.json, because they are the repository's own commands and an
+operator runs them from its root. When no install context resolves, nothing was
+looked at and the line says NO VERDICT. The fleet root comes from
+realpath(__file__): through an agent's personal skill link, abspath would name
+the link's directory. check.test.py beside this file drives every state below
+against the fleet's fixture install.
+
+THIS FILE IS ALSO THE SKILL'S MACHINE INVENTORY, AND THE ONLY ONE. Nothing in
+SKILL.md, technical/, config.json or CONTEXT.md may transcribe a version, an
+SDK location, a runtime or an AVD: an install is worked from several machines
+and those files are committed, so a written inventory is wrong everywhere but
+where it was written while still reading as authoritative. It is computed
+here, on demand, and it cannot go stale.
+
+WHY THIS CHECKS REAL ARTIFACTS AND NOT A MARKER FILE. A marker records that
+somebody once ran an install. It cannot tell you that Xcode is still selected,
+that an iOS runtime survived an upgrade, or that an AVD was deleted in Device
+Manager. Every test below therefore asks the machine, and only the LAST reads
+.install-state.json. If you replace any of these with a flag in the state
+file, the check keeps passing on a machine where nothing works. Do not.
+
+WHY THE STATE FILE IS KEYED BY HOST. It is a SPECIFIC file, committed like
+everything else, so it travels to machines that never ran the install. A
+single `host` field would make every OTHER machine report stale, and
+re-recording it would un-record the machine before it - so two machines could
+never both be installed. `versions` is a hostname -> record map and each
+machine records only itself.
+
+WHY A PLATFORM YOU DO NOT RUN BELONGS OUT OF platforms.enabled. Exiting on the
+worst state means one absent SDK would otherwise report the whole skill as
+uninstalled and block the platform that works. Enabling a platform is the
+statement "this machine is supposed to run it".
+
+WHY THE ANDROID SDK RESOLUTION ORDER BELOW MUST STAY IDENTICAL TO THE BUILD
+SCRIPT'S. PATH is not the right oracle: adb and emulator reach a developer's
+PATH from an interactive shell rc, and every non-interactive caller (CI, a git
+hook, an agent's tool shell, cron) sees a PATH with no Android SDK on it. A
+PATH-only check tells a reader with a complete SDK to go install one. If this
+order drifts from the build script's, this check reports a state the build
+script does not agree with, which is worse than not checking at all.
+
+WHY THE ANDROID ARM PROBES THE HYPERVISOR, WHY THAT COMES BEFORE THE AVD LIST,
+AND WHY THE PROBE ITSELF IS NOT IN THIS FILE. An AVD is a directory; a BOOTING
+AVD needs a hypervisor under it, and both ways that can be missing are invisible
+to every other test here - `emulator -list-avds` lists an AVD that cannot start
+exactly as it lists one that can. A machine whose only fault is an unopenable
+/dev/kvm would otherwise be reported as missing an AVD, and ordering the probe
+BEFORE the AVD legs is the point rather than a preference: told "no AVD named
+X", an operator creates X, and X does not boot either.
+
+THE LEGS LIVE IN THE REPOSITORY SCRIPT NAMED BY config.json
+android.hypervisor_probe, NOT HERE, AND THAT IS LOAD-BEARING. The build script
+asks the identical question at a different moment - when an AVD has failed to
+attach to adb, so that its die message can name the right remedy instead of
+telling an operator with an unbootable AVD to raise a TIMEOUT. ONE
+implementation, two thin consumers. The probe's interface is SKILL.md, "The two
+scripts": check_hypervisor(<emulator path>) -> (ok, detail). A probe that does
+not measure this platform returns its own words for that ("not probed on
+darwin"), and this check prints them in its line rather than inventing a
+verdict. Do not re-inline the legs here.
+
+WHY THE iOS REMOTE ARM RESOLVES THE HOSTNAME BEFORE IT OPENS AN ssh. Every other
+failure on that arm has a remediation about keys, host keys or Xcode, and ssh
+reports an unresolvable hostname in words that read as a key problem - which
+sends the operator to fix something that is not broken. Resolution is cheap on
+the happy path, and its fix (bring up the mesh that publishes the name, or
+override IOS_REMOTE_HOST) shares nothing with the others. It resolves what ssh
+would resolve, not the configured string: an ssh_config Host alias
+legitimately points somewhere else, and a ProxyJump, a ProxyCommand or a LIVE
+ControlMaster socket each mean the name is not resolved here at all, so this
+leg stands down rather than reporting a false red.
+getaddrinfo takes NO timeout and setdefaulttimeout does not reach it, so
+against a blackholing nameserver it blocks for the resolver's whole retry
+budget - tens of seconds, where every other outbound call in this file is bounded
+by run(..., timeout=). It therefore runs on a thread this function abandons after
+RESOLVE_TIMEOUT, and a lookup that does not answer in time is reported AS one,
+never as a name that does not resolve: those have different fixes and a check
+that cannot tell them apart sends the operator to the wrong one. It also catches
+more than gaierror - a label over 63 bytes raises UnicodeError from the idna
+codec, and IOS_REMOTE_HOST is precisely the operator-typed input that produces
+one - because an escaping exception here exits 1, which means "STALE install
+record, re-run INSTRUCTION.md" and cannot fix a malformed hostname. Do not
+simplify either property away.
+
+WHY THE iOS RUNTIME AND THE DEVICE ARE TWO SEPARATE TESTS. A fresh CI agent
+routinely has device TYPES and no runtime, and `simctl list devices` still
+prints devices for a runtime it cannot boot. "Available" is the only word that
+means bootable, and the two failures need different fixes:
+`xcodebuild -downloadPlatform iOS` against `xcrun simctl create`.
+"""
+import json
+import os
+import re
+import shlex
+import shutil
+import socket
+import subprocess
+import sys
+import threading
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+SKILL = os.path.dirname(HERE)
+FLEET_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(SKILL)))
+SKILL_NAME = "device-emulators"
+
+# Set by main() from the install context; read by the probes below.
+REPO = None
+STATE = None
+
+# The build script must resolve the SDK the same way. See the header. After
+# these, the NEWEST build-tools/<version>/ (where aapt2 lives): the lexically
+# last match, which is version order for every build-tools release.
+SDK_SUBDIRS = ("platform-tools", "emulator", "cmdline-tools/latest/bin")
+
+KNOWN_PLATFORMS = ("ios", "android")
+
+
+def out(code, msg):
+    print(msg)
+    sys.exit(code)
+
+
+def declared_version():
+    """The version SKILL.md declares. Absent means the skill predates the
+    convention, which is itself a reason to re-install rather than to guess."""
+    with open(os.path.join(SKILL, "SKILL.md"), encoding="utf-8") as f:
+        head = f.read(4096)
+    m = re.search(r"^version:\s*(\d+)\s*$", head, re.M)
+    return int(m.group(1)) if m else 0
+
+
+def run(cmd, timeout=180):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except Exception:  # noqa: BLE001 - a tool that will not run is one we do not have
+        return None
+
+
+def dig(cfg, path):
+    node = cfg
+    for part in path.split("."):
+        node = node.get(part) if isinstance(node, dict) else None
+    return node
+
+
+def expand(value, local=True):
+    """Expand a config value with fleetlib's expander: ${VAR:-default}, $VAR /
+    ${VAR} and a leading ~. An unset $VAR with no default stays literal, so a
+    command that uses it fails naming the variable nobody set.
+
+    local=False FOR ANY PATH THAT LIVES ON ANOTHER MACHINE. `~` and `$HOME`
+    mean THIS machine's home to fleetlib, and a remote workdir written `~/x`
+    would be resolved against the local home and then tested on the remote,
+    where that path does not exist - reported as "the remote is not set up",
+    which is a false and expensive diagnosis. So HOME is handed to the expander
+    as a bare `~`: both `~` and `$HOME` then come out as `~`, which the REMOTE
+    shell expands against the REMOTE home."""
+    if not isinstance(value, str):
+        return value
+    from fleetlib import expand as fx
+    if local:
+        return fx.value(value)
+    return fx.value(value, env=dict(os.environ, HOME="~"))
+
+
+def android_sdk_tool(name):
+    """Absolute path of an Android SDK binary, or None. See the header for why
+    PATH alone is the wrong oracle. Returns a path, never a bare name, so no
+    later call can silently pick a different binary."""
+    found = shutil.which(name)
+    if found:
+        return found
+    home = os.path.expanduser("~")
+    roots = [
+        os.environ.get("ANDROID_HOME", ""),
+        os.environ.get("ANDROID_SDK_ROOT", ""),
+        os.path.join(home, "Library/Android/sdk"),   # macOS default
+        os.path.join(home, "Android/Sdk"),           # Linux default
+    ]
+    for root in roots:
+        if not root:
+            continue
+        for sub in SDK_SUBDIRS:
+            p = os.path.join(root, sub, name)
+            if os.path.isfile(p) and os.access(p, os.X_OK):
+                return p
+        bt = os.path.join(root, "build-tools")
+        hits = sorted(os.path.join(bt, v, name) for v in (os.listdir(bt) if os.path.isdir(bt) else []))
+        hits = [p for p in hits if os.path.isfile(p) and os.access(p, os.X_OK)]
+        if hits:
+            return hits[-1]
+    return None
+
+
+def java_major(java):
+    """Major version `java -version` reports, or None if it cannot be read.
+    Both `1.8.0_x` and `17.0.1` shapes are handled; the output is on stderr."""
+    r = run([java, "-version"], timeout=60)
+    if not r:
+        return None
+    m = re.search(r'version "(\d+)(?:\.(\d+))?', (r.stderr or "") + (r.stdout or ""))
+    if not m:
+        return None
+    major = int(m.group(1))
+    return int(m.group(2) or 0) if major == 1 else major
+
+
+# The bound on the iOS hostname lookup. See the header: getaddrinfo cannot be
+# given a timeout, so this is enforced by abandoning the thread it runs on.
+RESOLVE_TIMEOUT = 10
+
+
+def load_hypervisor_probe(cfg):
+    """Import the ONE hypervisor implementation -> (module, error message).
+
+    The legs, the remediation wording and the three-state verdict vocabulary
+    live in ONE repository file that both consumers load - this check and the
+    build script - and this one is thin. DO NOT RE-INLINE THEM HERE "to keep
+    the check self-contained": the copy that gets fixed and the copy that does
+    not is how a fixed bug comes back, and neither author is present when it
+    does.
+
+    RESOLVED FROM config.json (android.hypervisor_probe) against the install
+    root, NOT HARDCODED, because an adopting repository puts its scripts
+    somewhere else. Same shape as build.script and build.env_config_script.
+
+    A MISSING PROBE IS A REPORTED FAILURE, NEVER A SKIPPED LEG. A leg that
+    silently stands down because its implementation is absent is the "skip
+    indistinguishable from a pass" defect: the check would go green on a machine
+    whose AVDs cannot boot, which is the one state this leg exists to catch."""
+    rel = dig(cfg, "android.hypervisor_probe")
+    if not rel:
+        return None, ("android: config.json is missing required key "
+                      "android.hypervisor_probe, so the hypervisor - the one thing that "
+                      "decides whether ANY AVD here can boot - would go unmeasured")
+    path = os.path.normpath(os.path.join(REPO, expand(rel)))
+    # A readiness check writes nothing: no __pycache__ beside the repository's probe.
+    sys.dont_write_bytecode = True
+    try:
+        import importlib.util as _ilu
+        spec = _ilu.spec_from_file_location("android_hypervisor_probe", path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"no loader for {path}")
+        mod = _ilu.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        if not callable(getattr(mod, "check_hypervisor", None)):
+            raise ImportError("it defines no check_hypervisor(emulator_path)")
+    except Exception as e:  # noqa: BLE001 - any failure to load is a leg we cannot run
+        return None, (f"android: the hypervisor probe named by config.json "
+                      f"android.hypervisor_probe is not loadable at {path} "
+                      f"({type(e).__name__}: {e}), so whether any AVD on this machine can "
+                      f"boot is UNMEASURED. Restore it from the repository.")
+    return mod, None
+
+
+# ---- per-platform probes: each returns (ok, message) ------------------------
+
+def check_ios_remote(cfg):
+    """The SSH prerequisite for the remote route, in ONE round trip.
+
+    WHAT THIS PROVES, AND IT IS DELIBERATELY LESS THAN "the remote loop works":
+    that `ssh <user>@<host>` authenticates NON-INTERACTIVELY (BatchMode refuses
+    to fall back to a password prompt, which is the failure that otherwise hangs
+    every command in the loop with nobody present to type into it), and that the
+    Mac on the other end has a selected Xcode and at least one bootable iPhone.
+
+    WHAT IT DOES NOT PROVE, STATED IN ITS OWN OUTPUT LINE SO NOBODY READS IT AS
+    MORE: that the remote can AUTHENTICATE THE BUILD. The build CLI's credential
+    may legitimately be supplied per-invocation through the SSH environment, in
+    which case there is nothing on the remote's disk to measure and a probe here
+    would be measuring the wrong machine at the wrong moment. That leg is proved
+    by hand, once, in the Setup subsection of technical/ios.md - which is why
+    this line names what it covered instead of saying `ios: ok`.
+
+    A one-line remote probe rather than several: each `ssh` is a full handshake,
+    and a check that takes ten seconds gets skipped."""
+    host = expand(dig(cfg, "ios.remote.host"))
+    user = expand(dig(cfg, "ios.remote.user"))
+    # local=False: this path is on the OTHER machine (see expand's docstring).
+    workdir = expand(dig(cfg, "ios.remote.workdir"), local=False) or ""
+    if not user:
+        return False, ("ios: config.json sets ios.remote.host but not ios.remote.user; "
+                       "both are needed to form the ssh target")
+    # The device-type keys are used in this function's own REMEDIATION line. Assert
+    # them here rather than relying on the caller: an absent key would otherwise
+    # tell the operator to run `simctl create 'None' 'None'`, which is a wrong
+    # instruction dressed as a helpful one.
+    for path in ("ios.device_type", "ios.device_type_id"):
+        if not dig(cfg, path):
+            return False, f"ios: config.json is missing required key {path}"
+    target = f"{user}@{host}"
+
+    # FIRST, and locally: does the name resolve at all? See the header for why
+    # this cannot be left to ssh. Resolve what SSH would resolve, not the
+    # configured string - a Host alias legitimately maps elsewhere - and stand
+    # down entirely when a proxy is configured, because the name is then
+    # resolved on the far side and a local lookup would be a false red.
+    resolved, bypass = host, ""
+    control_path = ""
+    g = run(["ssh", "-G", target], timeout=20)
+    if g and g.returncode == 0:
+        for line in (g.stdout or "").splitlines():
+            key, _, val = line.partition(" ")
+            val = val.strip()
+            if key == "hostname" and val:
+                resolved = val
+            elif key in ("proxyjump", "proxycommand") and val and val.lower() != "none":
+                bypass = key
+            elif key == "controlpath" and val and val.lower() != "none":
+                control_path = val
+    # A LIVE ControlMaster socket carries the session over an already-open
+    # connection, so ssh never resolves the name and a lookup here would red a
+    # Mac that is perfectly reachable. The socket must EXIST, not merely be
+    # configured: `controlmaster auto` with no live master still resolves.
+    if not bypass and control_path and os.path.exists(control_path):
+        bypass = "controlmaster"
+    if not bypass:
+        outcome = {}
+
+        def _resolve():
+            try:
+                socket.getaddrinfo(resolved, 22, proto=socket.IPPROTO_TCP)
+                outcome["ok"] = True
+            except Exception as exc:  # noqa: BLE001 - see the header: gaierror is not the
+                outcome["err"] = exc  # only way this fails, and an escape exits 1.
+        t = threading.Thread(target=_resolve, daemon=True)
+        t.start()
+        t.join(RESOLVE_TIMEOUT)
+        via = "" if resolved == host else f" (ssh_config maps {host} to it)"
+        fix = (f"bring up the mesh or VPN that publishes the name, or add it to /etc/hosts, "
+               f"or point this machine at the Mac without editing the committed config - "
+               f"export IOS_REMOTE_HOST=<hostname-or-ip> (config.json ios.remote.host).")
+        if t.is_alive():
+            # Distinct from "does not resolve", deliberately: a resolver that is
+            # not answering is a nameserver problem and the fix above is the
+            # wrong one.
+            return False, (
+                f"ios: resolving the remote Mac's hostname '{resolved}'{via} did not answer "
+                f"within {RESOLVE_TIMEOUT}s, so this check cannot say whether the remote "
+                f"route is usable. That is a RESOLVER problem, not a missing name: a machine "
+                f"ADMIN checks /etc/resolv.conf and the reachability of the nameservers "
+                f"listed there.")
+        if "err" in outcome:
+            exc = outcome["err"]
+            detail = getattr(exc, "strerror", None) or str(exc)
+            return False, (
+                f"ios: the remote Mac's hostname '{resolved}'{via} does not resolve on this "
+                f"machine ({type(exc).__name__}: {detail}), so nothing on the remote route "
+                f"can run. This is not a key or a host-key problem and ssh-copy-id will not "
+                f"fix it: {fix}")
+    # BatchMode=yes is the load-bearing flag: without it a host that has lost its
+    # key falls through to a password prompt and this check BLOCKS instead of
+    # failing, which reads as a hung machine rather than a missing key.
+    # NO StrictHostKeyChecking=accept-new. The setup step this probes is stated as
+    # "key auth AND the Mac in known_hosts", and accept-new would SATISFY the second
+    # half on first contact instead of MEASURING it - a check that quietly creates
+    # the state it claims to verify. ssh-copy-id, which the install step already
+    # requires, populates known_hosts, so a host that fails here genuinely has not
+    # been set up.
+    remote_cmd = ("xcode-select -p && xcodebuild -version && "
+                  "xcrun simctl list -j devices available")
+    if workdir:
+        # Quote the path but leave a leading ~ OUTSIDE the quotes, so the REMOTE
+        # shell expands it against the REMOTE home. Tested LAST and with its own
+        # exit code, because "cannot reach the Mac" and "the Mac is fine but the
+        # directory is missing" are different problems with different fixes, and
+        # a check that cannot tell them apart sends the operator to the wrong one.
+        quoted = ("~/" + shlex.quote(workdir[2:])) if workdir.startswith("~/") \
+            else shlex.quote(workdir)
+        remote_cmd += f" && {{ test -d {quoted} || {{ echo NO_WORKDIR; exit 9; }}; }}"
+    r = run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", target, remote_cmd],
+            timeout=90)
+    if r is None:
+        return False, f"ios: no usable ssh client on this host (needed to reach {target})"
+    if r.returncode != 0:
+        detail = ((r.stderr or r.stdout or "").strip().splitlines() or ["no output"])[-1]
+        if r.returncode == 9:
+            return False, (f"ios: {target} is reachable and its Xcode is fine, but "
+                           f"ios.remote.workdir ({workdir}) does not exist there. "
+                           f"Create it: ssh {target} 'mkdir -p {workdir}' - and keep it "
+                           f"outside every CI runner's work tree.")
+        return False, (f"ios: cannot reach the remote Mac {target} non-interactively "
+                       f"({detail}). Install a key there and accept its host key "
+                       f"(ssh-copy-id {target}), then confirm "
+                       f"`ssh -o BatchMode=yes {target} true` exits 0.")
+    outp = r.stdout or ""
+    m = re.search(r"Xcode (\d+)", outp)
+    xcode_major = int(m.group(1)) if m else 0
+    min_major = int(dig(cfg, "ios.xcode_min_major") or 16)
+    if xcode_major < min_major:
+        return False, (f"ios: the remote Mac {target} has Xcode {xcode_major or '?'}, older "
+                       f"than the required {min_major} (config.json ios.xcode_min_major)")
+    brace = outp.find("{")
+    try:
+        devices = [d for group in json.loads(outp[brace:]).get("devices", {}).values()
+                   for d in group
+                   if d.get("isAvailable") and "iPhone" in (d.get("name") or "")]
+    except Exception as e:  # noqa: BLE001
+        return False, (f"ios: the remote device list did not parse "
+                       f"({type(e).__name__}: {e}); ran on {target}")
+    if not devices:
+        return False, (f"ios: no available iPhone simulator on {target}. Create one there: "
+                       f"xcrun simctl create '{dig(cfg, 'ios.device_type')}' "
+                       f"'{dig(cfg, 'ios.device_type_id')}'")
+    return True, (f"ios: no local Simulator on {sys.platform}; REMOTE route to {target} - "
+                  f"ssh key auth ok, {workdir or 'no workdir configured'} present, "
+                  f"Xcode {xcode_major}, {len(devices)} iPhone device(s) there "
+                  f"(the remote's BUILD credential is NOT covered by this check)")
+
+
+def check_ios(cfg):
+    if sys.platform != "darwin":
+        if expand(dig(cfg, "ios.remote.host")):
+            return check_ios_remote(cfg)
+        return False, (f"ios: the iOS Simulator exists only on macOS and this host is "
+                       f"{sys.platform}. Drop 'ios' from platforms.enabled here, or set "
+                       f"ios.remote.host to a Mac this machine can drive over SSH.")
+
+    for path in ("ios.sim_artifact", "ios.device_type", "ios.device_type_id"):
+        if not dig(cfg, path):
+            return False, f"ios: config.json is missing required key {path}"
+    min_major = int(dig(cfg, "ios.xcode_min_major") or 16)
+
+    if not shutil.which("xcrun"):
+        return False, "ios: no xcrun on PATH. Install Xcode and the command line tools."
+    r = run(["xcode-select", "-p"])
+    devdir = (r.stdout or "").strip() if r and r.returncode == 0 else ""
+    if not devdir or not os.path.isdir(devdir):
+        return False, ("ios: no selected developer directory (xcode-select -p). Run: "
+                       "sudo xcode-select -s /Applications/Xcode.app/Contents/Developer")
+    r = run(["xcodebuild", "-version"])
+    if not r or r.returncode != 0:
+        detail = ((r.stderr or r.stdout or "").strip().splitlines() or [""])[0] if r else "did not run"
+        return False, (f"ios: xcodebuild -version failed ({detail}). Most often an "
+                       "unaccepted licence: sudo xcodebuild -license accept, then "
+                       "sudo xcodebuild -runFirstLaunch")
+    m = re.search(r"Xcode (\d+)", r.stdout or "")
+    xcode_major = int(m.group(1)) if m else 0
+    if xcode_major < min_major:
+        return False, (f"ios: Xcode {xcode_major or '?'} is older than the required "
+                       f"{min_major} (config.json ios.xcode_min_major)")
+
+    r = run(["xcrun", "simctl", "list", "-j", "runtimes"])
+    if not r or r.returncode != 0:
+        return False, ("ios: xcrun simctl list runtimes failed; the CoreSimulator service "
+                       "is not usable on this machine")
+    try:
+        runtimes = [rt for rt in json.loads(r.stdout).get("runtimes", [])
+                    if rt.get("isAvailable") and "iOS" in (rt.get("name") or "")]
+    except Exception as e:  # noqa: BLE001
+        return False, f"ios: simctl runtime list did not parse ({type(e).__name__}: {e})"
+    if not runtimes:
+        return False, "ios: no available iOS runtime. Run: xcodebuild -downloadPlatform iOS"
+
+    r = run(["xcrun", "simctl", "list", "-j", "devices", "available"])
+    if not r or r.returncode != 0:
+        return False, "ios: xcrun simctl list devices failed"
+    try:
+        devices = [d for group in json.loads(r.stdout).get("devices", {}).values()
+                   for d in group
+                   if d.get("isAvailable") and "iPhone" in (d.get("name") or "")]
+    except Exception as e:  # noqa: BLE001
+        return False, f"ios: simctl device list did not parse ({type(e).__name__}: {e})"
+    if not devices:
+        return False, ("ios: no available iPhone simulator. Create one: xcrun simctl create "
+                       f"'{dig(cfg, 'ios.device_type')}' '{dig(cfg, 'ios.device_type_id')}'")
+
+    if not shutil.which("pod"):
+        return False, ("ios: no CocoaPods on PATH (the prebuild runs pod install). Install "
+                       "it with: brew install cocoapods")
+
+    return True, (f"ios: Xcode {xcode_major}, {len(runtimes)} runtime(s), "
+                  f"{len(devices)} iPhone device(s)")
+
+
+def check_android(cfg):
+    if not dig(cfg, "android.avd.default"):
+        return False, "android: config.json is missing required key android.avd.default"
+    avd_want = dig(cfg, "android.avd.default")
+    avd_compat = dig(cfg, "android.avd.compat") or ""
+    min_major = int(dig(cfg, "android.jdk_min_major") or 17)
+
+    adb = android_sdk_tool("adb")
+    if not adb:
+        return False, ("android: adb not found on PATH, in $ANDROID_HOME, $ANDROID_SDK_ROOT, "
+                       "~/Library/Android/sdk or ~/Android/Sdk. Install the SDK platform-tools.")
+    emu = android_sdk_tool("emulator")
+    if not emu:
+        return False, ("android: emulator not found on PATH, in $ANDROID_HOME, "
+                       "$ANDROID_SDK_ROOT, ~/Library/Android/sdk or ~/Android/Sdk. Install "
+                       "the SDK emulator package.")
+    # The build script reads every APK's application id with aapt2 before it
+    # installs it, and refuses the install when it cannot.
+    if not android_sdk_tool("aapt2"):
+        return False, ("android: aapt2 not found on PATH or in any SDK's build-tools/ "
+                       "($ANDROID_HOME, $ANDROID_SDK_ROOT, ~/Library/Android/sdk, ~/Android/Sdk). "
+                       "Install an SDK build-tools package: the build script reads each APK's "
+                       "application id with it before installing.")
+
+    # BEFORE the JDK and the AVD legs: a machine with no hypervisor cannot boot
+    # ANY AVD, so reporting a missing AVD there sends the operator to create one
+    # that will not start either. See the header.
+    probe, why = load_hypervisor_probe(cfg)
+    if probe is None:
+        return False, why
+    try:
+        hv_ok, hv = probe.check_hypervisor(emu)
+    except Exception as e:  # noqa: BLE001 - a probe that raises measured nothing
+        return False, (f"android: the hypervisor probe raised {type(e).__name__}: {e}, so "
+                       f"whether any AVD on this machine can boot is UNMEASURED")
+    if not hv_ok:
+        return False, hv
+
+    # THE SUBJECT IS `javac`, NOT `java`, AND THE DIFFERENCE IS THE WHOLE
+    # POINT OF THIS LEG. Gradle needs a JDK; a JRE is not one. A machine whose
+    # only runtime is a JRE at or above the floor answers `java -version`
+    # perfectly and cannot compile a line - and this check gating on `java`
+    # would call it READY while the build script refuses it, which is strictly
+    # worse than no check: the two would disagree about the same machine and
+    # only one of them would be right. The build script qualifies every
+    # candidate on `bin/javac` (SKILL.md, "The two scripts"); asking the same
+    # question here is what keeps "a machine check calls ready is one the build
+    # accepts" a true sentence rather than a hopeful one.
+    #
+    # The version is still read from `java`, because `javac -version` and
+    # `java -version` differ in FORMAT and this file has one parser. They are
+    # read from the SAME home, so they cannot disagree about the major.
+    javac = shutil.which("javac")
+    if not javac:
+        jh = os.environ.get("JAVA_HOME", "")
+        cand = os.path.join(jh, "bin", "javac") if jh else ""
+        javac = cand if cand and os.access(cand, os.X_OK) else None
+    if not javac:
+        return False, (f"android: no javac on PATH or under $JAVA_HOME. A JRE is not enough - "
+                       f"the Gradle build needs a JDK {min_major} or newer, and a machine whose "
+                       f"only runtime is a JRE passes every 'is there a java?' check and still "
+                       f"cannot compile.")
+    java = os.path.join(os.path.dirname(javac), "java")
+    if not os.access(java, os.X_OK):
+        java = shutil.which("java")
+    if not java:
+        return False, f"android: {javac} has no java beside it, so the JDK version cannot be read"
+    have_major = java_major(java)
+    if have_major is None:
+        return False, f"android: {java} does not report a version, so the JDK cannot be checked"
+    if have_major < min_major:
+        return False, (f"android: JDK {have_major} at {java} is older than the required "
+                       f"{min_major} (config.json android.jdk_min_major)")
+
+    # `emulator -list-avds` is deliberate: it needs no JDK, so on a machine with
+    # the SDK and no JDK this still answers, where the Java avdmanager route
+    # would turn "the AVD is missing" into a JAVA_HOME stack trace.
+    r = run([emu, "-list-avds"])
+    if not r or r.returncode != 0:
+        return False, f"android: {emu} -list-avds did not run"
+    avds = [ln.strip() for ln in (r.stdout or "").splitlines() if ln.strip()]
+    if avd_want not in avds:
+        return False, (f"android: no AVD named {avd_want} (config.json android.avd.default); "
+                       f"-list-avds has {avds or 'none'}. Create it in Android Studio's "
+                       f"Device Manager, or with avdmanager on a CI agent.")
+    if avd_compat and avd_compat not in avds:
+        return False, (f"android: no AVD named {avd_compat} (config.json android.avd.compat); "
+                       f"-list-avds has {avds}. Create it, or clear android.avd.compat if this "
+                       f"machine does not run the compat pass.")
+
+    return True, (f"android: JDK {have_major}, accel [{hv}], AVDs {avd_want}"
+                  + (f" + {avd_compat}" if avd_compat else ""))
+
+
+PROBES = {"ios": check_ios, "android": check_android}
+
+
+def main():
+    global REPO, STATE
+    want = declared_version()
+
+    # ---- the install context -------------------------------------------------
+    sys.path.insert(0, os.path.join(FLEET_ROOT, "lib"))
+    try:
+        from fleetlib import paths
+        context = str(paths.skill_context(SKILL_NAME))
+        REPO = str(paths.install_root())
+    except Exception as e:  # noqa: BLE001 - every fleetlib refusal is one verdict
+        out(1, f"NO VERDICT: no install context for this skill ({type(e).__name__}: {e}). "
+               f"Nothing was looked at, so this says nothing about this machine.")
+    cfg_path = os.path.join(context, "config.json")
+    STATE = os.path.join(context, "installation", ".install-state.json")
+
+    # ---- config -------------------------------------------------------------
+    if not os.path.exists(cfg_path):
+        out(2, f"NOT INSTALLED: no {cfg_path}. Run: `install -m 644 "
+               f"{os.path.join(SKILL, 'config.example.json')} {cfg_path}`, then fill it in.")
+    try:
+        with open(cfg_path, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception as e:  # noqa: BLE001
+        out(2, f"NOT INSTALLED: {cfg_path} does not parse ({type(e).__name__}: {e})")
+    if not isinstance(cfg, dict):
+        out(2, f"NOT INSTALLED: {cfg_path} is not a JSON object")
+
+    for path in ("project.name", "build.script", "platforms.enabled"):
+        if not dig(cfg, path):
+            out(2, f"NOT INSTALLED: {cfg_path} is missing required key {path}")
+
+    # ---- which platforms -----------------------------------------------------
+    arg = sys.argv[1] if len(sys.argv) > 1 else ""
+    if arg in ("-h", "--help"):
+        out(0, "usage: check [ios|android]   (default: every platform in platforms.enabled)")
+    enabled = [p for p in dig(cfg, "platforms.enabled") if p in KNOWN_PLATFORMS]
+    unknown = [p for p in dig(cfg, "platforms.enabled") if p not in KNOWN_PLATFORMS]
+    if unknown:
+        out(2, f"NOT INSTALLED: config.json platforms.enabled names unknown platform(s) "
+               f"{unknown}; this skill knows {list(KNOWN_PLATFORMS)}")
+    if arg:
+        if arg not in KNOWN_PLATFORMS:
+            out(2, f"NOT INSTALLED: unknown platform '{arg}'; want one of {list(KNOWN_PLATFORMS)}")
+        if arg not in enabled:
+            out(2, f"NOT INSTALLED: '{arg}' is not in config.json platforms.enabled "
+                   f"({enabled}). Add it there if this machine is supposed to run it.")
+        platforms = [arg]
+    else:
+        platforms = enabled
+    if not platforms:
+        out(2, "NOT INSTALLED: config.json platforms.enabled is empty; nothing to check")
+
+    # ---- the build script this skill is the operator's route through ---------
+    script = os.path.normpath(os.path.join(REPO, expand(cfg["build"]["script"])))
+    if not (os.path.isfile(script) and os.access(script, os.X_OK)):
+        out(2, f"NOT INSTALLED: build.script is not an executable file at {script} "
+               f"(resolved against the install root {REPO})")
+
+    # ---- the build CLI's session, ON THE MACHINE THAT BUILDS -----------------
+    # The local build declares a logged-in context, so an unauthenticated agent
+    # fails at the BUILD rather than at a login step. Either route counts: the
+    # token in the variable ci.eas_token_env names, or a session the CLI stored
+    # in the home directory (~/.expo/state.json carrying `auth`).
+    #
+    # ASK IT OF THE MACHINE THAT ACTUALLY BUILDS, WHICH IS NOT ALWAYS THIS
+    # ONE. With the remote iOS route (ios.remote.host on a non-macOS host) the
+    # build runs on the Mac, so a session HERE proves nothing about it and the
+    # ABSENCE of one here proves nothing either - demanding it would fail a
+    # correctly-installed machine for a credential it does not use, which is the
+    # worst kind of check: one that is red for a reason unrelated to the thing
+    # it names. Android always builds locally, and iOS builds locally on macOS;
+    # if neither of those is in play, this leg has no subject on this machine
+    # and is skipped. The remote's own credential is section 4a.1 step 5 of
+    # technical/ios.md, proved by hand, and check_ios_remote's output line says
+    # in words that it is not covered here.
+    builds_locally = any(p == "android" for p in platforms) or (
+        "ios" in platforms and sys.platform == "darwin")
+    token_env = dig(cfg, "ci.eas_token_env") or "EXPO_TOKEN"
+    if builds_locally:
+        session = os.path.expanduser("~/.expo/state.json")
+        has_session = False
+        if os.path.exists(session):
+            try:
+                with open(session, encoding="utf-8") as f:
+                    has_session = bool(json.load(f).get("auth"))
+            except Exception:  # noqa: BLE001 - an unreadable session is no session
+                has_session = False
+        if not (os.environ.get(token_env) or has_session):
+            out(2, f"NOT INSTALLED: the build CLI has no session and ${token_env} is unset. "
+                   f"Export ${token_env} (CI) or log the CLI in (workstation).")
+
+    # ---- per platform --------------------------------------------------------
+    results = [(p,) + PROBES[p](cfg) for p in platforms]
+    failed = [msg for _, ok, msg in results if not ok]
+    if failed:
+        out(2, "NOT INSTALLED: " + " | ".join(failed))
+    inventory = ", ".join(msg for _, _, msg in results)
+
+    # ---- OPTIONAL: the device-e2e tap driver --------------------------------
+    # Reported, never enforced. The driver is needed by the e2e suite and never
+    # by the operator loop, so a machine that only runs dev builds is fully
+    # installed without it - failing here would be the same mistake as leaving
+    # a platform enabled that this machine does not run.
+    #
+    # driver_path BEFORE PATH, deliberately: the installer appends its bin dir
+    # to shell rc files, which are read by INTERACTIVE shells only, so every
+    # non-interactive caller has a working install and no driver on PATH.
+    de = cfg.get("device_e2e") or {}
+    if de.get("driver"):
+        cand = expand(de.get("driver_path") or "")
+        drv = cand if cand and os.access(cand, os.X_OK) else shutil.which(de["driver"])
+        if drv:
+            r = run([drv, "--version"], timeout=120)
+            ver = ((r.stdout or "").strip().splitlines() or [""])[-1].strip() if r else ""
+            inventory += f", device-e2e: {de['driver']} {ver or 'present'}"
+        else:
+            inventory += f", device-e2e: no {de['driver']} (optional; the dev loop does not need it)"
+
+    # ---- artifacts are all present. Only the recorded version can be wrong. --
+    host = socket.gethostname()
+    if not os.path.exists(STATE):
+        out(1, f"STALE: installed, but no {STATE} records which version "
+               f"(SKILL.md declares {want}). Re-run installation/INSTRUCTION.md.")
+    try:
+        with open(STATE, encoding="utf-8") as f:
+            state = json.load(f)
+        versions = state.get("versions") if isinstance(state, dict) else None
+        if not isinstance(versions, dict):
+            raise ValueError("no `versions` map")
+        record = versions.get(host)
+    except Exception as e:  # noqa: BLE001
+        out(1, f"STALE: {STATE} unreadable ({type(e).__name__}: {e}). Redo the record "
+               f"step in installation/INSTRUCTION.md.")
+    if not isinstance(record, dict):
+        known = sorted(versions.keys())
+        out(1, f"STALE: no install recorded for this machine ({host}); recorded hosts are "
+               f"{known or 'none'}. The state file travels with the install; the machine "
+               f"setup does not. Re-run installation/INSTRUCTION.md.")
+    try:
+        have = int(record.get("version", -1))
+    except Exception:  # noqa: BLE001
+        have = -1
+    if have < want:
+        out(1, f"STALE: {host} recorded version {have}, SKILL.md declares {want}. "
+               f"Re-run installation/INSTRUCTION.md.")
+    if have > want:
+        out(1, f"STALE: {host} recorded version {have}, NEWER than SKILL.md's {want}. "
+               f"The fleet checkout is older than the one that recorded the install; "
+               f"check `fleet status`.")
+
+    out(0, f"OK: installed and current (version {want}) on {host} - {inventory}")
+
+
+if __name__ == "__main__":
+    main()

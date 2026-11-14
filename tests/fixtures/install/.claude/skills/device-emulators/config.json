@@ -1,0 +1,71 @@
+{
+  "_comment": [
+    "FIXTURE config for the fleet's own tests (FLEET_CONTEXT_ROOT=tests/fixtures/install).",
+    "Every value is synthetic. The script paths name the fixture scripts beside this file,",
+    "relative to the install root, the way an install names its own repository's scripts.",
+    "Only android is enabled: the iOS legs need a Mac or a remote one, and check.test.py",
+    "drives them from copies of this file."
+  ],
+  "project": {
+    "name": "Example App",
+    "artifact_prefix": "exampleapp"
+  },
+  "platforms": {
+    "enabled": ["android"]
+  },
+  "build": {
+    "script": "./.claude/skills/device-emulators/fixture-scripts/build.sh",
+    "dev_script": "./.claude/skills/device-emulators/fixture-scripts/dev-stack.sh",
+    "dev_client_service": "dev-client",
+    "env_config_script": ".claude/skills/device-emulators/fixture-scripts/env-config.sh",
+    "default_env": "local",
+    "method_metro": "metro",
+    "method_embedded": "embedded",
+    "ports_artifact": ".dev-stack-ports.json",
+    "metro_port_key": "metro"
+  },
+  "ios": {
+    "sim_artifact": "build-example-ios-sim.tar.gz",
+    "device_type": "Example iPhone",
+    "device_type_id": "com.apple.CoreSimulator.SimDeviceType.Example-iPhone",
+    "dev_menu_onboarding_key": "ExampleDevMenuOnboardingKey",
+    "xcode_min_major": 16,
+    "sweep_extra_device_types": [
+      { "name": "Example iPhone Small", "id": "com.apple.CoreSimulator.SimDeviceType.Example-iPhone-Small" }
+    ],
+    "remote": {
+      "host": "${IOS_REMOTE_HOST:-}",
+      "user": "${IOS_REMOTE_USER:-ada}",
+      "workdir": "${IOS_REMOTE_WORKDIR:-~/example-ios-builds}"
+    }
+  },
+  "android": {
+    "hypervisor_probe": ".claude/skills/device-emulators/fixture-scripts/hypervisor_probe.py",
+    "apk_artifact": "build-example-android.apk",
+    "aab_artifact": "build-example-android.aab",
+    "avd": {
+      "default": "Example_Phone_API_35",
+      "compat": ""
+    },
+    "sweep_short_screen": { "size": "1080x1920", "density": 461 },
+    "jdk_min_major": 17
+  },
+  "keystore": {
+    "dir": "${FLEET_SECRETS_DIR:-$HOME/.example-secrets}/keystores"
+  },
+  "metro": {
+    "host_cmd": "printf '%s\\n' 127.0.0.1"
+  },
+  "ci": {
+    "eas_token_env": "EXAMPLE_BUILD_TOKEN"
+  },
+  "docs": {
+    "build_machine_components": "docs/example-build-machine.md"
+  },
+  "device_e2e": {
+    "driver": "example-driver",
+    "driver_path": "~/.example-driver/bin/example-driver",
+    "runner": "scripts/example-device-e2e.sh",
+    "flows_dir": "e2e/example-flows"
+  }
+}
