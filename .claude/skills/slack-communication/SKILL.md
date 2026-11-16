@@ -595,14 +595,16 @@ further polls or lines for it. (The case it covers: a DM that stays in
 - A reply in a thread whose parent is **older than the 7-day window and off the
   poll's page**, with no reply in that thread read inside the window, is not
   read - THE WINDOW BOUND above. Answering a post that old does not bring its
-  thread back into view.
+  thread back into view. A `thread_broadcast` reply is the exception: it
+  arrives from history, whatever its parent's age or position.
 - A catch-up delivers at most the **newest 200** top-level messages of a
   conversation; older messages and the replies under them are announced - ISO
   UTC range, no count - in one `WATCH-INFO` line and read on demand with the
   fetch recipe.
 - A reply in a thread whose parent is off the poll's page arrives within one
   **sweep** (300 s to start, plus the polls the sweep needs at the shared
-  per-poll budget), not one poll.
+  per-poll budget), not one poll. A `thread_broadcast` reply arrives from
+  history within one poll, whatever its parent's age or position.
 - The bot never sees channels of **other workspaces/orgs** it isn't installed
   in.
 - DMs are invisible if the `im:*` scopes are ever dropped.
