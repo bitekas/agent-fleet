@@ -310,6 +310,43 @@ python3 "$p" "$fx/usage-window-dropped.txt" --floor-only >/dev/null 2>&1
 [ "$?" = "4" ] \
   || bad "the dropped-window capture is not readable at all - the inconclusive above is about the capture, not about the missing window"
 
+# ---- --accept-missing: a person's one-time word that a window is gone --------
+# ⚠️ Without it a RETIRED window keeps every later sweep inconclusive for ever:
+# an inconclusive reading appends nothing, so the previous sweep never changes.
+# Measured on a live fleet - two agents unread for weeks after Claude Code
+# stopped drawing `Current session` for their accounts.
+#  * accepted, the reading is analysed and APPENDED without the window, and the
+#    next sweep on that ledger, with no flag, is readable - the one-shot shape;
+#  * naming a window that is not missing is exit 2, so the flag cannot stand in
+#    a sweep script and switch the guard off for that window for good;
+#  * a missing window the flag does NOT name keeps the reading inconclusive.
+am="$tmp/accept-missing.md"; cp "$fx/ledgers/prev-watch.md" "$am"
+python3 "$p" "$fx/usage-window-dropped.txt" --agent alpha --account acct-a \
+  --ledger "$am" --now "$NOW" --append --accept-missing "Current session" >/dev/null 2>&1
+rc=$?
+[ "$rc" = "0" ] || [ "$rc" = "1" ] \
+  || bad "--accept-missing on the window that is missing did not give a reading (exit $rc)"
+stamp="$(python3 -c 'import sys,time; print(time.strftime("%Y-%m-%dT%H:%MZ", time.gmtime(float(sys.argv[1]))))' "$NOW")"
+grep -q "| $stamp | acct-a | Current week" "$am" \
+  || bad "--accept-missing did not append the reading - the next sweep would stay inconclusive"
+python3 "$p" "$fx/usage-window-dropped.txt" --agent alpha --account acct-a \
+  --ledger "$am" --now "$((NOW + 1800))" >/dev/null 2>&1
+rc=$?
+[ "$rc" = "3" ] && bad "the sweep after an --accept-missing is still inconclusive - the flag is not one-shot"
+python3 "$p" "$fx/usage-window-dropped.txt" --agent alpha --account acct-a \
+  --ledger "$am" --now "$((NOW + 3600))" --accept-missing "Current session" >/dev/null 2>&1
+[ "$?" = "2" ] \
+  || bad "--accept-missing naming a window that is NOT missing was accepted - it could stand in a sweep script"
+[ "$(runx prev-watch usage-window-dropped)" = "3" ] \
+  || bad "the dropped-window case stopped being inconclusive without the flag"
+cp "$fx/ledgers/prev-watch.md" "$am"
+python3 "$p" "$fx/usage-window-dropped.txt" --agent alpha --account acct-a \
+  --ledger "$am" --now "$NOW" --accept-missing "Current week (Fable)" >/dev/null 2>&1
+[ "$?" = "2" ] \
+  || bad "--accept-missing naming the WRONG window let the reading through"
+python3 "$p" "$fx/usage-window-dropped.txt" --floor-only --accept-missing "Current session" >/dev/null 2>&1
+[ "$?" = "2" ] || bad "--accept-missing without a ledger was not refused"
+
 # a malformed ledger row is an INSTRUMENT FAULT (exit 2), never a silent skip.
 # Skipping it makes an OLDER row the baseline and downgrades a handover to a
 # wait, with nothing red anywhere.

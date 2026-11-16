@@ -528,7 +528,14 @@ when the dialog is taller than the pane); and **a window the previous sweep
 recorded and this capture does not** - one wrapped `NN% used` line drops a
 window, and the one that vanishes may be the one sitting on a `watch`. A limit
 Claude Code genuinely retires lands here too and stays inconclusive until a
-person looks: only a person can tell a product change from a half-drawn pane.
+person looks: only a person can tell a product change from a half-drawn pane. **And the person who
+looks is what ends it**: an inconclusive reading appends nothing, so the previous
+sweep never moves and a retired window would keep every later sweep inconclusive
+for ever. Once the pane, read by hand, shows the limit is genuinely gone, re-run
+that agent's reading ONCE with `--accept-missing "<window name>"`: it is
+analysed and appended without the window, and the next sweep compares against
+it. Naming a window the capture does not miss exits 2, so the flag cannot be
+left in a sweep script.
 
 **`inconclusive` is not `ok`.** It means no limit was found on the capture,
 which is what a send-keys that never landed, a half-drawn pane, a wrong pane and

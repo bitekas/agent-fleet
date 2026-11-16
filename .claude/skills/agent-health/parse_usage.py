@@ -757,9 +757,17 @@ def decide(limit, prev, now_epoch):
 
 # --------------------------------------------------------------------------
 
+class AcceptMissingError(Exception):
+    """`--accept-missing` named a window this capture does not actually miss."""
+
+
 def analyse(text, now_epoch, rows=None, account="-", have_ledger=False,
-            limits=None, no_limits_reason=None):
-    """`limits`, when given, replaces parsing `text` (the snapshot route)."""
+            limits=None, no_limits_reason=None, accept_missing=()):
+    """`limits`, when given, replaces parsing `text` (the snapshot route).
+
+    `accept_missing` names windows a person has confirmed, by reading the pane,
+    are genuinely no longer drawn: see `--accept-missing`.
+    """
     if limits is None and no_limits_reason is None:
         limits = parse_limits(text)
     if not limits:
@@ -805,8 +813,26 @@ def analyse(text, now_epoch, rows=None, account="-", have_ledger=False,
         # inconclusive until a person looks. That is the intended cost: a
         # vanished limit is either an instrument fault or a product change, and
         # only a person can tell which.
+        # ⚠️ THE ONE WAY OUT IS A PERSON SAYING SO, ONCE. Nothing is appended
+        # on an inconclusive reading, so the previous sweep never changes and a
+        # retired window keeps every later sweep inconclusive for ever - weeks
+        # of an agent nobody is measuring, with the guard working as written.
+        # `--accept-missing` is that person's word: the named windows are let
+        # go, this reading is appended without them, and the next sweep compares
+        # against it. Naming a window that is NOT missing is refused (exit 2),
+        # so the flag cannot be left standing in a sweep script, where it would
+        # switch this guard off for that window for good.
         seen = {_cell(l["name"]) for l in limits}
         missing = sorted(last_sweep_windows(rows or [], account) - seen)
+        accepted = {_cell(n) for n in accept_missing}
+        stale = sorted(accepted - set(missing))
+        if stale:
+            raise AcceptMissingError(
+                "--accept-missing names %s, which this capture does not miss "
+                "against the previous sweep on this account. The flag is a "
+                "one-time confirmation that a window is gone, never a standing "
+                "option: drop it." % ", ".join(stale))
+        missing = [m for m in missing if m not in accepted]
         if missing:
             return {
                 "verdict": "inconclusive",
@@ -814,7 +840,9 @@ def analyse(text, now_epoch, rows=None, account="-", have_ledger=False,
                           "sweep on this account recorded: %s. Either the "
                           "capture is partial - one wrapped or half-drawn line "
                           "is enough - or Claude Code has retired the limit. "
-                          "Re-capture; if it persists, read the pane by hand. "
+                          "Re-capture; if it persists, read the pane by hand, "
+                          "and once you have seen that the limit is genuinely "
+                          "gone, re-run once with --accept-missing <name>. "
                           "This is NOT an ok sweep: a window that vanishes "
                           "silently is a window nobody is watching."
                           % (len(missing), ", ".join(missing)),
@@ -908,6 +936,15 @@ def main(argv=None):
                          "of a captured /usage screen; repeat it for every holder of "
                          "a shared account, and the freshest snapshot is read"
                          % SNAPSHOT_NAME)
+    ap.add_argument("--accept-missing", metavar="WINDOW", action="append",
+                    default=[],
+                    help="a window the previous sweep on this account recorded "
+                         "and this capture does not, which a person has READ ON "
+                         "THE PANE and confirmed is genuinely no longer drawn. "
+                         "The reading is then analysed and appended without it, "
+                         "and the next sweep compares against that. Repeatable. "
+                         "One-time: naming a window that is not missing exits 2. "
+                         "Needs --ledger.")
     ap.add_argument("--now", type=float, default=None,
                     help="override the clock, epoch seconds (tests)")
     args = ap.parse_args(argv)
@@ -960,6 +997,11 @@ def main(argv=None):
             "ever, at exit 0. `tmux_triage.sh <agent> --current-account` "
             "answers it with no keystrokes.\n")
         return 2
+    if args.accept_missing and not args.ledger:
+        sys.stderr.write("--accept-missing needs --ledger <path>: it answers the "
+                         "comparison with the previous sweep, and there is none "
+                         "without a ledger\n")
+        return 2
     if args.append and not args.ledger:
         sys.stderr.write("--append needs --ledger <path>\n")
         return 2
@@ -1004,9 +1046,14 @@ def main(argv=None):
             sys.stderr.write("cannot read the capture: %s\n" % exc)
             return 2
 
-    result = analyse(text, now_epoch, rows=rows, account=account,
-                     have_ledger=bool(args.ledger), limits=limits,
-                     no_limits_reason=no_limits or None)
+    try:
+        result = analyse(text, now_epoch, rows=rows, account=account,
+                         have_ledger=bool(args.ledger), limits=limits,
+                         no_limits_reason=no_limits or None,
+                         accept_missing=args.accept_missing)
+    except AcceptMissingError as exc:
+        sys.stderr.write("%s\n" % exc)
+        return 2
     result["agent"] = args.agent
     result["account"] = account
     result["now"] = datetime.fromtimestamp(
