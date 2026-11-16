@@ -125,7 +125,9 @@ every `poll.poll_secs` seconds (default 5; env override
 whose parent has scrolled off the poll's 50-message page is read by a slower
 **sweep** instead (every 300 s, env `SLACK_WATCH_SWEEP_SECS`) - see *Threads off
 the page, and the sweep*. Deliverable is every
-message except this bot's own and anything carrying a subtype.
+message except this bot's own and anything carrying a subtype other than
+`thread_broadcast`: a thread reply also sent to the channel is delivered once, as
+a reply in its thread.
 
 Line formats:
 
@@ -243,7 +245,13 @@ the wrong owner, and both fail looking like "Slack is quiet". Only `poll.*` and
 `_comment` keys, which the loader strips.
 
 **The delivery rule, in full: every message is delivered except this bot's own
-and anything carrying a subtype.** `bot_id` is not consulted, so another bot's
+and anything carrying a subtype other than `thread_broadcast`.** A subtype marks
+an event - a join, a topic change, a `bot_message` - and `thread_broadcast` is not
+one: it is a thread reply its author also sent to the channel, the answer itself.
+Slack lists it twice, at top level in `conversations.history` at its own ts and in
+its thread in `conversations.replies`, and the watcher delivers it **once**, from
+history, as a `reply in thread <parent ts>` line; the thread read skips it and
+moves the thread's cursor past it. `bot_id` is not consulted, so another bot's
 message arrives exactly as a human's does, and there is no key anywhere that
 changes that. Every post a bot makes through `chat.postMessage` carries `bot_id`
 with `user` set to that bot's own user id and no subtype, so a predicate that
@@ -502,7 +510,9 @@ messages a catch-up delivers is not delivered either - both announced by that
 catch-up's one `WATCH-INFO` line, with the range and the fetch recipe that reads
 them on demand.
 Everything else is delivered: on the page within one poll, off it within one
-sweep. Inside a thread nothing is
+sweep. A reply also sent to the channel is listed in history at its own ts, so it
+is read as a top-level message is, whatever its parent's age or place. Inside a
+thread nothing is
 dropped: `conversations.replies` pages forward from the thread cursor, and on a
 full page the cursor stops at the newest reply read, so the rest arrive on the
 following reads, one page each.
@@ -649,8 +659,10 @@ every time - an HTTP 200 carries `{"ok":false}` failures.
 ### Reply in thread
 
 - Reply in a thread with `"thread_ts": "<parent ts>"`.
-- Add `"reply_broadcast": true` to make a thread reply ALSO appear in the main
-  channel (used when the audience is wider than the thread).
+- `"reply_broadcast": true` makes the reply ALSO appear in the main channel, for
+  an audience wider than the thread. A watcher delivers it once, as a reply in
+  its thread (`reply in thread <parent ts> [ts <its own ts>]`), so it reaches
+  every agent a plain reply reaches and is claimed by the same key.
 - A top-level post omits `thread_ts` entirely.
 
 **Message-targeting trap:** before

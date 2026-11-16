@@ -3,7 +3,9 @@
 
 Polls Slack with the configured bot token and prints ONE LINE per new
 DELIVERABLE message (top-level or thread reply): every message from anyone but
-this bot itself. Designed to run under a Claude Code
+this bot itself that carries no subtype, plus thread replies also sent to the
+channel (`thread_broadcast`, one line each, as a reply in its thread).
+Designed to run under a Claude Code
 persistent Monitor: each printed line is injected into the agent's session as a
 wake-up event, which is how Slack messages reach the agent near-real-time
 (~POLL_SECS latency; longer for a reply whose thread parent is off the poll's
@@ -103,7 +105,7 @@ thread's parent is older than the baseline. Pre-existing cursor files carry no
 stored baseline and are never given one - they fall back to the channel cursor
 already on disk, so nothing old is replayed on upgrade. Every cursor file also
 carries `sweep_floor_ts` (SKILL.md, the sweep floor). The bot's own messages and
-join/system subtypes are skipped.
+join/system subtypes are skipped; a `thread_broadcast` is not (Who gets delivered).
 Requires only stdlib + the token file; no MCP, no Slack SDK.
 
 Who gets delivered:
@@ -112,6 +114,10 @@ Who gets delivered:
   `chat.postMessage` carries `bot_id`, and nothing in this file reads that field
   to decide delivery. A bot's line is marked ` [bot]` so a reader can tell an
   agent from a colleague, derived from the message itself and from no config.
+  A message carrying a subtype is an event and is dropped, except
+  `thread_broadcast`: a thread reply also sent to the channel is correspondence,
+  delivered once, from history, as a `reply in thread <thread_ts>` line
+  (`is_deliverable`, `_read_thread`).
   ⚠️ CHANNEL MEMBERSHIP IS THE ONLY CONTROL OVER WHAT REACHES THE SESSION. The
   watcher polls every conversation the bot belongs to, so a bot that is a member
   of a channel a machine feed writes to receives that feed, message for message,
@@ -562,6 +568,11 @@ def discover_dms(warn_state: dict) -> dict:
     return dms
 
 
+# The one subtype that is correspondence rather than an event: a thread reply its
+# author also sent to the channel ("also send to #channel", `reply_broadcast`).
+THREAD_BROADCAST = "thread_broadcast"
+
+
 def is_deliverable(msg: dict) -> bool:
     """Should this message be printed into the owning agent's session?
 
@@ -578,8 +589,14 @@ def is_deliverable(msg: dict) -> bool:
     - `user` is not this bot. Without it the watcher reads its own posts back
       into its session: not just noise, but a feedback loop that spends the poll
       budget and, at this watcher's rate limit, goes deaf.
-    - `subtype` is None. Joins, leaves, topic changes and the rest are events,
-      not correspondence.
+    - `subtype` is None or `thread_broadcast`. Joins, leaves, topic changes,
+      `bot_message` and the rest are events, not correspondence. A
+      `thread_broadcast` is a thread reply whose author also sent it to the
+      channel: someone answering in a thread, with `user`, `bot_id` and
+      `thread_ts` as any reply carries them - the subtype says only where else
+      it is shown, so dropping it drops the answer, silently. Slack lists it
+      twice, in history at its own ts and in its thread, and it is delivered
+      once, from history (`_read_thread` skips it; `emit` names its thread).
 
     ⚠️ `bot_id` IS NOT CONSULTED, AND RE-ADDING IT IS A REGRESSION. Every post a
     fleet agent makes through `chat.postMessage` carries `bot_id` with `user`
@@ -600,7 +617,7 @@ def is_deliverable(msg: dict) -> bool:
     the same for a bot's UID as for a human's.
     """
     uid = msg.get("user")
-    return uid is not None and uid != BOT_USER and msg.get("subtype") is None
+    return uid is not None and uid != BOT_USER and msg.get("subtype") in (None, THREAD_BROADCAST)
 
 
 def label(msg: dict) -> str:
@@ -626,6 +643,11 @@ def label(msg: dict) -> str:
 
 def emit(msg: dict, channel_name: str | None, parent_ts: str | None = None,
          is_dm: bool = False) -> None:
+    # A broadcast is read at top level but is a reply, so its line names its
+    # thread: a claim keyed on its ts and an answer posted to that thread work
+    # exactly as for a reply read in the thread.
+    if parent_ts is None and msg.get("subtype") == THREAD_BROADCAST:
+        parent_ts = msg.get("thread_ts")
     where = f"reply in thread {parent_ts}" if parent_ts else "message"
     text = " ".join((msg.get("text") or "").split())[:500]
     # A DM has no channel name - mark it "DM" so the session's triage can tell a
@@ -787,6 +809,11 @@ def _read_thread(channel_id: str, channel_name: str | None, state: dict, parent_
     ⚠️ A cursor is only ever written FORWARD of where reading started, so it
     always names a real reply: written back at a floor, a quiet thread would look
     active and stay inside the window longer than its replies do.
+    ⚠️ A `thread_broadcast` is never emitted here, though the cursor moves past
+    it: history lists it at top level at its own ts, and the poll delivers it
+    from there, gated by the channel cursor. History is the path that sees it
+    while its parent is off the page or older than the window; emitting it here
+    as well would deliver it twice. watch.test.py §14k.
     """
     seen = state["threads"].get(parent_ts) or max(parent_ts, floor, key=float)
     if off_page:
@@ -801,7 +828,7 @@ def _read_thread(channel_id: str, channel_name: str | None, state: dict, parent_
     for r in sorted(messages, key=lambda m: float(m["ts"])):
         if float(r["ts"]) > float(seen) and r["ts"] != parent_ts:
             newest_read = r["ts"]
-            if is_deliverable(r):
+            if is_deliverable(r) and r.get("subtype") != THREAD_BROADCAST:
                 emit(r, channel_name, parent_ts=parent_ts, is_dm=is_dm)
     if latest_reply is None:
         parent = next((m for m in messages if m.get("ts") == parent_ts), {})

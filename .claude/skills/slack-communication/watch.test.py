@@ -2060,7 +2060,8 @@ check("an EMPTY XDG_CACHE_HOME falls back to ~/.cache, never to a relative path"
 
 # === 14. DELIVERY: every sender but this bot ===================================
 # THE RULE THIS SECTION PINS. A message is delivered when it carries a `user`,
-# that user is not this bot, and it has no `subtype`. Nothing else is consulted -
+# that user is not this bot, and it has no `subtype` other than `thread_broadcast`
+# (a thread reply also sent to the channel, 14k). Nothing else is consulted -
 # in particular NOT `bot_id`, so a message from another bot is delivered exactly
 # like a human's.
 #
@@ -2105,7 +2106,7 @@ check("an EMPTY XDG_CACHE_HOME falls back to ~/.cache, never to a relative path"
 # Two properties of that recording are load-bearing and neither is obvious:
 # `user` IS present and IS the bot's own user id (not absent, as a webhook post's
 # would be), and `subtype` is ABSENT rather than null - so the predicate's
-# `msg.get("subtype") is None` is what makes it pass, and a rewrite to
+# `msg.get("subtype")`, None for both, is what makes it pass, and a rewrite to
 # `"subtype" not in msg` would be equivalent here and NOT equivalent for a
 # message that carries an explicit null. The fixture omits the key for that
 # reason; do not "normalise" it to `"subtype": None`.
@@ -2169,13 +2170,23 @@ check("...and its own plain message (no bot_id) is dropped too",
                         "text": "own post"}) is False)
 
 # 14c. SUBTYPE. Joins, leaves, topic changes are events, not correspondence -
-#      from a bot and from a human alike.
+#      from a bot and from a human alike. The one subtype that IS correspondence
+#      is `thread_broadcast`, a thread reply its author also sent to the channel;
+#      14k drives it through every delivery path.
 check("a bot's SYSTEM message (subtype set) is dropped",
       w.is_deliverable({"ts": _BOT_TS, "user": _OTHER_BOT, "bot_id": "B0ALAN",
                         "subtype": "channel_join", "text": "joined"}) is False)
 check("a HUMAN's system message (subtype set) is dropped",
       w.is_deliverable({"ts": _BOT_TS, "user": "U0ADA",
                         "subtype": "channel_join", "text": "joined"}) is False)
+check("a reply also sent to the channel (thread_broadcast) IS deliverable, from a human and from a bot",
+      w.is_deliverable({"ts": _BOT_TS, "user": "U0ADA", "subtype": "thread_broadcast",
+                        "thread_ts": "1788477400.000000", "text": "answer"}) is True
+      and w.is_deliverable(dict(_bm, subtype="thread_broadcast",
+                                thread_ts="1788477400.000000")) is True)
+check("...but not this bot's own broadcast",
+      w.is_deliverable(dict(_bot_msg(w.BOT_USER), subtype="thread_broadcast",
+                            thread_ts="1788477400.000000")) is False)
 
 # 14d. NO UID, NO LINE. A message with no `user` is a classic webhook/app post
 #      and there is nobody to authorize it against. What it costs to lose this
@@ -2302,6 +2313,245 @@ check("this bot's two messages are the ONLY things dropped (the human still land
       sorted(t for t, _ in _bot_emitted)
       == ["bot reply in thread", "bot top-level", "human parent"],
       f"emitted={_bot_emitted}")
+
+
+# 14k. A REPLY ALSO SENT TO THE CHANNEL. "Also send to #channel" (the API's
+#      `reply_broadcast`) gives a thread reply `subtype: "thread_broadcast"` and
+#      keeps its `user`, `bot_id` (from a bot), `thread_ts` and `text`; Slack then
+#      lists it TWICE - `conversations.history` at top level at its own ts, and
+#      `conversations.replies` in its thread. It is correspondence, so it is
+#      delivered, and ONCE: the history path emits it as a `reply in thread
+#      <thread_ts>` line, the same line a reply read in its thread gets (so a
+#      claim key and an in-thread answer work unchanged), and the replies path
+#      skips it while moving the thread's cursor past it. History is the path
+#      that sees it even when its parent is off the page.
+#      Teeth: the fakes hand the broadcast back on BOTH paths and their replies
+#      call ignores `oldest` (the 10t rule), so one line can only come from the
+#      watcher; the lines are the REAL emit's, read off stdout. Mutations that
+#      red it: delivering it in the replies path too (two lines, 14k-a),
+#      delivering it only there (no line while the parent is off the page,
+#      14k-b), and dropping the subtype exception (no line anywhere).
+_emit_before_14k = w.emit
+w.KNOWN_USERS = {**_saved_known, _OTHER_BOT: "Alan"}
+_BN = time.time()
+
+
+def _bago(secs):
+    return f"{_BN - secs:.6f}"
+
+
+def _broadcast(ts, thread_ts, text, user=_HUMAN, **extra):
+    """A thread reply sent with "also send to channel", in the shape both
+    `conversations.history` and `conversations.replies` return it: the
+    `thread_broadcast` subtype, its own `ts`, its thread's `thread_ts` and a
+    `root` copy of the parent. No `reply_count`: that is the parent's."""
+    return {"ts": ts, "thread_ts": thread_ts, "user": user, "subtype": "thread_broadcast",
+            "text": text, "root": {"ts": thread_ts, "thread_ts": thread_ts}, **extra}
+
+
+def _run_real(fn):
+    """Run `fn` with the REAL emit: (its result, the SLACK lines it printed)."""
+    buf = io.StringIO()
+    w.emit = _REAL_EMIT
+    try:
+        with contextlib.redirect_stdout(buf):
+            out = fn()
+    finally:
+        w.emit = _emit_before_14k
+    return out, buf.getvalue().splitlines()
+
+
+def _for(ts, lines):
+    return [ln for ln in lines if f"[ts {ts}]" in ln]
+
+
+def _replies_got(fake, parent_ts):
+    """What each replies call for `parent_ts` handed back (texts), in call order."""
+    return [got for m, p, got in fake.calls if m == "conversations.replies" and p["ts"] == parent_ts]
+
+
+# 14k-a. Parent ON the page: history and replies both return the broadcast.
+_KP, _KR1, _KB, _KR2 = _bago(600), _bago(500), _bago(400), _bago(100)
+_kfk = _FakeSlack([_msg(_KP, "parent on the page"),
+                   _broadcast(_KB, _KP, "answer, also sent to the channel")],
+                  {_KP: [_msg(_KR1, "plain reply"),
+                         _broadcast(_KB, _KP, "answer, also sent to the channel")]})
+_kst = {"channel_ts": _bago(700), "baseline_ts": _bago(800), "sweep_floor_ts": _bago(800),
+        "threads": {}}
+_, _ka = _run_real(lambda: _poll(_kfk, "C_BCAST", _kst))
+_KB_LINE = f"SLACK #general reply in thread {_KP} [ts {_KB}] Ada (U0ADA): answer, also sent to the channel"
+check("14k-a REGIME CONTROL: history listed the parent AND the broadcast, and the replies call handed "
+      "the broadcast back too",
+      {_KP, _KB} <= set(_kfk.calls[0][2])
+      and "answer, also sent to the channel" in (_replies_got(_kfk, _KP) or [[]])[0],
+      f"history={_kfk.calls[0][2]} replies={_replies_got(_kfk, _KP)}")
+check("14k-a. a broadcast both paths return is delivered exactly once, as a reply in its thread",
+      _for(_KB, _ka) == [_KB_LINE], f"lines={_ka}")
+check("14k-a. NEGATIVE CONTROL: the parent and the plain reply each arrive once, so the poll is live",
+      len(_for(_KP, _ka)) == 1 and _for(_KR1, _ka) == [
+          f"SLACK #general reply in thread {_KP} [ts {_KR1}] Ada (U0ADA): plain reply"],
+      f"lines={_ka}")
+check("14k-a. the replies path still moves the thread's cursor past the broadcast it skipped",
+      _kst["threads"].get(_KP) == _KB, f"threads={_kst['threads']}")
+
+# 14k-c. A LATER POLL DOES NOT DELIVER IT AGAIN, though both cursors move: a new
+#      plain reply makes the next poll call replies, which hands the broadcast
+#      back once more, and history still lists it.
+_kfk.threads[_KP].append(_msg(_KR2, "a later plain reply"))
+_n_calls = len(_kfk.calls)
+_, _kc = _run_real(lambda: _sweep(_kfk, "C_BCAST", _kst, _poll(_kfk, "C_BCAST", _kst)))
+_kc_hist = [got for m, p, got in _kfk.calls[_n_calls:] if m == "conversations.history"]
+_kc_reps = [got for m, p, got in _kfk.calls[_n_calls:] if m == "conversations.replies"]
+check("14k-c REGIME CONTROL: the next poll's history lists the broadcast again and its replies call "
+      "hands it back again",
+      _kc_hist and _KB in _kc_hist[0] and _kc_reps
+      and "answer, also sent to the channel" in _kc_reps[0],
+      f"history={_kc_hist} replies={_kc_reps}")
+check("14k-c. across both polls the broadcast is delivered exactly once",
+      _for(_KB, _ka + _kc) == [_KB_LINE], f"poll 1={_ka} poll 2={_kc}")
+check("14k-c. NEGATIVE CONTROL: the later plain reply is delivered by that same poll",
+      len(_for(_KR2, _kc)) == 1 and _kst["threads"].get(_KP) == _KR2,
+      f"lines={_kc} threads={_kst['threads']}")
+
+# 14k-b. Parent OFF the page: 60 newer posts above it, so only history returns
+#      the broadcast to the poll. The sweep then reads that thread, whose replies
+#      call hands it back, and must not deliver it a second time.
+_KQ, _KQB = _bago(2 * _DAY), _bago(30)
+_kchat = [_msg(_bago(600 + 50 * i), f"chatter {i}") for i in range(60)]
+_kfk2 = _FakeSlack(_kchat + [_msg(_KQ, "an old post"),
+                             _broadcast(_KQB, _KQ, "answer to an old post, also sent")],
+                   {_KQ: [_broadcast(_KQB, _KQ, "answer to an old post, also sent")]})
+_kst2 = {"channel_ts": max((m["ts"] for m in _kchat), key=float), "baseline_ts": _bago(6 * _DAY),
+         "sweep_floor_ts": _bago(_DAY), "threads": {}}
+_kedge, _kb_poll = _run_real(lambda: _poll(_kfk2, "C_BOFF", _kst2))
+_KQB_LINE = (f"SLACK #general reply in thread {_KQ} [ts {_KQB}] Ada (U0ADA): "
+             f"answer to an old post, also sent")
+check("14k-b REGIME CONTROL: the parent is not on the poll's page and the poll made no replies call",
+      _KQ not in _kfk2.calls[0][2] and _KQB in _kfk2.calls[0][2]
+      and _kfk2.n("conversations.replies") == 0,
+      f"page={_kfk2.calls[0][2]} replies calls={_kfk2.n('conversations.replies')}")
+check("14k-b. a broadcast whose parent is OFF the page is delivered by the poll, once, as a reply in its thread",
+      _for(_KQB, _kb_poll) == [_KQB_LINE], f"lines={_kb_poll}")
+_, _kb_sweep = _run_real(lambda: _sweep(_kfk2, "C_BOFF", _kst2, _kedge))
+check("14k-b REGIME CONTROL: the sweep read that thread and its replies call handed the broadcast back",
+      any("answer to an old post, also sent" in got for got in _replies_got(_kfk2, _KQ)),
+      f"replies={_replies_got(_kfk2, _KQ)}")
+check("14k-b. the sweep does not deliver it again, and moves the thread's cursor past it",
+      _for(_KQB, _kb_poll + _kb_sweep) == [_KQB_LINE] and _kst2["threads"].get(_KQ) == _KQB,
+      f"sweep lines={_kb_sweep} threads={_kst2['threads']}")
+
+# 14k-d. EVERY OTHER SUBTYPE IS STILL AN EVENT: a join, a topic change and a
+#      `bot_message`, at top level and as a thread reply. Each carries a `user`
+#      that is not this bot, so the subtype is the only reason to drop it (a real
+#      `bot_message` usually has no `user` at all, which 14d covers).
+_KS = _bago(900)
+_ksubs = [
+    {"ts": _bago(890), "user": _HUMAN, "subtype": "channel_join",
+     "text": "<@U0ADA> has joined the channel"},
+    {"ts": _bago(880), "user": _HUMAN, "subtype": "channel_topic", "topic": "a new topic",
+     "text": "set the channel topic: a new topic"},
+    {"ts": _bago(870), "user": _FEED_BOT, "bot_id": "B0FEED", "subtype": "bot_message",
+     "text": "a feed post"},
+]
+_ksub_reply = {"ts": _bago(860), "user": _FEED_BOT, "bot_id": "B0FEED", "subtype": "bot_message",
+               "text": "a feed reply in a thread"}
+_kfk3 = _FakeSlack([_msg(_KS, "a human post")] + _ksubs, {_KS: [_ksub_reply]})
+_kst3 = {"channel_ts": _bago(1000), "baseline_ts": _bago(1000), "sweep_floor_ts": _bago(1000),
+         "threads": {}}
+_, _kd = _run_real(lambda: _poll(_kfk3, "C_BSUB", _kst3))
+check("14k-d REGIME CONTROL: each subtyped fixture is deliverable with its subtype removed, and the "
+      "replies call handed the subtyped reply back",
+      all(w.is_deliverable({k: v for k, v in m.items() if k != "subtype"})
+          for m in _ksubs + [_ksub_reply])
+      and _replies_got(_kfk3, _KS) == [["a feed reply in a thread"]],
+      f"replies={_replies_got(_kfk3, _KS)}")
+check("14k-d. a join, a topic change and a bot_message are not delivered, at top level or in a thread",
+      not any(_for(m["ts"], _kd) for m in _ksubs + [_ksub_reply]), f"lines={_kd}")
+check("14k-d. NEGATIVE CONTROL: the human post beside them is delivered",
+      len(_for(_KS, _kd)) == 1, f"lines={_kd}")
+
+# 14k-e. THIS BOT'S OWN BROADCAST stays dropped; another agent's broadcast in
+#      the same thread, the same shape but for who sent it, is delivered once.
+_KO = _bago(1100)
+_kown = _broadcast(_bago(1090), _KO, "my own answer, also sent", user=BOT, bot_id="B0SELF")
+_kother = _broadcast(_bago(1080), _KO, "another agent's answer, also sent", user=_OTHER_BOT,
+                     bot_id="B0ALAN")
+_kfk4 = _FakeSlack([_msg(_KO, "a question"), _kown, _kother], {_KO: [_kown, _kother]})
+_kst4 = {"channel_ts": _bago(1200), "baseline_ts": _bago(1200), "sweep_floor_ts": _bago(1200),
+         "threads": {}}
+_, _ke = _run_real(lambda: _poll(_kfk4, "C_BOWN", _kst4))
+check("14k-e REGIME CONTROL: the two broadcasts differ only in sender, ts and text",
+      {k for k in _kown if _kown[k] != _kother.get(k)} == {"ts", "user", "bot_id", "text"}
+      and _kown["user"] == w.BOT_USER, f"own={_kown} other={_kother}")
+check("14k-e. this bot's own broadcast is not delivered, from history or from its thread",
+      _for(_kown["ts"], _ke) == [], f"lines={_ke}")
+check("14k-e. NEGATIVE CONTROL: another agent's broadcast is delivered once, marked [bot], as a reply",
+      _for(_kother["ts"], _ke) == [
+          f"SLACK #general reply in thread {_KO} [ts {_kother['ts']}] Alan [bot] ({_OTHER_BOT}): "
+          f"another agent's answer, also sent"], f"lines={_ke}")
+
+# 14k-f. A DM: the same two paths with is_dm, so the line reads `SLACK DM`.
+_KDM_P, _KDM_B = _bago(600), _bago(400)
+_kfk5 = _FakeSlack([_msg(_KDM_P, "how can I help?", user=BOT),
+                    _broadcast(_KDM_B, _KDM_P, "a DM reply, also sent", user="U0GRACE")],
+                   {_KDM_P: [_broadcast(_KDM_B, _KDM_P, "a DM reply, also sent", user="U0GRACE")]})
+_kst5 = {"channel_ts": _bago(700), "baseline_ts": _bago(800), "sweep_floor_ts": _bago(800),
+         "threads": {}}
+_, _kf = _run_real(lambda: _poll(_kfk5, "D_BCAST", _kst5, is_dm=True))
+check("14k-f REGIME CONTROL: the DM's replies call handed the broadcast back",
+      _replies_got(_kfk5, _KDM_P) == [["a DM reply, also sent"]], f"replies={_replies_got(_kfk5, _KDM_P)}")
+check("14k-f. a DM broadcast is delivered exactly once, as a reply in its thread",
+      _for(_KDM_B, _kf) == [f"SLACK DM reply in thread {_KDM_P} [ts {_KDM_B}] Grace (U0GRACE): "
+                            f"a DM reply, also sent"], f"lines={_kf}")
+
+# 14k-g. FIRST SIGHT, both kinds - `initial_baseline` and `dm_initial_baseline`
+#      emit their window themselves, so each is its own delivery path. The
+#      broadcast is in the first-sight window; the next poll's replies call
+#      hands it back, and it must not arrive twice. A broadcast posted BEFORE the
+#      baseline (the join; the DM window's start) is handed to both paths and
+#      must not arrive at all: the baseline is the floor under every cursor.
+_KJP, _KJB0, _KJ, _KJB = _bago(5000), _bago(400), _bago(300), _bago(200)
+_kj_old = _broadcast(_KJB0, _KJP, "answered before the invite, also sent")
+_kj_new = _broadcast(_KJB, _KJP, "answered after the invite, also sent")
+_kfk6 = _FakeSlack([_msg(_KJP, "an old question"), _kj_old,
+                    {"ts": _KJ, "user": BOT, "subtype": "channel_join", "text": "joined"},
+                    _kj_new],
+                   {_KJP: [_kj_old, _kj_new]})
+_kst6 = {}
+_, _kg1 = _run_real(lambda: _poll(_kfk6, "C_BFIRST", _kst6))
+_, _kg2 = _run_real(lambda: _poll(_kfk6, "C_BFIRST", _kst6))
+check("14k-g REGIME CONTROL: channel first sight baselined to the bot's own join, its window read "
+      "and the next poll's page listed both broadcasts, and the replies call handed both back",
+      _kst6.get("baseline_ts") == _KJ
+      and all({_KJB0, _KJB} <= set(got) for m, p, got in _kfk6.calls if m == "conversations.history")
+      and _replies_got(_kfk6, _KJP) == [["answered before the invite, also sent",
+                                         "answered after the invite, also sent"]],
+      f"state={_kst6} calls={_kfk6.calls}")
+check("14k-g. a broadcast in a channel's first-sight window is delivered once, as a reply in its thread",
+      _for(_KJB, _kg1 + _kg2) == [f"SLACK #general reply in thread {_KJP} [ts {_KJB}] Ada (U0ADA): "
+                                  f"answered after the invite, also sent"],
+      f"first sight={_kg1} next poll={_kg2}")
+check("14k-g. a broadcast posted before the channel's baseline is never delivered",
+      _for(_KJB0, _kg1 + _kg2) == [], f"first sight={_kg1} next poll={_kg2}")
+_KDP, _KDB0, _KDB = _bago(2 * _DAY), _bago(200), _bago(10)
+_kd_old = _broadcast(_KDB0, _KDP, "a DM before the window, also sent", user="U0GRACE")
+_kd_new = _broadcast(_KDB, _KDP, "a first DM, also sent", user="U0GRACE")
+_kfk7 = _FakeSlack([_msg(_KDP, "how can I help?", user=BOT), _kd_old, _kd_new],
+                   {_KDP: [_kd_old, _kd_new]})
+_kst7 = {}
+_, _kg3 = _run_real(lambda: _poll(_kfk7, "D_BFIRST", _kst7, is_dm=True))
+_, _kg4 = _run_real(lambda: _poll(_kfk7, "D_BFIRST", _kst7, is_dm=True))
+check("14k-g REGIME CONTROL: the DM's next poll listed both broadcasts, read the assistant thread, and "
+      "its replies call handed both back",
+      {_KDB0, _KDB} <= set(_kfk7.calls[-2][2]) and _kfk7.calls[-2][0] == "conversations.history"
+      and _replies_got(_kfk7, _KDP) == [["a DM before the window, also sent", "a first DM, also sent"]],
+      f"calls={_kfk7.calls}")
+check("14k-g. a broadcast in a DM's first-sight window is delivered once, as a reply in its thread",
+      _for(_KDB, _kg3 + _kg4) == [f"SLACK DM reply in thread {_KDP} [ts {_KDB}] Grace (U0GRACE): "
+                                  f"a first DM, also sent"],
+      f"first sight={_kg3} next poll={_kg4}")
+check("14k-g. a broadcast posted before the DM's baseline window is never delivered",
+      _for(_KDB0, _kg3 + _kg4) == [], f"first sight={_kg3} next poll={_kg4}")
 
 w.KNOWN_USERS = _saved_known
 # ⚠️ `w.emit` and `w.api` are left as STUBS here. Section 14 is the last

@@ -91,7 +91,8 @@ The ones that are easy to get wrong:
 
 **There is no sender filter to configure, and that is the whole delivery
 model**: every message is delivered except the bot's own and anything carrying a
-subtype. So **channel membership is the only control over what reaches the
+subtype other than `thread_broadcast` (a thread reply also sent to the channel,
+delivered once, as a reply). So **channel membership is the only control over what reaches the
 session** - a bot in a channel a machine feed writes to (a product feed, a CI
 notifier) receives that feed message for message and wakes on each one. Keep the
 bot out of such channels.
@@ -189,7 +190,8 @@ the only way to know what is to walk it. Then redo step 7.
 
 **A record below version 3** belongs to an install whose config may carry a
 sender-allowlist key. The watcher has no sender filter: it delivers every message
-except the bot's own and anything carrying a subtype, and it ignores such a key
+except the bot's own and anything carrying a subtype other than
+`thread_broadcast`, and it ignores such a key
 without failing. Delete the key, and re-read the membership of every channel this
 bot is in before arming it, because every bot in those channels reaches the
 session.
