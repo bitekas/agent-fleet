@@ -216,9 +216,11 @@ this order:
    keeps `chat-transport` and each enabled transport's skill. An agent's bot
    token is that agent's own credential and `/adding-an-agent` sets it up.
 3. **Which skills to install** -> `skills`. One question over every fleet
-   skill, built from what `python3 <clone>/bin/fleet skills`, run in
-   `<project>` [here], lists: before adoption, every skill of the fleet, with
-   the template's `skills` marked `proposed`. Give each skill what it is for in
+   skill, built from what `env -u CLAUDE_CONFIG_DIR python3 <clone>/bin/fleet
+   skills`, run in `<project>` [here], lists: before adoption, every skill of
+   the fleet, with the template's `skills` marked `proposed`. The `env -u` is
+   there because a session that is itself a fleet agent's would otherwise list
+   that agent's own install, and run its checks on this computer. Give each skill what it is for in
    one line (its row in `<clone>/.claude/skills/SKILLS.md`) and what its
    install asks for (the `**Asks for:**` of its `## Install` section, or
    nothing when it has nothing to install). `chat-transport` and the skill of
