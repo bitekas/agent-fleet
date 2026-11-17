@@ -417,6 +417,11 @@ def fields(writes, steps="none beyond writing the files above.", asks="nothing."
     return f"\n## Install\n\n**Asks for:** {asks}\n\n**Writes:** {writes}\n\n**Steps:** {steps}\n"
 
 
+# The synthetic slack-communication's config.example.json: a config.json that
+# is this copied (comments or not) is not configured.
+SLACK_EXAMPLE = {"_comment": ["The synthetic slack config: replace each value."],
+                 "channel": "<the channel to watch>", "watch": {"_note": "seconds", "poll": 5}}
+
 # The synthetic templates/skill-groups.json: one group, whose two members
 # `fleet skills --ask` must offer as ONE item.
 GROUPS = {"_comment": ["The synthetic skill groups of bin/fleet.test.py."],
@@ -441,7 +446,8 @@ def populate(o):
     write(o / "README.md", "synthetic fleet\n")
     skill(o, "chat-transport", install=NOTHING)
     # No installation/check: its state is the presence of the two files its Writes names.
-    skill(o, "slack-communication", [("transport.json", json.dumps(SLACK)), ("watch.py", "print('stub')\n")],
+    skill(o, "slack-communication", [("transport.json", json.dumps(SLACK)), ("watch.py", "print('stub')\n"),
+                                     ("config.example.json", json.dumps(SLACK_EXAMPLE, indent=2) + "\n")],
           install=fields("`CONTEXT.md` and `config.json`, in the install context.",
                          asks="the workspace's bot token and the channel to watch."))
     skill(o, "discord-communication", [("transport.json", json.dumps(DISCORD)), ("watch.py", "raise SystemExit(2)\n")],
@@ -2329,6 +2335,15 @@ def skills_measures_a_skill_without_a_check_by_the_files_its_section_names():
     # names `CONTEXT.md` and `config.json`: their presence in its install context
     # is its state. Each row breaks one property; the last is the control.
     w = World()
+    example = (w.fleet / ".claude/skills/slack-communication/config.example.json").read_text()
+
+    def strip(v):
+        """`v` without any `_`-prefixed key at any depth (this file's own oracle)."""
+        if isinstance(v, dict):
+            return {k: strip(x) for k, x in v.items() if not k.startswith("_")}
+        return [strip(x) for x in v] if isinstance(v, list) else v
+
+    assert strip(json.loads(example)) != json.loads(example), "control: the example carries comments to strip"
     for context, config, named in (
             (None, None, "CONTEXT.md is missing"),
             ("# Slack\n", None, "config.json is missing"),
@@ -2337,16 +2352,23 @@ def skills_measures_a_skill_without_a_check_by_the_files_its_section_names():
             ("# Slack\n", "", "config.json is empty"),
             ("# Slack\n", "[1, 2]", "config.json is not a JSON object"),
             ("# Slack\n", '"a string"', "config.json is not a JSON object"),
-            ("# Slack\n", "{", "config.json is not a JSON object")):
+            ("# Slack\n", "{", "config.json is not a JSON object"),
+            # The example copied as it is, and copied with its comments deleted by hand.
+            ("# Slack\n", example, "config.json is still config.example.json"),
+            ("# Slack\n", json.dumps(strip(json.loads(example))), "config.json is still config.example.json")):
         slack_files(w, context, config)
         r = w.fleet_cmd("skills", FAKE_DEMO_RC="0", FLEET_CONTEXT_ROOT=ada_root(w))
         ok(r, 1)
         state = skill_table(r.stdout)[0]["slack-communication"][2]
         assert state.startswith(f"not configured: {named}"), (context, config, state)
-    slack_files(w)
-    r = w.fleet_cmd("skills", FAKE_DEMO_RC="0", FLEET_CONTEXT_ROOT=ada_root(w))
-    ok(r)
-    assert skill_table(r.stdout)[0]["slack-communication"][2] == "configured", r.stdout
+    # The controls: the example with one value filled in, and the default files.
+    edited = json.loads(example)
+    edited["watch"]["poll"] = 30
+    for config in (json.dumps(edited), None):
+        slack_files(w, config=config) if config else slack_files(w)
+        r = w.fleet_cmd("skills", FAKE_DEMO_RC="0", FLEET_CONTEXT_ROOT=ada_root(w))
+        ok(r)
+        assert skill_table(r.stdout)[0]["slack-communication"][2] == "configured", r.stdout
 
 
 @case
@@ -2590,10 +2612,14 @@ def skills_select_refuses_a_bad_selection_and_changes_nothing():
     # Control: the same manifest takes a good selection.
     ok(w.fleet_cmd("skills", "--select", ",".join(base), FLEET_CONTEXT_ROOT=root))
     assert json.loads((root / ".claude/fleet.json").read_text())["skills"] == base
-    # A manifest that is not JSON, and no manifest at all.
-    write(root / ".claude/fleet.json", '{"skills": ["chat-transport"],}\n')
-    before = snap(w.root)
-    refused(w.fleet_cmd("skills", "--select", ",".join(base), FLEET_CONTEXT_ROOT=root), "not valid JSON")
+    # A transport no transport.json declares (its skill cannot be known), a
+    # manifest that is not JSON, and no manifest at all.
+    m["transports"]["enabled"] = ["slack", "irc"]
+    for text, reason in ((json.dumps(m), "names 'irc'"), ('{"skills": ["chat-transport"],}\n', "not valid JSON")):
+        write(root / ".claude/fleet.json", text)
+        before = snap(w.root)
+        refused(w.fleet_cmd("skills", "--select", ",".join(base), FLEET_CONTEXT_ROOT=root), reason)
+        same(before, snap(w.root), reason)
     refused(w.fleet_cmd("skills", "--select", ",".join(base)), "no install manifest")
     same(before, snap(w.root))
 

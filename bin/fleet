@@ -178,8 +178,10 @@ LOAD-BEARING PROPERTIES - each is here because removing it opens a hole:
     file a person reviews. And the installer selects right after `adopt`,
     while the other values are still the template's placeholders, so the
     selection is checked against the skills rules alone (a name, a fleet
-    SKILL.md, no duplicate, chat-transport and each enabled transport's skill)
-    and never against the whole schema, which refuses every placeholder.
+    SKILL.md, no duplicate, chat-transport and each enabled transport's skill:
+    manifest.is_skill_name and manifest.required_skills, the statements
+    validate itself reads) and never against the whole schema, which refuses
+    every placeholder.
 
   * SKILLS --ASK NEVER WAITS WITHOUT A TERMINAL. The installer is usually an
     agent, whose stdin is a pipe that may never close: a prompt there blocks the
@@ -222,7 +224,7 @@ os.environ["PYTHONDONTWRITEBYTECODE"] = "1"   # every Python this command starts
 sys.path.insert(0, str(FLEET_ROOT / "lib"))
 try:
     import fleetlib
-    from fleetlib import manifest, paths, services, transports
+    from fleetlib import manifest, paths, services
     from fleetlib.skills import InstallSectionError, install_section
 except ImportError as _exc:
     print(f"fleet: cannot import fleetlib from {FLEET_ROOT / 'lib'}: {_exc}", file=sys.stderr)
@@ -1923,7 +1925,21 @@ def install_state(name, sec, root, home, env):
                 obj = None
             if not isinstance(obj, dict):
                 return f"not configured: {f} is not a JSON object ({p})"
+            if unedited_example(obj, check_dir(home, name) / "config.example.json"):
+                return f"not configured: {f} is still config.example.json ({p})"
     return "configured"
+
+
+def unedited_example(config, example):
+    """Whether a parsed config.json is the skill's config.example.json copied and
+    not filled in: equal once every `_`-prefixed key is stripped from both at any
+    depth (a copy whose comments were deleted by hand is still the example).
+    Present and parsing is not configured: the example is what `cp` makes."""
+    try:
+        return example.is_file() and (manifest.strip_comments(config)
+                                      == manifest.strip_comments(json.loads(example.read_text(encoding="utf-8"))))
+    except (OSError, ValueError):   # an example that does not parse cannot be copied unedited
+        return False
 
 
 def skills_root():
@@ -1951,22 +1967,6 @@ def read_manifest_text(path):
             and all(isinstance(n, str) for n in data["skills"])):
         refuse(f"{path}: `skills` is not a list of skill names; fix it by hand first")
     return text, data
-
-
-def required_skills(data, path):
-    """chat-transport and the skill of each transport the manifest enables: what
-    manifest.validate requires `skills` to hold, read from the raw manifest so
-    no other key's check applies."""
-    t = data.get("transports")
-    enabled = t.get("enabled") if isinstance(t, dict) else None
-    if not (isinstance(enabled, list) and all(isinstance(n, str) for n in enabled)):
-        refuse(f"{path}: `transports.enabled` is not a list of transport names; fix it by hand first")
-    registry = {d["name"]: d["skill"] for d in transports.all()}
-    unknown = [n for n in enabled if n not in registry]
-    if unknown:
-        refuse(f"{path}: `transports.enabled` names {', '.join(unknown)}, which no transport.json under "
-               f"{transports.registry_dir()} declares; fix it by hand first")
-    return list(dict.fromkeys([manifest.CHAT_TRANSPORT_SKILL, *(registry[n] for n in enabled)]))
 
 
 def skill_rows(root, data, required, home=None, env=None):
@@ -2077,7 +2077,7 @@ def select_skills(path, text, data, names, required):
     """Make the manifest's `skills` exactly `names`, in order, refusing before
     the write. Returns the names this call added."""
     tree = fleet_skills()
-    bad = [n for n in names if not manifest._SKILL.fullmatch(n)]   # the manifest's own name rule
+    bad = [n for n in names if not manifest.is_skill_name(n)]
     if bad:
         refuse(f"{', '.join(map(repr, bad))} is not a skill name ([a-z0-9-], never a path)")
     twice = list(dict.fromkeys(n for n in names if names.count(n) > 1))
@@ -2181,7 +2181,7 @@ def cmd_skills(a):
         return OK
     path = root / MANIFEST
     text, data = read_manifest_text(path)
-    required = required_skills(data, path)
+    required = manifest.required_skills(data, source=f"install manifest {path}")
     if choose:
         names = ask_skills(data["skills"], required) if a.ask else [n.strip() for n in a.select.split(",")]
         for name in select_skills(path, text, data, names, required):
