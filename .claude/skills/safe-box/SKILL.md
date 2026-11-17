@@ -188,3 +188,9 @@ the consumer's own check, run next (the skill that needed the secret has one).
   directories (section 2).
 - **Out of scope:** a process running as the same user or as root on the host,
   which can read the files themselves; and the person's own browser and machine.
+
+## Install
+
+Nothing to install. The two directories it may write into resolve from the
+install manifest and the host settings file (section 2), so it asks for no value
+of its own.

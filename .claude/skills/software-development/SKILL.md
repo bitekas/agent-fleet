@@ -200,3 +200,9 @@ under any of them.
   change.** When the only fix you can see changes a contract, escalate.
 - **Write down what a release needs the moment you learn it, with its status and
   owner.** A step that lives in one head is the step the release ships without.
+
+## Install
+
+Nothing to install. The process it defers to is the install manifest's
+conventions keys (`fleet settings conventions`), set with the rest of the
+manifest.

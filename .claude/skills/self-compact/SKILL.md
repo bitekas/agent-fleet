@@ -232,3 +232,8 @@ editing it.
 
 **Whether and when to compact is policy and lives with the agent's operating rules**, not
 in this file. This skill is the mechanism and the preflight.
+
+## Install
+
+Nothing to install. An install that wants its own wake text writes it in this skill's
+CONTEXT.md in the install context (section 3); without one the generic default is typed.

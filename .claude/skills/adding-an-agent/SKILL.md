@@ -1132,3 +1132,10 @@ One message to the person (`/talking-to-humans`), covering:
   except the rows section 5 step 9 names when the watchdog was declined, which
   the report explains;
 - with the watchdog, its `installation/check` exits 0.
+
+## Install
+
+Nothing to install. Running this skill is how an agent is added, not an install
+of the skill itself: every value it uses comes from the interview, from
+`fleet settings` or from the target's host settings file, so the install
+context holds nothing for it.

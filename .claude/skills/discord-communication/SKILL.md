@@ -58,3 +58,8 @@ Not implemented in this version.
 ## Permalink
 
 Not implemented in this version.
+
+## Install
+
+Nothing to install. This transport is a placeholder that ships no working
+mechanism, so it needs no value, and no install can enable it.

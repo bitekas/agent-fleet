@@ -223,3 +223,8 @@ included.
   `placeholder_watch.py`.
 - **The working transport:** `/slack-communication`.
 - **Origins on a transport:** `/scheduled-tasks`.
+
+## Install
+
+Nothing to install. The claims directory `claim.py` uses is the host's
+(`claims_dir` in the host settings file), which `fleet install` creates.
