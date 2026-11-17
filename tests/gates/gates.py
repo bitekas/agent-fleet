@@ -73,6 +73,21 @@ Gates (design 4.12):
   starter-knowledge examples/knowledge-base passes the knowledge-base skill's
                     own check_indexes.py, and every lesson opens with the
                     '> EXAMPLE lesson - ' marker (design 4.14)
+  install-section   every tracked .claude/skills/*/SKILL.md ends with exactly
+                    one `## Install` section that fleetlib.skills reads (form
+                    A, `Nothing to install.`, or form B, the three fields
+                    **Asks for:**, **Writes:**, **Steps:** in order), and the
+                    skill's tracked files agree with it: form A has no
+                    installation/ directory and no config.example.json;
+                    installation/INSTRUCTION.md exists <=> requires_install is
+                    true <=> Steps names it; INSTRUCTION.md => installation/
+                    check; config.example.json => Writes names `config.json`;
+                    and form B with no check => Writes names `CONTEXT.md` or
+                    `config.json`, whose presence `fleet skills` then reads as
+                    the install state (claude-skill section 3). The text is
+                    read by lib/fleetlib/skills.py, the one parser of the
+                    format, imported from the repository's lib/ when this gate
+                    runs; every other gate is stdlib-only
 
 Fleet prose: every TRACKED .md file at the repository root or under
 .claude/skills/, templates/ or examples/, except under a directory named
@@ -101,7 +116,9 @@ shell held in another file type (a Python string, a workflow's run: step,
 whose runs-on names its system), an unlabelled fence, any bash 4 construct
 SHELL_RULES does not list, and an apostrophe in a ${x:-word} inside a
 double-quoted string or heredoc body that opened on an earlier line (the
-quoting is walked one command line at a time).
+quoting is walked one command line at a time); for install-section, whether
+Asks for and Writes are TRUE (that an install asks for and writes what they
+name), and a setext (underlined) heading after `## Install`.
 """
 
 import json
@@ -1313,6 +1330,164 @@ def control_starter_knowledge(copy):
     return expected, ["zz-unmarked.md does not link"]
 
 
+# --------------------------------------------------------- install-section
+
+SKILL_MD = re.compile(r"\.claude/skills/[^/]+/SKILL\.md")
+
+
+def install_parser():
+    """fleetlib.skills from this repository's lib/: the one reader of the section's
+    text, shared with `fleet skills`, so the gate and the command cannot disagree
+    about what a section says. Imported here and not at the top, so a parser that
+    does not import costs this gate its verdict and leaves the stdlib-only gates
+    untouched; no bytecode is written into lib/."""
+    sys.dont_write_bytecode = True
+    lib = str(ROOT / "lib")
+    if lib not in sys.path:
+        sys.path.insert(0, lib)
+    try:
+        from fleetlib import skills as parser
+    except Exception as e:  # a SyntaxError in the parser is as fatal as a missing file
+        raise NoVerdict(f"cannot import fleetlib.skills from lib/: {type(e).__name__}: {e}") from None
+    return parser
+
+
+def check_install_section(root):
+    parser = install_parser()
+    paths = tracked(root)
+    have = set(paths)
+    findings = []
+    for path in paths:
+        if not SKILL_MD.fullmatch(path) or os.path.islink(root / path):
+            continue
+        d = path[:-len("SKILL.md")]
+        text = (root / path).read_text(encoding="utf-8", errors="replace")
+        instruction = d + parser.INSTRUCTION in have
+        check = d + "installation/check" in have
+        example = d + "config.example.json" in have
+        installation = any(p.startswith(d + "installation/") for p in paths)
+        found = []
+        try:
+            ri = parse_frontmatter(text).get("requires_install")
+        except ValueError as e:
+            found.append(f"frontmatter does not parse ({e}), so requires_install cannot be read")
+            ri = None
+        else:
+            if ri not in ("true", "false"):
+                found.append(f"requires_install is {ri!r}, neither true nor false, so it cannot be compared "
+                             f"with {parser.INSTRUCTION}")
+                ri = None
+        # The tree half, judged whether or not the text parses.
+        if ri == "false" and instruction:
+            found.append(f"{parser.INSTRUCTION} exists but requires_install is not true")
+        if ri == "true" and not instruction:
+            found.append(f"requires_install is true but there is no {parser.INSTRUCTION}")
+        if instruction and not check:
+            found.append(f"{parser.INSTRUCTION} exists but installation/check does not; an install with "
+                         f"steps carries the check that measures it")
+        try:
+            sec = parser.install_section(text)
+        except parser.InstallSectionError as e:
+            found.append(str(e))
+            sec = None
+        if sec is not None and sec.form == "nothing":
+            if installation:
+                found.append("form A (Nothing to install.) beside an installation/ directory; a skill with "
+                             "install files is form B")
+            if example:
+                found.append("form A (Nothing to install.) beside config.example.json; its install writes "
+                             "config.json, so it is form B")
+        elif sec is not None:
+            if sec.steps_instruction and not instruction:
+                found.append(f"Steps names {parser.INSTRUCTION}, which does not exist")
+            if instruction and not sec.steps_instruction:
+                found.append(f"{parser.INSTRUCTION} exists but Steps does not name it")
+            if example and "config.json" not in sec.context_files:
+                found.append("config.example.json exists but Writes does not name `config.json`")
+            if not check and not sec.context_files:
+                found.append("form B with no installation/check, and Writes names neither `CONTEXT.md` nor "
+                             "`config.json`, so its install state cannot be measured")
+        findings += [f"{path}: {f}" for f in found]
+    return findings
+
+
+def control_install_section(copy):
+    def skill(name, section, requires="false", head=""):
+        return (f"---\nname: {name}\nversion: 1\ndescription: >\n  A planted skill.\n"
+                f"requires_install: {requires}\n---\n\n# {name}\n\n{head}## 1. Rules\n\nA rule.\n\n{section}")
+
+    def fields(asks, writes, steps):
+        return f"## Install\n\n**Asks for:** {asks}\n\n**Writes:** {writes}\n\n**Steps:** {steps}\n"
+
+    form_a = "## Install\n\nNothing to install.\n"
+    steps_i = "`installation/INSTRUCTION.md`; its step 2 is per agent."
+    steps_none = "none beyond writing the files above."
+    inst, chk, cfg = "installation/INSTRUCTION.md", "installation/check", "config.example.json"
+    # name: (requires_install, section, files beside SKILL.md, the reason it must be reported for).
+    # One fault per invariant; every reason the check can give has a row, so a branch that stops
+    # firing loses its row's finding and the control goes NO VERDICT.
+    faults = {
+        "zz-no-section": ("false", "", (), "no '## Install' heading"),
+        "zz-fenced-only": ("false", "```markdown\n" + form_a + "```\n", (), "no '## Install' heading"),
+        "zz-h3-only": ("false", "#" + form_a, (), "no '## Install' heading"),
+        "zz-two-sections": ("false", form_a + "\n" + form_a, (), "2 '## Install' headings"),
+        "zz-not-last": ("false", form_a + "\n## 9. Later\n\nText.\n", (), "is not the last heading"),
+        "zz-a-config": ("false", form_a, (cfg,), "form A (Nothing to install.) beside config.example.json"),
+        "zz-a-installation": ("false", form_a, ("installation/requirements.txt",),
+                              "form A (Nothing to install.) beside an installation/ directory"),
+        "zz-b-missing": ("false", "## Install\n\n**Asks for:** nothing.\n\n**Writes:** `CONTEXT.md`.\n", (),
+                         "'**Steps:**' is missing"),
+        "zz-b-order": ("false", "## Install\n\n**Writes:** `CONTEXT.md`.\n\n**Asks for:** nothing.\n\n"
+                                "**Steps:** " + steps_none + "\n", (), "out of order"),
+        "zz-ri-no-instruction": ("true", fields("nothing.", "`CONTEXT.md`.", steps_none), (),
+                                 "requires_install is true but there is no installation/INSTRUCTION.md"),
+        "zz-instruction-ri-false": ("false", fields("nothing.", "`CONTEXT.md`.", steps_i), (inst, chk),
+                                    "installation/INSTRUCTION.md exists but requires_install is not true"),
+        "zz-ri-unreadable": ("maybe", form_a, (), "neither true nor false"),
+        "zz-frontmatter-bad": ("false\nsummary: Load it: when asked", form_a, (), "frontmatter does not parse"),
+        "zz-instruction-unnamed": ("true", fields("nothing.", "`CONTEXT.md`.", steps_none), (inst, chk),
+                                   "installation/INSTRUCTION.md exists but Steps does not name it"),
+        "zz-steps-ghost": ("false", fields("nothing.", "`CONTEXT.md`.", steps_i), (),
+                           "Steps names installation/INSTRUCTION.md, which does not exist"),
+        "zz-instruction-no-check": ("true", fields("nothing.", "`CONTEXT.md`.", steps_i), (inst,),
+                                    "installation/check does not"),
+        "zz-config-unnamed": ("false", fields("the token's path.", "`CONTEXT.md`.", steps_none), (cfg,),
+                              "config.example.json exists but Writes does not name `config.json`"),
+        "zz-b-unmeasured": ("false", fields("nothing.", "per agent, `<home>/config/zz.json`.", steps_none), (),
+                            "so its install state cannot be measured"),
+    }
+    # Decoys, each a correct section that must pass: form A with a fenced example section above
+    # it and a second sentence; form B with steps, a check, a config and, after Steps, a ###
+    # subsection and a fence holding a heading and a field; form B measured by CONTEXT.md's
+    # presence; form B with a check and no INSTRUCTION.md, which needs no context file.
+    example = "```markdown\n## Install\n\n**Asks for:** x\n```\n\n"
+    decoys = {
+        "zz-decoy-a": ("false", "## Install\n\nNothing to install. An install may write an\noptional CONTEXT.md.\n",
+                       (), example),
+        "zz-decoy-b": ("true", fields("the bot token's path.", "`config.json`, and per agent,\n`<home>/zz.json`.",
+                                      steps_i) + "\nAn optional paragraph.\n\n### A subsection\n\n"
+                       "```markdown\n## Not a heading\n\n**Steps:** not a field\n```\n", (inst, chk, cfg), ""),
+        "zz-decoy-c": ("false", fields("nothing.", "`CONTEXT.md`, the local paths.", steps_none), (), ""),
+        "zz-decoy-d": ("false", fields("nothing.", "nothing beyond what the check reads.", steps_none), (chk,), ""),
+    }
+    expected = []
+    for name, (requires, section, files, why) in faults.items():
+        write(copy, f".claude/skills/{name}/SKILL.md", skill(name, section, requires))
+        for f in files:
+            write(copy, f".claude/skills/{name}/{f}", "#!/bin/sh\nexit 0\n" if f == chk else "{}\n")
+        expected.append((f".claude/skills/{name}/SKILL.md", why))
+    for name, (requires, section, files, head) in decoys.items():
+        write(copy, f".claude/skills/{name}/SKILL.md", skill(name, section, requires, head))
+        for f in files:
+            write(copy, f".claude/skills/{name}/{f}", "#!/bin/sh\nexit 0\n" if f == chk else "{}\n")
+    # A skill already in the tree, so a selection that reads only planted directories goes blind:
+    # two more sections appended make it two or three, whichever the tree had.
+    real = f".claude/skills/{skills(copy)[0]}/SKILL.md"
+    append(copy, real, "\n" + form_a + "\n" + form_a)
+    expected.append((real, "'## Install' headings"))
+    return expected, ["zz-decoy"]
+
+
 # ------------------------------------------------------------- the harness
 
 def write(root, rel, text):
@@ -1356,6 +1531,7 @@ GATES = {
     "setup-checklist": (check_setup_checklist, control_setup_checklist),
     "portable-shell": (check_portable_shell, control_portable_shell),
     "starter-knowledge": (check_starter_knowledge, control_starter_knowledge),
+    "install-section": (check_install_section, control_install_section),
 }
 
 
