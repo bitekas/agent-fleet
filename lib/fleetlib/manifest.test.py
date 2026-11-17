@@ -154,6 +154,50 @@ NOT_PLACEHOLDERS = [
 ]
 
 
+class SkillsRulesTest(IsolatedTest):
+    """required_skills and is_skill_name: the skills rules validate() and
+    `fleet skills --select` both read. Expected values are written out here."""
+
+    def required(self, m):
+        return manifest.required_skills(m, skills_dir=FIXTURE_TRANSPORTS)
+
+    def test_required_skills_are_chat_transport_and_each_enabled_transports_skill(self):
+        m = fixture()
+        self.assertEqual(self.required(m), ["chat-transport", "slack-communication"])
+        # A declared transport that is not working still has a skill; validate()
+        # refuses enabling it (REFUSALS' "placeholder enabled").
+        m["transports"]["enabled"] = ["slack", "discord"]
+        self.assertEqual(self.required(m), ["chat-transport", "slack-communication", "discord-communication"])
+
+    def test_required_skills_read_transports_enabled_alone(self):
+        # The template right after `fleet adopt`: placeholders elsewhere, and a
+        # `skills` that is not even a list, which validate() would refuse first.
+        m = fixture()
+        m["fleet"]["repo"] = "<the fleet repository's clone URL>"
+        m["skills"] = "not a list"
+        self.assertRaises(ManifestError, self.load_strict, m)  # control: the whole schema refuses it
+        self.assertEqual(self.required(m), ["chat-transport", "slack-communication"])
+
+    def load_strict(self, m):
+        manifest.validate(m, skills_dir=FIXTURE_TRANSPORTS)
+
+    def test_required_skills_refuse_an_unreadable_or_undeclared_transport(self):
+        for enabled in (["slack", "irc"], "slack", [], ["slack", "slack"], ["Slack"], None):
+            with self.subTest(enabled=enabled):
+                m = fixture()
+                m["transports"]["enabled"] = enabled
+                self.assertFleetError(ManifestError, manifest.required_skills, m, skills_dir=FIXTURE_TRANSPORTS,
+                                      exit_code=2, key="transports.enabled")
+        self.assertFleetError(ManifestError, manifest.required_skills, {}, skills_dir=FIXTURE_TRANSPORTS,
+                              exit_code=2, key="transports.enabled")
+
+    def test_is_skill_name(self):
+        for name in ("agent", "chat-transport", "a1", "0x", "a-"):
+            self.assertTrue(manifest.is_skill_name(name), name)
+        for name in ("", "Agent", "-x", "a b", "../a", "a/b", "a_b", ".a", None, 3, ["a"]):
+            self.assertFalse(manifest.is_skill_name(name), repr(name))
+
+
 class LoadTest(IsolatedTest):
     def load(self, m):
         return manifest.load(make_install(self.tmp / "inst", m), skills_dir=FIXTURE_TRANSPORTS)

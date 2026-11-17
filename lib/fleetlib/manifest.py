@@ -14,6 +14,11 @@ placeholder inside a doc path (`docs/checklists/<feature-slug>.md`) or a
 one-word one (`<version>`) is filled in when it is read, and a chat mention
 (`<@ada>`) or an address (`<ada@example.com>`) is a value.
 
+required_skills(m) is the one statement of which skills a manifest's `skills`
+must list, and is_skill_name(name) of a skill name's form: validate() reads
+both, and so does `fleet skills --select`, which applies the skills rules alone
+to a manifest whose other values may still be placeholders.
+
 settings(m) is the view skills read: house rules, conventions and secrets with
 the fleet defaults applied. `fleet settings` prints it, after check_paths(m,
 root) has refused a convention or a deny list that names a file neither the
@@ -142,11 +147,11 @@ class _Checker:
         if not isinstance(v, bool):
             self.fail(key, "is not true or false")
 
-    def names(self, v, key, pattern=None):
+    def names(self, v, key, valid):
         if not isinstance(v, list) or not v:
             self.fail(key, "is not a non-empty list")
         for x in v:
-            if not isinstance(x, str) or (pattern and not pattern.fullmatch(x)):
+            if not valid(x):
                 self.fail(key, f"holds {x!r}, which is not a valid name")
         if len(set(v)) != len(v):
             self.fail(key, "holds a name twice")
@@ -168,6 +173,36 @@ class _Checker:
             self.fail(key, f"is {v!r}, which is not an IANA time zone that loads on this host")
 
 
+def is_skill_name(name):
+    """Whether `name` has a skill name's form: a skill directory's name
+    ([a-z0-9][a-z0-9-]*), never a path."""
+    return isinstance(name, str) and _SKILL.fullmatch(name) is not None
+
+
+def required_skills(m, *, skills_dir=None, source="install manifest"):
+    """The skills the manifest `m` (comments stripped or not) must list in
+    `skills`: chat-transport, then the skill of each transport
+    `transports.enabled` names, in that order and once each, from the transport
+    registry `skills_dir` selects (transports.registry_dir).
+
+    It reads `transports.enabled` and nothing else, so it answers for a manifest
+    whose other values are still the template's placeholders. ManifestError
+    (exit 2) naming `transports.enabled` when that is not a non-empty list of
+    distinct names, or names a transport no transport.json declares. A declared
+    transport that is not working still has a skill, so it is answered here;
+    validate() is what refuses enabling it."""
+    c = _Checker(source)
+    t = m.get("transports") if isinstance(m, dict) else None
+    enabled = t.get("enabled") if isinstance(t, dict) else None
+    c.names(enabled, "transports.enabled", is_skill_name)   # a transport name has a skill name's form
+    registry = {d["name"]: d for d in _transports.all(skills_dir)}
+    for name in enabled:
+        if name not in registry:
+            c.fail("transports.enabled", f"names {name!r}, which no transport.json under "
+                                         f"{_transports.registry_dir(skills_dir)} declares")
+    return list(dict.fromkeys([CHAT_TRANSPORT_SKILL, *(registry[n]["skill"] for n in enabled)]))
+
+
 def validate(m, *, skills_dir=None, source="install manifest"):
     """Raise ManifestError unless `m` (comments stripped) is a valid schema-1 manifest.
 
@@ -187,11 +222,11 @@ def validate(m, *, skills_dir=None, source="install manifest"):
     if not isinstance(m["fleet"]["min_tag"], str) or not _TAG.fullmatch(m["fleet"]["min_tag"]):
         c.fail("fleet.min_tag", "is not a vMAJOR.MINOR.PATCH tag")
 
-    c.names(m["skills"], "skills", _SKILL)
+    c.names(m["skills"], "skills", is_skill_name)
 
     t = m["transports"]
     c.obj(t, "transports", TRANSPORT_KEYS, TRANSPORT_KEYS)
-    c.names(t["enabled"], "transports.enabled", _SKILL)
+    c.names(t["enabled"], "transports.enabled", is_skill_name)
     c.string(t["default"], "transports.default")
 
     conv = m.get("conventions", {})
@@ -205,7 +240,7 @@ def validate(m, *, skills_dir=None, source="install manifest"):
         if len(forms) != 1:
             c.fail(key, 'is not exactly one of {"skill": ...} or {"doc": ...}')
         c.string(v[forms[0]], f"{key}.{forms[0]}")
-        if forms[0] == "skill" and not _SKILL.fullmatch(v["skill"]):
+        if forms[0] == "skill" and not is_skill_name(v["skill"]):
             c.fail(f"{key}.skill", f"is {v['skill']!r}, which is not a skill name ([a-z0-9-], never a path)")
         if "section" in v and not (isinstance(v["section"], (str, int))
                                    and not isinstance(v["section"], bool) and v["section"] != ""):
@@ -269,15 +304,12 @@ def validate(m, *, skills_dir=None, source="install manifest"):
     # Invariants across keys, and against the fleet tree's transport registry.
     if t["default"] not in t["enabled"]:
         c.fail("transports.default", f"is {t['default']!r}, which is not in transports.enabled")
+    needed = required_skills(m, skills_dir=skills_dir, source=source)   # refuses an undeclared transport
     registry = {d["name"]: d for d in _transports.all(skills_dir)}
-    where = _transports.registry_dir(skills_dir)
     for name in t["enabled"]:
-        if name not in registry:
-            c.fail("transports.enabled", f"names {name!r}, which no transport.json under {where} declares")
         if registry[name]["status"] != "working":
             c.fail("transports.enabled",
                    f"names {name!r}, a {registry[name]['status']} transport; only working ones can be enabled")
-    needed = [CHAT_TRANSPORT_SKILL] + [registry[n]["skill"] for n in t["enabled"]]
     missing = [n for n in needed if n not in m["skills"]]
     if missing:
         c.fail("skills", f"lacks {', '.join(missing)} (chat-transport and every enabled transport's skill)")
