@@ -100,6 +100,15 @@ class ParseTest(unittest.TestCase):
                               writes)
                 self.assertEqual(install_section(text).context_files, want)
 
+    def test_written_files_are_every_backticked_name_in_writes(self):
+        self.assertEqual(install_section(BASE_B).written_files,
+                         ("config.json", "CONTEXT.md", "<home>/config/zz.json"))
+        self.assertEqual(install_section(BASE_A).written_files, ())
+        text = mutate(BASE_B, "`config.json` and `CONTEXT.md`, and per agent,\n`<home>/config/zz.json`.",
+                      "`a.json`, then `a.json` again, and `b\nsplit` over a line, then `c.json`.")
+        self.assertEqual(install_section(text).written_files, ("a.json", "b split", "c.json"),
+                         "a span may cross a line, as in Markdown, so the ticks after it still pair")
+
     def test_context_files_come_from_writes_only(self):
         text = mutate(BASE_B, "the channel id.", "the channel id, kept in `CONTEXT.md`.")
         text = mutate(text, "An optional paragraph after Steps.", "An optional `config.json`.")

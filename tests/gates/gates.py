@@ -81,7 +81,10 @@ Gates (design 4.12):
                     installation/ directory and no config.example.json;
                     installation/INSTRUCTION.md exists <=> requires_install is
                     true <=> Steps names it; INSTRUCTION.md => installation/
-                    check; config.example.json => Writes names `config.json`;
+                    check; config.example.json => Writes names, backticked,
+                    the file the example becomes: `config.json`, or another
+                    .json path wherever it lives (`<home>/config/<file>.json`
+                    per agent), never an *.example.json or *.install-state.json;
                     and form B with no check => Writes names `CONTEXT.md` or
                     `config.json`, whose presence `fleet skills` then reads as
                     the install state (claude-skill section 3). The text is
@@ -1335,6 +1338,16 @@ def control_starter_knowledge(copy):
 SKILL_MD = re.compile(r"\.claude/skills/[^/]+/SKILL\.md")
 
 
+def example_becomes(name):
+    """Whether a backticked name in Writes can be the file a config.example.json becomes:
+    `config.json` in the install context, or a .json path elsewhere (scheduled-tasks' example
+    becomes a per-agent `<home>/config/scheduler.json`). Never the example itself, which an
+    install copies FROM, and never the install-state file, which records the install rather
+    than configuring the skill: either would let a Writes that names no configured file pass."""
+    return name == "config.json" or (name.endswith(".json")
+                                      and not name.endswith((".example.json", ".install-state.json")))
+
+
 def install_parser():
     """fleetlib.skills from this repository's lib/: the one reader of the section's
     text, shared with `fleet skills`, so the gate and the command cannot disagree
@@ -1402,8 +1415,10 @@ def check_install_section(root):
                 found.append(f"Steps names {parser.INSTRUCTION}, which does not exist")
             if instruction and not sec.steps_instruction:
                 found.append(f"{parser.INSTRUCTION} exists but Steps does not name it")
-            if example and "config.json" not in sec.context_files:
-                found.append("config.example.json exists but Writes does not name `config.json`")
+            if example and not any(example_becomes(n) for n in sec.written_files):
+                found.append("config.example.json exists but Writes names no file it becomes: neither "
+                             "`config.json` nor another backticked .json path (an .example.json or an "
+                             ".install-state.json is not one)")
             if not check and not sec.context_files:
                 found.append("form B with no installation/check, and Writes names neither `CONTEXT.md` nor "
                              "`config.json`, so its install state cannot be measured")
@@ -1452,14 +1467,21 @@ def control_install_section(copy):
         "zz-instruction-no-check": ("true", fields("nothing.", "`CONTEXT.md`.", steps_i), (inst,),
                                     "installation/check does not"),
         "zz-config-unnamed": ("false", fields("the token's path.", "`CONTEXT.md`.", steps_none), (cfg,),
-                              "config.example.json exists but Writes does not name `config.json`"),
+                              "config.example.json exists but Writes names no file it becomes"),
+        "zz-config-example-only": ("false", fields("the token's path.", "`CONTEXT.md`, copied from "
+                                                   "`config.example.json`.", steps_none), (cfg,),
+                                   "config.example.json exists but Writes names no file it becomes"),
+        "zz-config-state-only": ("false", fields("the token's path.", "`CONTEXT.md` and "
+                                                 "`installation/.install-state.json`.", steps_none), (cfg,),
+                                 "config.example.json exists but Writes names no file it becomes"),
         "zz-b-unmeasured": ("false", fields("nothing.", "per agent, `<home>/config/zz.json`.", steps_none), (),
                             "so its install state cannot be measured"),
     }
     # Decoys, each a correct section that must pass: form A with a fenced example section above
     # it and a second sentence; form B with steps, a check, a config and, after Steps, a ###
     # subsection and a fence holding a heading and a field; form B measured by CONTEXT.md's
-    # presence; form B with a check and no INSTRUCTION.md, which needs no context file.
+    # presence; form B with a check and no INSTRUCTION.md, which needs no context file; and a
+    # config.example.json that becomes a per-agent file, named by its path in Writes.
     example = "```markdown\n## Install\n\n**Asks for:** x\n```\n\n"
     decoys = {
         "zz-decoy-a": ("false", "## Install\n\nNothing to install. An install may write an\noptional CONTEXT.md.\n",
@@ -1469,6 +1491,7 @@ def control_install_section(copy):
                        "```markdown\n## Not a heading\n\n**Steps:** not a field\n```\n", (inst, chk, cfg), ""),
         "zz-decoy-c": ("false", fields("nothing.", "`CONTEXT.md`, the local paths.", steps_none), (), ""),
         "zz-decoy-d": ("false", fields("nothing.", "nothing beyond what the check reads.", steps_none), (chk,), ""),
+        "zz-decoy-e": ("true", fields("nothing.", "per agent, `<home>/config/x.json`.", steps_i), (inst, chk, cfg), ""),
     }
     expected = []
     for name, (requires, section, files, why) in faults.items():

@@ -3,6 +3,7 @@
     sec = install_section(Path(".claude/skills/<skill>/SKILL.md").read_text())
     sec.form            # "nothing" (form A) or "fields" (form B)
     sec.context_files   # ("CONTEXT.md", "config.json") backticked in Writes
+    sec.written_files   # every backticked name in Writes, a per-agent path included
 
 The format is claude-skill section 3 ("The `## Install` section"); this module
 is its one home in code, shared by the install-section gate (tests/gates/) and
@@ -51,7 +52,7 @@ CONTEXT_FILES = ("CONTEXT.md", "config.json")
 _FENCE = re.compile(r"[ \t]*(`{3,}|~{3,})(.*)")
 _TOP_HEADING = re.compile(r"#{1,2}(?:[ \t]|$)")
 _MARKER = re.compile(r"\*\*(%s):\*\*" % "|".join(map(re.escape, FIELDS)))
-_CONTEXT_FILE = re.compile(r"`(%s)`" % "|".join(map(re.escape, CONTEXT_FILES)))
+_BACKTICKED = re.compile(r"`([^`]+)`")  # a code span may cross a line, as in Markdown
 
 
 class InstallSectionError(FleetError, ValueError):
@@ -68,6 +69,7 @@ class InstallSection:
     writes: str | None
     steps: str | None
     context_files: tuple        # "CONTEXT.md" / "config.json" backticked in Writes (B); () for A
+    written_files: tuple = ()   # every backticked name in Writes, in order, once each (B); () for A
 
     @property
     def steps_instruction(self):
@@ -189,11 +191,13 @@ def install_section(text):
             raise InstallSectionError(f"form B: '**{f}:**' (line {line_at + 1}) is empty")
         values.append(value)
     asks_for, writes, steps = values
-    seen = []
-    for name in _CONTEXT_FILE.findall(writes):
-        if name not in seen:
-            seen.append(name)
-    return InstallSection("fields", body, asks_for, writes, steps, tuple(seen))
+    written = []
+    for span in _BACKTICKED.findall(writes):
+        name = " ".join(span.split())
+        if name not in written:
+            written.append(name)
+    return InstallSection("fields", body, asks_for, writes, steps,
+                          tuple(n for n in written if n in CONTEXT_FILES), tuple(written))
 
 
 __all__ = ["InstallSection", "InstallSectionError", "install_section",

@@ -232,7 +232,9 @@ not:
 - `installation/INSTRUCTION.md` exists exactly when `requires_install` is
   `true`, and exactly when Steps names it;
 - an `INSTRUCTION.md` has an `installation/check` beside it;
-- a `config.example.json` means Writes names `config.json`;
+- a `config.example.json` means Writes names, backticked, the file it becomes,
+  wherever that lives: `config.json` in the install context, or a per-agent
+  path such as `<home>/config/<file>.json`;
 - a form-B skill with no `installation/check` names `CONTEXT.md` or
   `config.json`, backticked, in Writes.
 
