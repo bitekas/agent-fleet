@@ -440,11 +440,15 @@ a release that carries it; and, once that is committed, `fleet link
 <agent-name>` and its per-agent steps for each agent (section 7).
 
 **A daemon's config is not in the install context.** It is one file per agent,
-at the path its unit reads - in the agent's config directory, or a root-owned
-path where an administrator installs the unit ("The two users") - which the
-skill's Install section names, and section 7 writes it. `systemd/README.md`,
-"What runs", is the table the daemon units are rendered from, and `python3
-<fleet>/systemd/agent-daemons.py jobs --json` prints it.
+in the agent's config directory, at the name its unit reads, and section 7
+writes it: `<home>/config/scheduler.json` for the scheduler,
+`<home>/config/<watch.job>.json` for each working chat transport's watcher
+(`<home>/config/slack-watch.json` for Slack), and for the stall watchdog
+`/etc/agent-fleet/stall-watchdog/<agent-name>.json`, root's, where an
+administrator installs it ("The two users"), else
+`<home>/config/stall-watchdog.json`. `systemd/README.md`,
+"What runs", is the table the daemon units are rendered from, and
+`python3 <fleet>/systemd/agent-daemons.py jobs --json` prints it.
 
 A config names a credential's PATH; the credential itself is a file of its own,
 mode 600, in a secrets directory, and never in the repository. A skill's install is recorded
@@ -481,7 +485,7 @@ agent hears its channel.
 ```bash
 fleet check-all <agent-name>   # every linked skill's installation/check, one table
 fleet status <agent-name>      # links, tag, session check, charter step pointers, daemons, watchdog; exit 1 on any drift
-fleet skills                   # in the agent's checkout of the install: each selected skill's state; exit 1 while one is not configured
+fleet skills <agent-name>      # each selected skill's install state, a skill with no check included; exit 1 while one is not configured
 ```
 
 Repeat for every agent until each table is clean, `fleet status` exits 0,

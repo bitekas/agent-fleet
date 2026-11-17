@@ -9,14 +9,15 @@
     "(CONVENTIONS.md) its skills fill, each value in the manifest's {\"skill\": \"<name>\"} form, naming",
     "one of the group's skills, with an optional \"section\" as CONVENTIONS.md allows.",
     "",
-    "Taking a group is a manifest edit and nothing else: add every name in its `skills` to the",
-    "manifest's `skills`, and set the conventions keys it fills to its values, or to the install's own",
+    "Taking a group is a manifest edit and nothing else: every name in its `skills` goes into the",
+    "manifest's `skills` (`fleet skills --select`, or `fleet skills --ask`, which offers the group as",
+    "one item), and the conventions keys it fills are set to its values, or to the install's own",
     "skill or document where the install keeps one (a key the group fills is still the install's to",
     "set). A manifest that takes no group is exactly what templates/fleet.example.json writes.",
     "The install-agent-fleet skill offers each group as one item; its Upgrade section says how an",
     "existing install takes one later. This file is the one list of a group's skills: the installer,",
-    "the skill-references gate and the manifest tests read it, and README.md's bullet for the group",
-    "is held to it."
+    "`fleet skills --ask`, the skill-references gate and the manifest tests read it, and README.md's",
+    "bullet for the group is held to it."
   ],
   "software-development": {
     "_comment": [

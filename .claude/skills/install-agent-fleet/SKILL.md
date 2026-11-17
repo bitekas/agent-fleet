@@ -519,9 +519,11 @@ status <agent-name>` for each, read by step 8's rule.
 - a value, a unit or a record that waits for `/adding-an-agent`;
 - a step SETUP lists under "What only you do", with the exact prompt for it.
 
-Then `fleet skills`, in `<work>` and in each agent's checkout of the project
-step 7 linked: it exits 0, or every selected skill it reports `not
-configured` is one of the same classes, its reason line read against them.
+Then `fleet skills` in `<work>`, and `fleet skills <agent-name>` for each
+agent step 7 linked (the checks then run with that agent's environment, as
+`fleet check-all` runs them): each exits 0, or every selected skill it reports
+`not configured` is one of the same classes, its reason line read against
+them.
 
 Fix anything else and run it again. `fleet check-all <agent-name>` comes with
 an agent: `/adding-an-agent` runs it for each agent it adds.
@@ -641,8 +643,8 @@ named; the questions are here.
    rewrites the watchdog's config from the example, so a value tuned in it is
    set again in the staged file first. With no administrator (user units) the
    same steps run without root. Then `verify-privileges.py` as in step 8.
-6. `fleet status`, and `fleet settings` and `fleet skills` in an agent's
-   checkout of the project: a newer fleet that refuses a manifest key names
+6. `fleet status`, `fleet skills <agent-name>`, and `fleet settings` in an
+   agent's checkout of the project: a newer fleet that refuses a manifest key names
    it, a selected skill the new release asks more of is `not configured`, its
    Install section saying what, and a charter pointer
    (`/<skill> step N`) that a renumbered skill no longer resolves is a `DRIFT`
@@ -667,7 +669,7 @@ step, before the diff is shown; then the diff and the commit as step 6 items 6
 and 7, and the patch and `<work>` removed by their literal paths. Once the
 commit is on the branch the agents track, `fleet link <agent-name>` for each
 agent [target], then each new skill's per-agent steps (its Install section
-says which), and `fleet status` and `fleet skills`.
+says which), and `fleet status` and `fleet skills <agent-name>`.
 
 ## Install
 

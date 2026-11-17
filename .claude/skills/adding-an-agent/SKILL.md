@@ -1006,9 +1006,8 @@ too, and only the watchdog needs root.
    leaves.
 8. **The other skills' per-agent steps**, for each skill in the manifest's
    `skills` whose `installation/INSTRUCTION.md` names steps per agent and that
-   the steps above do not cover: `google-spreadsheet` (the agent's key, its
-   delegation grant and its record) and `web-hierarchy-server` (one server and
-   unit per agent). Each instruction says which of its steps those are. The
+   the steps above do not cover. The `**Steps:**` of each skill's `## Install`
+   section says whether it has any, and its instruction says which they are. The
    install records those steps and `/scheduled-tasks` step 5 write
    (`installation/.install-state.json` in the install context) are committed,
    so they land like the charter and reach the agent's checkout by a pull.
@@ -1017,6 +1016,7 @@ too, and only the watchdog needs root.
    ```bash
    ssh <target> '~/.local/bin/fleet check-all <agent-name>'   # one row per linked skill's installation/check
    ssh <target> '~/.local/bin/fleet status <agent-name>'      # links, tag, charter step pointers, daemons, watchdog, the agent unit's follower path; exit 1 on drift
+   ssh <target> '~/.local/bin/fleet skills <agent-name>'      # each selected skill's install state, a skill with no check included; exit 1 while one is not configured
    ```
 
    Every row that is not clean is either fixed, by the instruction of the skill
