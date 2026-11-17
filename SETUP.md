@@ -367,9 +367,11 @@ there (a convention skill is the checkout's own `.claude/skills/<name>/SKILL.md`
 or a fleet skill that `skills` lists and the fleet has; a doc path holding a
 `<placeholder>` is not followed), by naming the key.
 
-- **`skills`** is the fleet skills your agents link. Choose them with `fleet
-  skills` (section 5, "Choose the skills") before you set `conventions`: a
-  convention may name a fleet skill only once `skills` lists it.
+- **`skills`** is the fleet skills your agents link. Set `transports` first:
+  `fleet skills` reads the required skills from `transports.enabled`. Then
+  choose them with `fleet skills` (section 5, "Choose the skills") before you
+  run `fleet settings`, which accepts a convention naming a fleet skill only
+  once `skills` lists it.
 - **`conventions`** is the slot for your development process (`CONVENTIONS.md`).
   For a skill group you take, set each key the group's `conventions` names
   (`templates/skill-groups.json`) to that value. Any other key, or one you keep
@@ -387,7 +389,9 @@ repository. They are the install's, and they stay there.
 
 ## 5. The skills, and each one's install
 
-Every command here runs from a checkout of the install repository.
+Every command here runs on the fleet's host, from a checkout of the install
+repository there: a skill's check, and a "Record the install" step, measure the
+machine they run on.
 
 **Choose the skills.** `fleet skills` lists every skill of the fleet: whether
 the install selects it (`yes`, `no`, or `required` for `chat-transport` and
