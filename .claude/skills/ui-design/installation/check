@@ -5,13 +5,15 @@ Is the ui-design skill configured for this install, and which version is it?
 Prints ONE line and exits:
 
     0  configured        OK: configured (version N) ...      -> proceed
-    1  NO VERDICT        the design map could not be read     -> not a pass; fix the map's form
+    1  NO VERDICT        the design map, or definition-of-done's config.json
+                         beside it, could not be read         -> not a pass; fix its form
     2  not installed     NOT INSTALLED: <every fault, named>  -> follow INSTRUCTION.md
 
 WHAT IS INSTALLED. The skill is prose; its one install artifact is the design
 map: the `## Design map` table in this skill's CONTEXT.md in the install
 context (fleetlib.paths.skill_context('ui-design')), committed in the install
-repository. This check reads that file and nothing else on the host.
+repository. The check reads that file, the registry document it names, and,
+where the install has one, definition-of-done's config.json.
 
 THE ARTIFACT FORM (claude-skill section 3), so there is NO .install-state.json.
 The map is one committed file, the same on every host and for every agent, so a
@@ -23,10 +25,16 @@ a map written for the older version then reports that row missing.
 THE PARSE IS BY CONTENT, AND THE COUPLING IS DECLARED WHERE THE VALUES LIVE.
 The table is prose a person edits. INSTRUCTION.md step 2 writes a line above it
 saying this check parses it by its row labels, so whoever relabels a row is told
-what breaks. A map this check cannot find is NO VERDICT (exit 1), never OK and
+what breaks. A map this check cannot read is NO VERDICT (exit 1), never OK and
 never NOT INSTALLED: a reformat costs the measurement loudly, and it does not
 pose as "every value is missing", which would send the person to re-ask values
 they already gave.
+
+WHAT A READER SEES IS WHAT IS READ. Text inside fenced code, indented code or an
+HTML comment is hidden before anything is looked for, because an agent reading
+the file treats it as an example or a note, not as the map: an old map left in a
+comment must not be the one measured, and a table indented into a code block
+must not count as written.
 
 LEGS, each with its negative control (a case in check.test.py that must go
 red) and what deleting the leg would let through:
@@ -40,22 +48,29 @@ red) and what deleting the leg would let through:
   file      CONTEXT.md is OPENED and read, never stat'ed: exists() is green on
             a file this process cannot read. Absent or unreadable is NOT
             INSTALLED naming the path and the errno. Control: the file removed.
-  table     Exactly one `## Design map` heading outside fenced code, and under
-            it, before the next heading, a pipe table: a header row of at least
-            two cells and its separator row. Controls: no heading, the heading
-            only inside a fence, prose where the table was, no separator row,
-            two such headings: each NO VERDICT. Without this leg a reformatted
-            map reads as every row missing.
-  rows      Every required label of ROWS exactly once, its value non-empty and
-            not a `<placeholder>` (a `<...>` with no `@` in it, the form
-            INSTRUCTION.md's template writes; `<ada@example.com>` is a value).
-            Controls: each required row removed in turn, one value emptied, one
-            left a placeholder, one row repeated: each NOT INSTALLED naming that
+  table     Exactly one visible `## Design map` heading, and under it, before
+            the next heading, a visible pipe table of exactly two columns
+            (label, value): a header row, its separator row, and rows of two
+            cells. A row of more cells (an unescaped `|` in a value) is NO
+            VERDICT naming the row, because which cell is the value cannot be
+            told. Controls: no heading; the map only inside a fence, a comment
+            or indented code; the table only inside a comment or indented code;
+            prose where the table was; no separator row; two headings; a
+            three-column header; a row with three cells: each NO VERDICT.
+  rows      Every required label of ROWS exactly once in the file's tables, its
+            value non-empty and not a `<placeholder>`. A label in two rows (one
+            table, a second table under the heading, or any table elsewhere in
+            the file) is NOT INSTALLED naming it and its lines: never
+            first-wins or last-wins, since the copy an agent reads is not the
+            copy a check would have picked. A placeholder is a `<...>` with no
+            `@` and no `scheme://` in it, the form INSTRUCTION.md's template
+            writes; `<ada@example.com>` and the autolink `<https://...>` are
+            values. Controls: each required row removed in turn, one value
+            emptied, one left a placeholder (also in the optional row), one row
+            repeated each of the three ways: each NOT INSTALLED naming that
             label and no other. The optional row may be absent; a placeholder
             in it is still NOT INSTALLED, since an unedited template row is an
-            unanswered question. Without this leg a half-filled copy of the
-            template is OK, and an agent reads `<id of page 3>` as the page it
-            builds from.
+            unanswered question.
   registry  The registry row is one of three forms: `doc <path>` (a document in
             the install repository), `design <id>` (a page or frame in the
             design file, one token) or `link <url>` (another system, with a
@@ -63,12 +78,30 @@ red) and what deleting the leg would let through:
             link with no scheme, a design id with a space: each NOT INSTALLED.
   doc       For `doc`, the path is resolved against the install root by
             fleetlib.paths.resolve_repo_path, must stay inside that root, and
-            the file is OPENED and one byte read. Controls: a missing file, an
-            empty file, a directory, a path that climbs out of the install:
-            each NOT INSTALLED naming it. `design` and `link` are checked for
-            FORM ONLY, because nothing on a host opens a design-file node or
-            another system without that tool's own access; the OK line says
-            the registry was recorded, not opened.
+            the file is OPENED and read until a byte that is not whitespace:
+            a registry of blank lines registers nothing. Controls: a missing
+            file, an empty file, a file of only whitespace, a directory, a path
+            that climbs out of the install: each NOT INSTALLED naming it.
+            `design` and `link` are checked for FORM ONLY, because nothing on a
+            host opens a design-file node or another system without that tool's
+            own access; the OK line says the registry was recorded, not opened.
+  pairs     Where definition-of-done's config.json exists in the install
+            context, five of its values are the same facts as five rows here
+            (PAIRS), and INSTRUCTION.md says they are copied from it and changed
+            together. Each pair is compared and a difference is NOT INSTALLED
+            naming the pair. The Design file row matches figma.file_key when the
+            value IS the key, or is a link one of whose path segments is the
+            key, whole: a link names the file by its key, and a substring match
+            would accept a different file whose key starts the same. The other
+            four compare exactly, a mark's trailing space included. A null
+            file_key says the project has no design file, which a design map
+            contradicts: NOT INSTALLED. A config that is not a JSON object, or
+            lacks one of the five keys, is NO VERDICT: definition-of-done's own
+            checks own that file's shape, and a pair not compared is not a pair
+            that agrees. Controls: each of the five changed in turn, the key
+            inside a longer segment, a mark without its trailing space, a null
+            file_key (NOT INSTALLED); the file not JSON, a key missing (NO
+            VERDICT); the file absent (OK, saying nothing was compared).
   version   SKILL.md's `version` is printed in the OK line; an unreadable one is
             NO VERDICT. Control: check.test.py compares the printed version with
             SKILL.md's.
@@ -85,9 +118,11 @@ Environment: FLEET_CONTEXT_ROOT (read by fleetlib) selects the install;
 otherwise the git top level of the working directory, then the calling agent's
 home project, as `fleet where` resolves them.
 """
+import json
 import os
 import re
 import sys
+from urllib.parse import urlsplit
 
 sys.dont_write_bytecode = True  # the fleet tree is read-only on a host; write nothing into it
 # realpath, never abspath: reached through an agent's skill link, abspath is the
@@ -100,7 +135,8 @@ import fleetlib  # noqa: E402
 from fleetlib import paths  # noqa: E402
 
 SKILL = "ui-design"
-MAP_HEADING = "## Design map"
+DOD = "definition-of-done"
+MAP_HEADING = re.compile(r" {0,3}## Design map[ \t]*")
 # The design map's row labels, in the order INSTRUCTION.md's template writes
 # them, and whether each is required. check.test.py holds the template to this
 # list, so the two cannot drift; a row added here is a value every install must
@@ -119,6 +155,15 @@ ROWS = (
     ("Code-change authorizer", True),
     ("Design-tool skills", False),
 )
+# The rows that are the same facts as definition-of-done's config.json, with the
+# key under its `figma` block. check.test.py holds INSTRUCTION.md's table to it.
+PAIRS = (
+    ("Design file", ("file_key",)),
+    ("Approved page", ("pages", "incoming")),
+    ("Implemented page", ("pages", "current")),
+    ("In-build mark", ("in_build_marker_prefix",)),
+    ("Superseded mark", ("deletion_marker_prefix",)),
+)
 REGISTRY = "Screen-number registry"
 TOOL_SKILLS = "Design-tool skills"
 FORMS = {
@@ -126,11 +171,16 @@ FORMS = {
     "design": re.compile(r"\S+"),
     "link": re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://\S+"),
 }
-PLACEHOLDER = re.compile(r"<[^<>@]*>")
-FENCE = re.compile(r"[ \t]*(`{3,}|~{3,})(.*)")
+SCHEME = r"[A-Za-z][A-Za-z0-9+.-]*://"
+PLACEHOLDER = re.compile(r"<(?!%s)[^<>@]*>" % SCHEME)
+AUTOLINK = re.compile(r"<(%s[^<>\s]*)>" % SCHEME)
+COMMENT = re.compile(r"<!--.*?(?:-->|\Z)", re.S)
+FENCE = re.compile(r" {0,3}(`{3,}|~{3,})(.*)")
+INDENTED = re.compile(r"(?: {4}|\t)")
 HEADING = re.compile(r" {0,3}#{1,6}(?:[ \t]|$)")
 SEPARATOR = re.compile(r"\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)*\|?\s*")
 CODE_SPAN = re.compile(r"(`+)(.*)\1", re.S)
+CHUNK = 65536
 
 
 def out(code, msg):
@@ -150,19 +200,33 @@ def declared_version():
     return int(m.group(1))
 
 
-def outside_fences(lines):
-    """(index, line) of every line outside fenced code (``` or ~~~): a heading or
-    a table inside a fence is an example, not the map."""
-    fence = None
-    for i, line in enumerate(lines):
+def visible(text):
+    """[(line number from 1, line)] of what a reader sees as prose: HTML comments
+    blanked (an unclosed one hides the rest of the file), fenced code and
+    indented code dropped. Blank lines are kept, as paragraph breaks."""
+    text = COMMENT.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), text)
+    shown, fence, code, prev = [], None, False, "blank"
+    for n, line in enumerate(text.split("\n"), 1):
         m = FENCE.match(line)
-        if fence is None:
-            if m:
-                fence = m.group(1)
-                continue
-            yield i, line
-        elif m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence) and not m.group(2).strip():
-            fence = None
+        if fence is not None:
+            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence) and not m.group(2).strip():
+                fence = None
+                prev = "other"
+            continue
+        if m:
+            fence = m.group(1)
+            continue
+        if not line.strip():
+            shown.append((n, ""))
+            prev = "blank"
+            continue
+        if INDENTED.match(line) and (code or prev in ("blank", "heading")):
+            code = True  # indented code cannot interrupt a paragraph; it can follow a break or a heading
+            continue
+        code = False
+        prev = "heading" if HEADING.match(line) else "other"
+        shown.append((n, line))
+    return shown
 
 
 def cells(line):
@@ -175,47 +239,67 @@ def cells(line):
     return [c.replace("\\|", "|").strip() for c in re.split(r"(?<!\\)\|", s)]
 
 
-def design_map(text):
-    """[(label, value), ...] of the design map, or a string saying why there is none."""
-    lines = text.split("\n")
-    seen = list(outside_fences(lines))
-    heads = [k for k, (_, line) in enumerate(seen) if line.rstrip() == MAP_HEADING]
-    if not heads:
-        return f"no '{MAP_HEADING}' heading outside fenced code"
-    if len(heads) > 1:
-        return f"{len(heads)} '{MAP_HEADING}' headings, so which map is meant cannot be told"
-    section = []
-    for i, line in seen[heads[0] + 1:]:
-        if HEADING.match(line):
-            break
-        section.append((i, line))
-    for k in range(len(section) - 1):
-        (i, line), (j, nxt) = section[k], section[k + 1]
+def tables(shown):
+    """[(header line no, header cells, [(line no, cells), ...])] of every pipe
+    table in `shown`: a `|` row directly followed by its separator row, and the
+    `|` rows directly after that."""
+    found, k = [], 0
+    while k < len(shown) - 1:
+        (i, line), (j, nxt) = shown[k], shown[k + 1]
         if line.lstrip().startswith("|") and j == i + 1 and SEPARATOR.fullmatch(nxt):
-            if len(cells(line)) < 2:
-                return "its table's header has fewer than two cells (label, value)"
-            rows, last = [], j
-            for i2, row in section[k + 2:]:
-                if i2 != last + 1 or not row.lstrip().startswith("|"):
-                    break
-                c = cells(row)
-                rows.append((c[0], c[1] if len(c) > 1 else ""))
-                last = i2
-            return rows
-    return f"no pipe table (a header row and its separator row) under '{MAP_HEADING}'"
+            rows, last, k = [], j, k + 2
+            while k < len(shown) and shown[k][0] == last + 1 and shown[k][1].lstrip().startswith("|"):
+                rows.append((shown[k][0], cells(shown[k][1])))
+                last = shown[k][0]
+                k += 1
+            found.append((i, cells(line), rows))
+        else:
+            k += 1
+    return found
 
 
-def unspan(value):
-    """The value without one enclosing code span: `IN-BUILD ` is the mark itself."""
+def design_map(text):
+    """(map rows, rows elsewhere) as [(line no, label, value)], or a string saying
+    why there is no map this check can read."""
+    shown = visible(text)
+    heads = [k for k, (_, line) in enumerate(shown) if MAP_HEADING.fullmatch(line)]
+    if not heads:
+        return "no '## Design map' heading outside code and comments"
+    if len(heads) > 1:
+        return f"{len(heads)} '## Design map' headings, so which map is meant cannot be told"
+    start = heads[0] + 1
+    end = next((k for k in range(start, len(shown)) if HEADING.match(shown[k][1])), len(shown))
+    inside = tables(shown[start:end])
+    if not inside:
+        return "no pipe table (a header row and its separator row) under '## Design map'"
+    rows = []
+    for at, header, body in inside:
+        if len(header) != 2:
+            return f"the table header at line {at} has {len(header)} cells; the map has two (label, value)"
+        for n, c in body:
+            if len(c) > 2:
+                return (f"row '{c[0]}' at line {n} has {len(c)} cells, so its value cannot be told; "
+                        f"write a `|` inside a value as `\\|`")
+            rows.append((n, c[0], c[1] if len(c) > 1 else ""))
+    elsewhere = [(n, c[0], "") for _, _, body in tables(shown[:heads[0]] + shown[end:]) for n, c in body]
+    return rows, elsewhere
+
+
+def unwrap(value):
+    """The value without one enclosing code span (`IN BUILD - ` is the mark
+    itself, trailing space and all), then without an autolink's angle brackets."""
     value = value.strip()
     m = CODE_SPAN.fullmatch(value)
-    return m.group(2) if m else value
+    if m:
+        value = m.group(2)
+    m = AUTOLINK.fullmatch(value.strip())
+    return m.group(1) if m else value
 
 
 def registry_leg(value, faults):
     """The registry's note for the OK line, or None with the fault appended."""
-    word, _, arg = unspan(value).partition(" ")
-    arg = unspan(arg)
+    word, _, arg = unwrap(value).partition(" ")
+    arg = unwrap(arg)
     if word not in FORMS:
         faults.append(f"{REGISTRY} '{value}' is none of the three forms: doc <repository path>, "
                       f"design <id>, link <url>")
@@ -239,14 +323,75 @@ def registry_leg(value, faults):
         return None
     try:
         with open(path, "rb") as f:
-            byte = f.read(1)
+            while True:
+                chunk = f.read(CHUNK)
+                if not chunk or chunk.strip():
+                    break
     except OSError as e:
         faults.append(f"{REGISTRY} 'doc {arg}': {path} cannot be read ({e.strerror or type(e).__name__})")
         return None
-    if not byte:
-        faults.append(f"{REGISTRY} 'doc {arg}': {path} is empty")
+    if not chunk:
+        faults.append(f"{REGISTRY} 'doc {arg}': {path} holds no text")
         return None
     return f"registry doc {arg} opened and read"
+
+
+def dod_figma():
+    """(definition-of-done's figma block, None), (None, None) when its config.json
+    is absent, or (None, why it cannot be compared)."""
+    try:
+        path = os.path.join(str(paths.skill_context(DOD)), "config.json")
+    except fleetlib.FleetError as e:
+        return None, f"its install context does not resolve ({e})"
+    try:
+        with open(path, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except FileNotFoundError:
+        return None, None
+    except (OSError, ValueError) as e:
+        return None, f"{path} cannot be read as JSON ({type(e).__name__}: {e})"
+    figma = cfg.get("figma") if isinstance(cfg, dict) else None
+    if not isinstance(figma, dict):
+        return None, f"{path} has no figma block"
+    for _, keys in PAIRS:
+        d = figma
+        for k in keys:
+            if not isinstance(d, dict) or k not in d:
+                return None, f"{path} has no figma.{'.'.join(keys)}"
+            d = d[k]
+    return figma, None
+
+
+def pairs_leg(values, faults):
+    """("ok", the OK line's note) with each differing pair appended to faults, or
+    ("nv", why) when definition-of-done's config.json exists and cannot be compared."""
+    figma, why = dod_figma()
+    if why:
+        return ("nv", f"definition-of-done's config.json could not be compared: {why}")
+    if figma is None:
+        return ("ok", "no definition-of-done config.json, nothing compared")
+    for label, keys in PAIRS:
+        if label not in values:
+            continue  # its own fault is already listed
+        theirs = figma
+        for k in keys:
+            theirs = theirs[k]
+        dotted = "figma." + ".".join(keys)
+        mine = unwrap(values[label])
+        if label == "Design file":
+            if theirs is None:
+                faults.append(f"definition-of-done's figma.file_key is null (the project has no design "
+                              f"file), but the design map names one")
+                continue
+            key = str(theirs).strip()
+            segments = urlsplit(mine).path.split("/") if re.match(SCHEME, mine) else []
+            same = bool(key) and (mine == key or key in segments)  # an empty key matches no file
+        else:
+            same = theirs is not None and mine == str(theirs)
+        if not same:
+            faults.append(f"{label} differs from definition-of-done's {dotted} ({mine!r} here, "
+                          f"{theirs!r} there; change both together)")
+    return ("ok", f"agrees with definition-of-done's config.json on {len(PAIRS)} values")
 
 
 def main():
@@ -270,26 +415,29 @@ def main():
         out(2, f"NOT INSTALLED: {path} cannot be read ({e.strerror or type(e).__name__}); an agent "
                f"cannot read the design map either")
 
-    rows = design_map(text)
-    if isinstance(rows, str):
-        out(1, f"NO VERDICT: {path} has no design map this check can read: {rows}. The values were "
-               f"not measured, so this is not a pass; installation/INSTRUCTION.md step 2 gives the form.")
+    parsed = design_map(text)
+    if isinstance(parsed, str):
+        out(1, f"NO VERDICT: {path} has no design map this check can read: {parsed}. The values "
+               f"were not measured, so this is not a pass; installation/INSTRUCTION.md step 2 gives "
+               f"the form.")
+    rows, elsewhere = parsed
 
     faults, missing, empty, placeholder, repeated = [], [], [], [], []
     values = {}
     for label, required in ROWS:
-        found = [v for lab, v in rows if lab == label]
-        if len(found) > 1:
-            repeated.append(label)
+        found = [(n, v) for n, lab, v in rows if lab == label]
+        lines = sorted([n for n, _ in found] + [n for n, lab, _ in elsewhere if lab == label])
+        if len(lines) > 1:
+            repeated.append(f"{label} (lines {', '.join(map(str, lines))})")
             continue
         if not found:
             if required:
                 missing.append(label)
             continue
-        value = found[0]
+        value = found[0][1]
         if PLACEHOLDER.search(value):
             placeholder.append(label)
-        elif not unspan(value).strip():
+        elif not unwrap(value).strip():
             if required:
                 empty.append(label)
         else:
@@ -299,14 +447,20 @@ def main():
         if labels:
             faults.append(f"{what}: {', '.join(labels)}")
     note = registry_leg(values[REGISTRY], faults) if REGISTRY in values else None
+    state, dod_note = pairs_leg(values, faults)
     if faults:
-        out(2, f"NOT INSTALLED: the design map in {path}: {'; '.join(faults)}. Follow "
+        tail = f" ({dod_note})" if state == "nv" else ""
+        out(2, f"NOT INSTALLED: the design map in {path}: {'; '.join(faults)}{tail}. Follow "
                f"installation/INSTRUCTION.md.")
+    if state == "nv":
+        out(1, f"NO VERDICT: the design map in {path} is complete, but {dod_note}. Five of its "
+               f"values must agree with that file, and unread they are not known to.")
 
     version = declared_version()
-    tools = unspan(values[TOOL_SKILLS]) if TOOL_SKILLS in values else "not recorded"
+    tools = unwrap(values[TOOL_SKILLS]) if TOOL_SKILLS in values else "not recorded"
     out(0, f"OK: configured (version {version}); design map in {path}: "
-           f"{sum(1 for _, req in ROWS if req)} required values; {note}; design-tool skills: {tools}")
+           f"{sum(1 for _, req in ROWS if req)} required values; {note}; {dod_note}; "
+           f"design-tool skills: {tools}")
 
 
 if __name__ == "__main__":

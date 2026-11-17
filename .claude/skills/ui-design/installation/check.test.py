@@ -27,7 +27,10 @@ check's header):
             read the install FLEET_CONTEXT_ROOT selects, not some other one.
             `bash check` gives the same verdict (the hand-off line). The design
             and link registry forms are OK and say "not opened"; the optional
-            row may be absent; a row of the install's own is ignored.
+            row may be absent; a row of the install's own is ignored; an
+            escaped pipe is part of a value; an autolink is a value; an old map
+            inside an HTML comment or a fenced example beside the real one is
+            not a second map.
   link      run through a symlink to the skill directory (an agent's skill
             link), from a copy of the fleet tree with bytecode writing allowed:
             OK, and no __pycache__ appears in the copy. abspath instead of
@@ -36,26 +39,41 @@ check's header):
   file      CONTEXT.md removed: NOT INSTALLED naming its path.
   rows      each required row removed in turn: NOT INSTALLED naming THAT label
             alone. One value empty (also a mark that is only a space), one a
-            placeholder (also in the optional row), one row repeated.
-  table     no heading, the heading only inside a fence, prose where the table
-            was, no separator row, two headings, non-UTF-8 bytes: NO VERDICT.
+            placeholder (also in the optional row). A label twice, in one table,
+            in a second table under the heading, or in a table elsewhere in the
+            file: NOT INSTALLED naming it, never first-wins or last-wins.
+  table     no heading, the heading or the table only inside a fence, an HTML
+            comment or indented code, prose where the table was, no separator
+            row, two headings, a header or a row with more than two cells (an
+            unescaped pipe in a value), non-UTF-8 bytes: NO VERDICT.
   registry  another form word, `doc` with no path, a link with no scheme, a
             design id with a space: NOT INSTALLED.
-  doc       a missing file, an empty file, a directory, and a path outside the
-            install that EXISTS and holds bytes (so only the containment leg can
-            make it red, never the open): NOT INSTALLED naming it.
+  doc       a missing file, an empty file, a file of only whitespace, a
+            directory, and a path outside the install that EXISTS and holds
+            bytes (so only the containment leg can make it red, never the open):
+            NOT INSTALLED naming it.
+  pairs     with definition-of-done's config.json in the install context, each
+            of the five shared values changed in turn: NOT INSTALLED naming that
+            pair alone. A link that carries the key only inside a longer path
+            segment, a mark that lost its trailing space, and a null file_key
+            are mismatches; a bare key is a match. The config absent: OK, and
+            the line says nothing was compared. The config not JSON, or missing
+            a key: NO VERDICT.
   context   FLEET_CONTEXT_ROOT at a directory with no manifest: NO VERDICT.
   template  INSTRUCTION.md's template table carries exactly the check's labels,
-            in its order, and written as a CONTEXT.md unedited it is NOT
-            INSTALLED naming every row as a placeholder. Without this the
-            template and the check can disagree, and an install that follows
-            the instruction can never be configured.
+            in its order; every value in it is wholly a placeholder, and the
+            registry's hint names no form a fragment of it could be copied as;
+            written as a CONTEXT.md unedited it is NOT INSTALLED naming every
+            row as a placeholder. Its definition-of-done table names exactly the
+            check's pairs. Without this the template and the check can
+            disagree, and a template copied unfilled can read configured.
 
 Run: python3 .claude/skills/ui-design/installation/check.test.py
 """
 import atexit
 import importlib.machinery
 import importlib.util
+import json
 import os
 import re
 import shutil
@@ -71,11 +89,13 @@ SKILL_DIR = os.path.dirname(HERE)
 FLEET_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(SKILL_DIR)))
 FIXTURE_INSTALL = os.path.join(FLEET_ROOT, "tests", "fixtures", "install")
 REL_CTX = os.path.join(".claude", "skills", "ui-design", "CONTEXT.md")
+REL_DOD = os.path.join(".claude", "skills", "definition-of-done", "config.json")
 REGISTRY = "docs/screen-numbers.md"
 
-if not os.path.isfile(os.path.join(FIXTURE_INSTALL, REL_CTX)):
-    print(f"NO VERDICT: the fixture install has no {REL_CTX}, so there is nothing to copy")
-    sys.exit(3)
+for rel in (REL_CTX, REL_DOD):
+    if not os.path.isfile(os.path.join(FIXTURE_INSTALL, rel)):
+        print(f"NO VERDICT: the fixture install has no {rel}, so there is nothing to copy")
+        sys.exit(3)
 with open(os.path.join(SKILL_DIR, "SKILL.md"), encoding="utf-8") as f:
     VERSION = int(re.search(r"^version:\s*(\d+)\s*$", f.read(), re.M).group(1))
 
@@ -85,6 +105,7 @@ SUBJECT = importlib.util.module_from_spec(_spec)
 _loader.exec_module(SUBJECT)  # top level only: main() runs under __main__
 LABELS = [label for label, _ in SUBJECT.ROWS]
 REQUIRED = [label for label, req in SUBJECT.ROWS if req]
+PAIRS = getattr(SUBJECT, "PAIRS", ())
 
 # realpath: on macOS $TMPDIR is a symlink (/var -> /private/var).
 TMP = os.path.realpath(tempfile.mkdtemp(prefix="ui-design-check-test-"))
@@ -99,9 +120,14 @@ for var in ("XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOM
     BASE_ENV[var] = os.path.join(TMP, "home", var.lower())
 os.makedirs(BASE_ENV["HOME"])
 
+with open(os.path.join(FIXTURE_INSTALL, REL_DOD), encoding="utf-8") as f:
+    DOD_FIGMA = json.load(f)["figma"]
 
-def install(name, edit=None):
-    """A copy of the fixture install; `edit` maps its CONTEXT.md text to new text."""
+
+def install(name, edit=None, dod=None):
+    """A copy of the fixture install. `edit` maps its CONTEXT.md text to new text;
+    `dod` maps its definition-of-done config (parsed) to a new one, or is the
+    string "absent" or raw text to write in its place."""
     root = os.path.join(TMP, name)
     shutil.copytree(FIXTURE_INSTALL, root)
     if edit:
@@ -113,6 +139,19 @@ def install(name, edit=None):
             raise SystemExit(f"test bug: the edit for {name!r} changed nothing")
         with open(path, "w", encoding="utf-8") as f:
             f.write(new)
+    if dod is not None:
+        path = os.path.join(root, REL_DOD)
+        if dod == "absent":
+            os.remove(path)
+        elif isinstance(dod, str):
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(dod)
+        else:
+            with open(path, encoding="utf-8") as f:
+                cfg = json.load(f)
+            dod(cfg)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(cfg, f)
     return root
 
 
@@ -128,7 +167,26 @@ def row(label, value=None):
     pat = re.compile(r"^\| %s \|[^\n]*\n" % re.escape(label), re.M)
 
     def edit(text):
-        return pat.sub("" if value is None else f"| {label} | {value} |\n", text, count=1)
+        return pat.sub("" if value is None else lambda m: f"| {label} | {value} |\n", text, count=1)
+    return edit
+
+
+def setkey(keys, value):
+    """A dod edit that sets figma.<keys> to value."""
+    def edit(cfg):
+        d = cfg["figma"]
+        for k in keys[:-1]:
+            d = d[k]
+        d[keys[-1]] = value
+    return edit
+
+
+def dropkey(keys):
+    def edit(cfg):
+        d = cfg["figma"]
+        for k in keys[:-1]:
+            d = d[k]
+        del d[keys[-1]]
     return edit
 
 
@@ -154,13 +212,35 @@ def red(name, root, code_want, needles, absent=(), **kw):
         FAILED.append(name)
 
 
+def fact(name, cond, detail=""):
+    print(("[PASS] " if cond else "[FAIL] ") + name + ("" if cond else f" - {detail}"))
+    if not cond:
+        FAILED.append(name)
+
+
 NOT, NOV = "NOT INSTALLED", "NO VERDICT"
+MAP = "## Design map"
+
+
+def before_map(extra):
+    return lambda t: t.replace(MAP, extra + "\n\n" + MAP, 1)
+
+
+def section(text):
+    """The design map section of a fixture CONTEXT.md, heading to end."""
+    return text[text.index(MAP):]
+
+
+def hide_map(wrap):
+    """An edit that wraps the whole design map section in `wrap(section)`."""
+    return lambda t: t[:t.index(MAP)] + wrap(section(t))
+
 
 # ----------------------------------------------------------------- green
 good = install("good")
 green("the fixture install copy is OK, naming its own CONTEXT.md and the registry it opened",
       good, [os.path.join(good, REL_CTX), f"registry doc {REGISTRY} opened and read",
-             "design-tool skills: none"])
+             "design-tool skills: none", "agrees with definition-of-done's config.json on 5 values"])
 green("the committed fixture install, in place, is OK", FIXTURE_INSTALL, [f"registry doc {REGISTRY}"])
 green("bash check gives the same verdict as python3 check", good, [f"registry doc {REGISTRY}"], shell=True)
 green("a design registry is OK, recorded and not opened",
@@ -169,11 +249,30 @@ green("a design registry is OK, recorded and not opened",
 green("a link registry is OK, recorded and not opened",
       install("link", row("Screen-number registry", "link https://wiki.example.com/screens")),
       ["registry recorded as link https://wiki.example.com/screens, not opened"])
+green("an autolink registry is a value, not a placeholder",
+      install("autolink", row("Screen-number registry", "link <https://wiki.example.com/screens>")),
+      ["registry recorded as link https://wiki.example.com/screens, not opened"])
+green("an autolink design file is a value, and carries the key",
+      install("autolink-file", row("Design file", f"<https://design.example.com/file/{DOD_FIGMA['file_key']}/Example>")),
+      ["agrees with definition-of-done"])
+green("the bare file key matches definition-of-done's file_key",
+      install("barekey", row("Design file", f"`{DOD_FIGMA['file_key']}`")), ["agrees with definition-of-done"])
 green("the optional row may be absent", install("notools", row("Design-tool skills")),
       ["design-tool skills: not recorded"])
 green("a row of the install's own is ignored",
       install("ownrow", lambda t: t.replace("| Design-tool skills |", "| Call cap | 20 a month |\n| Design-tool skills |")),
       ["11 required values"])
+green("an escaped pipe is part of a value",
+      install("escaped", row("Design-tool skills", r"example-tool \| example-export")),
+      ["design-tool skills: example-tool | example-export"])
+green("an old map inside an HTML comment is not a second map",
+      install("oldcomment", lambda t: t.replace(MAP, "<!--\n" + section(t).replace("Ada Example", "Old Example") + "-->\n\n" + MAP, 1)),
+      ["agrees with definition-of-done"])
+green("a fenced example map is not a second map",
+      install("oldfence", lambda t: t.replace(MAP, "```markdown\n" + section(t) + "```\n\n" + MAP, 1)),
+      ["agrees with definition-of-done"])
+green("with no definition-of-done config.json, nothing is compared, and the line says so",
+      install("nodod", dod="absent"), ["no definition-of-done config.json, nothing compared"])
 
 # A skill link into a copy of the fleet tree, with bytecode writing allowed.
 fleet_copy = os.path.join(TMP, "fleet-copy")
@@ -187,10 +286,7 @@ os.symlink(os.path.join(fleet_copy, ".claude", "skills", "ui-design"), os.path.j
 green("through an agent's skill link, from a copy of the fleet tree, it is OK", good,
       [f"registry doc {REGISTRY}"], check=os.path.join(link_dir, "ui-design", "installation", "check"))
 caches = [d for d, _, _ in os.walk(fleet_copy) if os.path.basename(d) == "__pycache__"]
-print(("[PASS] " if not caches else "[FAIL] ") + "... and it wrote no bytecode into the fleet tree"
-      + ("" if not caches else f" - {caches}"))
-if caches:
-    FAILED.append("no bytecode")
+fact("... and it wrote no bytecode into the fleet tree", not caches, str(caches))
 
 # ------------------------------------------------------------- file, rows
 gone = install("absent")
@@ -203,29 +299,50 @@ for label in REQUIRED:
 red("an empty value is NOT INSTALLED", install("empty", row("Design approver", "")), 2,
     [NOT, "empty: Design approver. Follow"])
 red("a mark that is only a space is NOT INSTALLED", install("emptymark", row("In-build mark", "` `")), 2,
-    [NOT, "empty: In-build mark. Follow"])
+    [NOT, "empty: In-build mark"])
 red("a placeholder value is NOT INSTALLED",
     install("placeholder", row("Implemented page", "<id of page 3, implemented and merged>")), 2,
     [NOT, "still a <placeholder>: Implemented page. Follow"])
 red("a placeholder in the optional row is NOT INSTALLED",
     install("placeholder-opt", row("Design-tool skills", "<their names, or none>")), 2,
     [NOT, "still a <placeholder>: Design-tool skills. Follow"])
-red("a repeated row is NOT INSTALLED",
-    install("repeated", lambda t: t.replace("| Approved page |", "| Drafts page | `1009:1` |\n| Approved page |")),
-    2, [NOT, "repeated: Drafts page. Follow"])
+red("a row repeated in the table is NOT INSTALLED, naming it",
+    install("repeated", lambda t: t.replace("| Approved page |", "| Drafts page | `300:1` |\n| Approved page |")),
+    2, [NOT, "repeated: Drafts page (lines"])
+red("a label in a second table under the heading is NOT INSTALLED, naming it",
+    install("secondtable", lambda t: t + "\n| Value | Setting |\n|---|---|\n| Scratch area | `400:2` |\n"),
+    2, [NOT, "repeated: Scratch area (lines"])
+red("a label in a table elsewhere in the file is NOT INSTALLED, naming it",
+    install("elsewhere", before_map("## Notes\n\n| Value | Setting |\n|---|---|\n| Design file | https://design.example.com/file/OTHER/x |")),
+    2, [NOT, "repeated: Design file (lines"])
 
 # ------------------------------------------------------------------ table
 red("no '## Design map' heading is NO VERDICT",
-    install("noheading", lambda t: t.replace("## Design map", "## Design table")), 1, [NOV, "no '## Design map' heading"])
-red("the heading only inside a fence is NO VERDICT",
-    install("fenced", lambda t: t.replace("## Design map", "```markdown\n## Design map") + "```\n"), 1,
-    [NOV, "no '## Design map' heading"])
+    install("noheading", lambda t: t.replace(MAP, "## Design table")), 1, [NOV, "no '## Design map' heading"])
+red("the map only inside a fence is NO VERDICT",
+    install("fenced", hide_map(lambda s: "```markdown\n" + s + "```\n")), 1, [NOV, "no '## Design map' heading"])
+red("the map only inside an HTML comment is NO VERDICT",
+    install("commented", hide_map(lambda s: "<!--\n" + s + "-->\n")), 1, [NOV, "no '## Design map' heading"])
+red("the map only as indented code is NO VERDICT",
+    install("indented", hide_map(lambda s: "".join("    " + l if l.strip() else l for l in s.splitlines(True)))),
+    1, [NOV, "no '## Design map' heading"])
+red("the table only inside an HTML comment is NO VERDICT",
+    install("tablecomment", lambda t: t.replace("| Value | Setting |", "<!--\n| Value | Setting |", 1) + "-->\n"),
+    1, [NOV, "no pipe table"])
+red("the table only as indented code is NO VERDICT",
+    install("tableindented", lambda t: re.sub(r"^\|", "    |", t, flags=re.M)), 1, [NOV, "no pipe table"])
 red("prose where the table was is NO VERDICT",
     install("prose", lambda t: "\n".join(l for l in t.split("\n") if not l.startswith("|"))), 1, [NOV, "no pipe table"])
 red("no separator row is NO VERDICT",
     install("noseparator", lambda t: t.replace("|---|---|\n", "")), 1, [NOV, "no pipe table"])
 red("two '## Design map' headings are NO VERDICT",
     install("twoheadings", lambda t: t + "\n## Design map\n\nnone\n"), 1, [NOV, "2 '## Design map' headings"])
+red("a row with an unescaped pipe in its value is NO VERDICT, naming the row",
+    install("extracell", row("Design-tool skills", "example-tool | example-export")), 1,
+    [NOV, "row 'Design-tool skills'", "3 cells"])
+red("a header of three columns is NO VERDICT",
+    install("threecols", lambda t: t.replace("| Value | Setting |\n|---|---|", "| Value | Setting | Note |\n|---|---|---|")),
+    1, [NOV, "header", "3 cells"])
 undec = install("undecodable")
 with open(os.path.join(undec, REL_CTX), "ab") as f:
     f.write(b"\xff\xfe\n")
@@ -244,7 +361,11 @@ red("a doc registry naming a missing file is NOT INSTALLED, naming it",
     [NOT, "docs/no-such-registry.md", "cannot be read"])
 empty_doc = install("doc-empty", row("Screen-number registry", "doc docs/empty-registry.md"))
 open(os.path.join(empty_doc, "docs", "empty-registry.md"), "w").close()
-red("a doc registry naming an empty file is NOT INSTALLED", empty_doc, 2, [NOT, "empty-registry.md is empty"])
+red("a doc registry naming an empty file is NOT INSTALLED", empty_doc, 2, [NOT, "empty-registry.md holds no text"])
+blank_doc = install("doc-blank", row("Screen-number registry", "doc docs/blank-registry.md"))
+with open(os.path.join(blank_doc, "docs", "blank-registry.md"), "w") as f:
+    f.write(" \n\t\n" * 20000)  # past one read chunk, so the scan is proven to keep going
+red("a doc registry of only whitespace is NOT INSTALLED", blank_doc, 2, [NOT, "blank-registry.md holds no text"])
 red("a doc registry naming a directory is NOT INSTALLED",
     install("doc-dir", row("Screen-number registry", "doc docs")), 2, [NOT, "'doc docs'", "cannot be read"])
 with open(os.path.join(TMP, "outside-registry.md"), "w") as f:
@@ -256,6 +377,27 @@ red("a doc registry at an absolute path (the file exists) is NOT INSTALLED",
     install("doc-absolute", row("Screen-number registry", "doc " + os.path.join(TMP, "outside-registry.md"))), 2,
     [NOT, "outside the install repository"])
 
+# ------------------------------------------------------------------ pairs
+fact("the check pairs five design-map rows with definition-of-done keys", len(PAIRS) == 5, repr(PAIRS))
+for label, keys in PAIRS:
+    dotted = "figma." + ".".join(keys)
+    others = [f"{o} differs" for o, _ in PAIRS if o != label]
+    red(f"{dotted} differing from the {label!r} row is NOT INSTALLED naming that pair alone",
+        install("pair-" + re.sub(r"\W", "", label), dod=setkey(keys, "EXAMPLE-DIFFERENT")), 2,
+        [NOT, f"{label} differs from definition-of-done's {dotted}"], others)
+red("a link carrying the key only inside a longer path segment is a mismatch",
+    install("pair-substring", row("Design file", f"https://design.example.com/file/{DOD_FIGMA['file_key']}X/Example")),
+    2, [NOT, "Design file differs from definition-of-done's figma.file_key"])
+red("a mark written without backticks loses its trailing space, and is a mismatch",
+    install("pair-space", row("In-build mark", DOD_FIGMA["in_build_marker_prefix"].strip())),
+    2, [NOT, "In-build mark differs from definition-of-done's figma.in_build_marker_prefix"])
+red("a null figma.file_key (no design file) beside a design map is NOT INSTALLED",
+    install("pair-null", dod=setkey(("file_key",), None)), 2, [NOT, "figma.file_key is null"])
+red("a definition-of-done config.json that is not JSON is NO VERDICT",
+    install("pair-notjson", dod="{ not json"), 1, [NOV, "definition-of-done"])
+red("a definition-of-done config.json missing a shared key is NO VERDICT",
+    install("pair-nokey", dod=dropkey(("pages", "current"))), 1, [NOV, "figma.pages.current"])
+
 # ----------------------------------------------------------------- context
 bare = os.path.join(TMP, "no-manifest")
 os.makedirs(bare)
@@ -264,22 +406,31 @@ red("an argument is NO VERDICT (usage)", good, 1, [NOV, "usage"], argv=["--onlin
 
 # ---------------------------------------------------------------- template
 with open(INSTRUCTION, encoding="utf-8") as f:
-    blocks = re.findall(r"^```markdown\n(.*?)^```$", f.read(), re.M | re.S)
-template = next((b for b in blocks if b.startswith("## Design map\n")), None)
+    instruction = f.read()
+blocks = re.findall(r"^```markdown\n(.*?)^```$", instruction, re.M | re.S)
+template = next((b for b in blocks if b.startswith(MAP + "\n")), None)
 if template is None:
-    print("[FAIL] INSTRUCTION.md carries a ```markdown block starting '## Design map'")
-    FAILED.append("template present")
+    fact("INSTRUCTION.md carries a ```markdown block starting '## Design map'", False)
 else:
     table = [l for l in template.split("\n") if l.startswith("|")]
-    got = [l.split("|")[1].strip() for l in table[2:]]
-    same = got == LABELS
-    print(("[PASS] " if same else "[FAIL] ") + "INSTRUCTION.md's template carries exactly the check's labels, in order"
-          + ("" if same else f" - template {got}, check {LABELS}"))
-    if not same:
-        FAILED.append("template labels")
-    unedited = install("template", lambda t: t[:t.index("## Design map")] + template)
+    pairs = [[c.strip() for c in l.split("|")[1:-1]] for l in table[2:]]
+    got = [p[0] for p in pairs]
+    fact("INSTRUCTION.md's template carries exactly the check's labels, in order", got == LABELS,
+         f"template {got}, check {LABELS}")
+    loose = [label for label, value in pairs if not re.fullmatch(r"`?<[^<>@]+>`?", value)]
+    fact("every value in the template is wholly a <placeholder>", not loose, f"not a placeholder: {loose}")
+    reg = dict((p[0], p[1]) for p in pairs).get("Screen-number registry", "")
+    fact("the registry's placeholder names no form a fragment of it could be copied as",
+         not re.search(r"\b(?:doc|design|link)\s+\S", reg, re.I), reg)
+    unedited = install("template", lambda t: t[:t.index(MAP)] + template)
     red("the template written unedited is NOT INSTALLED, every row a placeholder", unedited, 2,
         [NOT, f"still a <placeholder>: {', '.join(LABELS)}. Follow"])
+m = re.search(r"^\| Design map row \| definition-of-done `config.json` key \|\n\|[-|]+\|\n((?:\|.*\|\n)+)",
+              instruction, re.M)
+listed = [tuple(c.strip().strip("`") for c in l.split("|")[1:3]) for l in m.group(1).splitlines()] if m else []
+fact("INSTRUCTION.md's definition-of-done table names exactly the check's pairs",
+     bool(listed) and listed == [(label, "figma." + ".".join(keys)) for label, keys in PAIRS],
+     f"{listed} vs {PAIRS}")
 
 print()
 if CONTROL_PASSED:

@@ -206,3 +206,6 @@ design-tool skills.
 
 **Steps:** `installation/INSTRUCTION.md`; no step is per agent.
 `installation/check` reports not configured until every value is there.
+Where the install also takes definition-of-done, five of the values are copied
+from its `config.json`, never asked twice, and changed together; the check
+compares them.
