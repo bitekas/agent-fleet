@@ -191,9 +191,9 @@ or `##` heading outside fenced code: the section runs to the end of the file,
 and adding it moves no section number. It takes one of two forms.
 
 **Form A, nothing to install**: one paragraph whose first sentence is exactly
-`Nothing to install.`, and at most one more sentence (naming an optional
-`CONTEXT.md` an install may write, say). Only for a skill with no
-`installation/` directory, no `config.example.json`, and
+`Nothing to install.`, optionally followed in the same paragraph by a short
+note (naming an optional `CONTEXT.md` an install may write, say). Only for a
+skill with no `installation/` directory, no `config.example.json`, and
 `requires_install: false`.
 
 **Form B, everything else**: three paragraphs, each opening with its field, in
@@ -243,7 +243,9 @@ through `fleetlib.skills` (`lib/fleetlib/skills.py`, the one parser of the
 format). Form A reads as nothing to install. For a form-B skill with no
 `installation/check`, the backticked `CONTEXT.md` and `config.json` in Writes
 are the files whose presence is its install state, so a name taken out of its
-backticks, or a field marker reworded, changes what the command reports. `fleet
+backticks, or a field marker reworded, changes what the command reports. A
+`config.json` still equal to its `config.example.json`, comments aside, reads
+as not configured: it holds the placeholders, not the install's values. `fleet
 skills --select` prints the section verbatim for each skill it adds: it is what
 an installer reads first.
 
