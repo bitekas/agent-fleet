@@ -67,9 +67,10 @@ Install agent-fleet from https://github.com/bitekas/agent-fleet following its SE
 Claude Code follows the `install-agent-fleet` skill. It asks where the fleet
 will run (an AWS or Google Cloud instance, or a physical Linux or macOS
 machine), and from your computer, over SSH, gets that machine ready, installs
-what it needs and the fleet, asks you only what it cannot find out, shows you
-the change to your project before committing it, and offers to add your first
-agent. `SETUP.md`, "What only you do", lists the few steps that stay with you.
+what it needs and the fleet, asks you which of the fleet's skills to install
+and only what it cannot find out, follows each chosen skill's install steps,
+shows you the change to your project before committing it, and offers to add
+your first agent. `SETUP.md`, "What only you do", lists the few steps that stay with you.
 Later, say "Upgrade agent-fleet following ~/agent-fleet/SETUP.md".
 
 Without Claude Code, on the machine the fleet will run on, with nothing
