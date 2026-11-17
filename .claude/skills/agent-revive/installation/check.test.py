@@ -160,7 +160,10 @@ def run(w, **extra):
     env = dict(w["env"], **extra)
     p = subprocess.run(["bash", w["check"], w["config"]], capture_output=True, text=True, env=env,
                        stdin=subprocess.DEVNULL, timeout=120)
-    lines = [ln.strip() for ln in (p.stdout + "\n" + p.stderr).splitlines() if ln.strip()]
+    # The verdict is stdout's last non-empty line, stderr's only when stdout is
+    # empty: the rule `fleet check-all` and `fleet skills` read a check by.
+    lines = ([ln.strip() for ln in p.stdout.splitlines() if ln.strip()]
+             or [ln.strip() for ln in p.stderr.splitlines() if ln.strip()])
     return p.returncode, (lines[-1] if lines else ""), p.stdout + p.stderr
 
 
