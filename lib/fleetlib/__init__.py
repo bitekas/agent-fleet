@@ -9,6 +9,8 @@ Modules:
   transports  the chat-transport registry: every transport.json in the fleet
               tree, validated.
   expand      config-value expansion: ~, $VAR, ${VAR}, ${VAR:-default}.
+  skills      a skill's `## Install` section: the one reader of its format,
+              shared by the install-section gate and `fleet skills`.
 
 A fleet script at .claude/skills/<skill>/<script> imports it with
 
