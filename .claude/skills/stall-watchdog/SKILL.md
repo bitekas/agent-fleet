@@ -394,8 +394,10 @@ For `CONTEXT.md`: which sessions are watched, where their files live, and that
 decision. Only a person with root can install the unit.
 
 **Writes:** `CONTEXT.md` and `installation/.install-state.json` (keyed by host, then
-by config path); per watched session, `<home>/config/stall-watchdog.json` (mode 600,
-outside every repository), its state directory, and a system unit:
+by config path); per watched session, its config, root's
+`/etc/agent-fleet/stall-watchdog/<agent-name>.json` where an administrator installs
+the unit, else `<home>/config/stall-watchdog.json` (mode 600, outside every
+repository); its state directory; and a system unit:
 `claude-agent-<agent>-stall-watchdog.service` in `/etc/systemd/system/`, or on macOS
 a LaunchDaemon in `/Library/LaunchDaemons/`.
 
