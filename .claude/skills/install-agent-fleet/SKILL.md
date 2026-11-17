@@ -424,19 +424,21 @@ before an agent exists. The target's agents then clone it from the remote.
      `attribution` object already there keeps its other keys and gets these two
      set to `""`, and every other key of the file stays as it is; `python3 -m
      json.tool` on it, on the target, proves it still parses.
-   - **The manifest**: `skills` is never edited by hand. First, on the
-     target, `cd <work> && fleet skills --select <names>`, `<names>` question
-     3's selection comma-separated, every name of a group it took included: it
+   - **The manifest**: in `.claude/fleet.json`, every placeholder and every
+     example value except `skills` is replaced with step 3's answers, the
+     `transports` of question 2 among them. `fleet.repo` is the URL the fleet
+     was cloned from; `fleet.min_tag` is the tag step 5 checked out, the
+     release this install was set up against. The `_comment` keys are
+     documentation: keep or delete them. `skills` is never edited by hand:
+     once the edited file is back on the target, and never before, `cd <work>
+     && fleet skills --select <names>` [target], `<names>` question 3's
+     selection comma-separated, every name of a group it took included. It
+     reads the required skills from the `transports.enabled` just written,
      replaces only the `skills` array, prints what it added and removed and
      the `## Install` section of each skill it added, and refuses (exit 2,
      nothing changed) a name the fleet has no skill for or a list without a
-     required skill. Then, in `.claude/fleet.json` copied here, every
-     placeholder and every example value is replaced with step 3's answers.
-     `fleet.repo` is the URL
-     the fleet was cloned from; `fleet.min_tag` is the tag step 5 checked out,
-     the release this install was set up against. The `_comment` keys are
-     documentation: keep or delete them. `fleet settings`, run in `<work>` on
-     the target, exits 0; a refusal names its key.
+     required skill. Then `fleet settings`, run in `<work>` on the target,
+     exits 0; a refusal names its key.
 5. **Each selected skill's install** [target], in `<work>`: for each skill
    in `skills` that `fleet skills` there reports `not configured`, follow the
    `## Install` section of its `SKILL.md` (SETUP section 5 is the manual
@@ -514,9 +516,8 @@ before an agent exists. The target's agents then clone it from the remote.
    <scratch>/commit-message.txt`, and check again.
    Push on the same OK: the target's agents clone the project from its remote,
    so the commit has to reach the branch they track before an agent is added.
-8. **Clean up**: the patch here, by its literal path, and `<work>` on the
-   target (`rm -rf`, by its literal path) once step 8 (Check) has run `fleet
-   skills` in it.
+8. **Clean up**: the patch here, by its literal path. `<work>` stays on the
+   target for step 8 (Check), which removes it.
 
 ## 7. Agent homes that already exist [target]
 
@@ -532,7 +533,9 @@ status <agent-name>` for each, read by step 8's rule.
 
 - a credential the person supplies - named by its path, never its value;
 - a value, a unit or a record that waits for `/adding-an-agent`;
-- a step SETUP lists under "What only you do", with the exact prompt for it.
+- a step SETUP lists under "What only you do", with the exact prompt for it;
+- a value an unattended run did not ask (step 3 question 10), which the
+  closing summary lists with who supplies it.
 
 Then `fleet skills` in `<work>`, and `fleet skills <agent-name>` for each
 agent step 7 linked (the checks then run with that agent's environment, as
@@ -566,6 +569,14 @@ can change, such as its own `~/.local/bin`, leaves the watchdog unprotected and
 FAILs. A tmux the administrator installed (the distribution's `/usr/bin/tmux`,
 Homebrew's installed as the administrator) passes.
 
+**Last, remove `<work>`**, once the `fleet skills` run in it above is final and
+nothing in this step is run again, with `<work>` written out as the literal
+path step 6 item 2 made, never a variable:
+
+```bash
+ssh <host> 'rm -rf <work>'
+```
+
 ## 9. Hand off, then close [here]
 
 1. **Offer `/adding-an-agent`.** It owns every step of an agent - the
@@ -593,11 +604,12 @@ Homebrew's installed as the administrator) passes.
    never silent; none when nothing is shared or there is no pool - and what is
    left, each item with who does it and the exact command or file. What is
    left includes every selected skill that `fleet skills` still reports `not
-   configured` - `fleet skills <agent-name>` run again for an agent item 1
-   added, else step 8's run - each with its reason line, the step that is left
-   and who does it: a person's step with its exact instructions, a per-agent
-   step with the agent it waits for, and a value an unattended run did not ask
-   (question 10) with who supplies it. Say that a session opened in the
+   configured` - `ssh <host> '~/.local/bin/fleet skills <agent-name>'` run
+   again for an agent item 1 added, else step 8's run in `<work>` - each with
+   its reason line, the step that is left and who does it: a person's step
+   with its exact instructions, a per-agent step with the agent it waits for,
+   and a value an unattended run did not ask (question 10) with who supplies
+   it. Say that a session opened in the
    project on a machine without the fleet, or under a config directory the
    fleet's skills are not linked for, shows the session check's notice, and
    that SETUP's "Your computer shows the fleet's notice" links them here. Its
@@ -660,9 +672,9 @@ named; the questions are here.
    set again in the staged file first. With no administrator (user units) the
    same steps run without root. Then `verify-privileges.py` as in step 8.
 6. `fleet status`, `fleet skills <agent-name>`, and `fleet settings` in an
-   agent's checkout of the project: a newer fleet that refuses a manifest key names
-   it, a selected skill the new release asks more of is `not configured`, its
-   Install section saying what, and a charter pointer
+   agent's checkout of the project [target]: a newer fleet that refuses a
+   manifest key names it, a selected skill the new release asks more of is
+   `not configured`, its Install section saying what, and a charter pointer
    (`/<skill> step N`) that a renumbered skill no longer resolves is a `DRIFT`
    row naming the charter and its line, which the charter's owner fixes.
    `<clone>` here moves to the same tag [here].
@@ -685,7 +697,7 @@ step, before the diff is shown; then the diff and the commit as step 6 items 6
 and 7, and the patch and `<work>` removed by their literal paths. Once the
 commit is on the branch the agents track, `fleet link <agent-name>` for each
 agent [target], then each new skill's per-agent steps (its Install section
-says which), and `fleet status` and `fleet skills <agent-name>`.
+says which), and `fleet status` and `fleet skills <agent-name>` [target].
 
 ## Install
 
