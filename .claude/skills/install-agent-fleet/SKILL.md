@@ -89,7 +89,8 @@ everything: it is its own message, headed `Read back before install` and sent
 before step 3, even in an unattended session where nobody will answer it, and
 the closing summary lists the same values again as taken from the request. A
 request that answers everything then runs to the end without stopping, which is
-how an unattended session runs this skill.
+how an unattended session runs this skill; a skill's value such a request does
+not carry does not stop it either (step 3 question 10).
 
 **Secrets: two ways in, and never echoed.** Every secret the install needs - a
 cloud credential, a `sudo` password, the macOS agents user's password, a
@@ -279,18 +280,25 @@ this order:
    agents then run as LaunchDaemons and sign in only with a token or an API
    key; say so when asking.
 10. **The selected skills' values** -> each selected skill's install context
-    (step 6 item 5). For each skill question 3 selected, read its `## Install`
-    section (`<clone>/.claude/skills/<skill>/SKILL.md`) and ask each value its
-    `**Asks for:**` names that nothing answers already: not the request, not an
-    earlier question of this step, not the host settings step 2 read, and not
-    the skill's install context on a branch that already carries one. A skill
-    `fleet skills` shows with INSTALL `nothing`, or with STATE `configured`, is
-    not asked about. One value per message, each numbered in the running total,
-    which question 3's answer grows. Two kinds of value are not questions: one
-    that belongs to one agent - its bot, its token, its key, its home - waits
-    for `/adding-an-agent`; one only a person can produce later - a token made
-    in a vendor's console, a sign-in - is a person step, which step 6 item 5
-    presents with its exact instructions.
+    (step 6 item 5). For each skill question 3 selected whose `## Install`
+    section (`<clone>/.claude/skills/<skill>/SKILL.md`) is not `Nothing to
+    install.`, ask each value its `**Asks for:**` names that nothing answers
+    already: not the request, not an earlier question of this step, not the
+    host settings step 2 read, and not the skill's install context on the
+    project's branch - the files under `.claude/skills/<skill>/` in
+    `<project>`, where a value present is not asked. That is read from those
+    files, never from a `fleet skills` run here: its checks are keyed to the
+    machine they run on, so here they measure this computer. One value per
+    message, each numbered in the running total, which question 3's answer
+    grows. Two kinds of value are not questions: one that belongs to one agent
+    - its bot, its token, its key, its home - waits for `/adding-an-agent`; one
+    only a person can produce later - a token made in a vendor's console, a
+    sign-in - is a person step, which step 6 item 5 presents with its exact
+    instructions. **A value neither the request nor the install context
+    answers is asked when someone can answer it.** In an unattended run it is
+    not asked: the install goes on without it, the skill stays `not
+    configured`, and the closing summary lists that value under what is left,
+    with who supplies it.
 
 **`upstream`** is for an install whose agents commit to the fleet repository
 itself (SETUP section 4). Remove the block unless the request says they will;
@@ -430,28 +438,35 @@ before an agent exists. The target's agents then clone it from the remote.
      documentation: keep or delete them. `fleet settings`, run in `<work>` on
      the target, exits 0; a refusal names its key.
 5. **Each selected skill's install** [target], in `<work>`: for each skill
-   in `skills` that `fleet skills` there reports neither `configured` nor
-   `nothing to install`, follow the `## Install` section of its `SKILL.md`
-   (SETUP section 5 is the manual form). Write every file its `**Writes:**`
-   names (`fleet where <skill>` in `<work>` names the install context a bare
-   `CONTEXT.md` or `config.json` goes in), with values from the host settings,
-   the manifest and step 3; the `agent` skill's `<project-dir>` is the
-   project's directory name. Then do the install-wide steps its `**Steps:**`
-   names; its `installation/INSTRUCTION.md` opens by saying which of its steps
-   are per agent. A step only a person can do - a token made in a vendor's
-   console, a sign-in - is presented to the person with its exact
-   instructions, and the install goes on without waiting for it. A per-agent
-   step waits for `/adding-an-agent`, and so does a value that belongs to one
-   agent - its bot, its token, its key, its home. A value the steps need that
-   step 3 did not ask is one more question, asked as in step 3.
-   `<clone>/tests/fixtures/install/` shows each file's shape with synthetic
-   values; never copy a value from it. A "Record the install" step records the
-   machine it runs on, which is why this item runs on the target. Then run
-   `fleet skills` in `<work>` again. A skill stays `not configured` until its
-   `installation/check`, or the presence of the files its Install section
-   writes, passes: nothing marks a skill configured by hand, and no file
-   records it, because the state is discovered again on every run. Each skill
-   still `not configured` goes to step 8 and the closing summary.
+   in `skills` that `fleet skills` there reports `not configured`, follow the
+   `## Install` section of its `SKILL.md` (SETUP section 5 is the manual
+   form), doing only what is missing. Write each install-wide file its
+   `**Writes:**` names that `<work>` does not have yet (`fleet where <skill>`
+   in `<work>` names the install context a bare `CONTEXT.md` or `config.json`
+   goes in), with values from the host settings, the manifest and step 3; a
+   file already there is kept as it stands, and the `agent` skill's
+   `<project-dir>` is the project's directory name. Then do the install-wide
+   steps its `**Steps:**` names whose result is missing; its
+   `installation/INSTRUCTION.md` opens by saying which of its steps are per
+   agent. A skill whose remaining reason line is a per-agent leg is not
+   redone: that leg cannot pass before the agent exists, and it is
+   `/adding-an-agent`'s, which checks it with `fleet skills <agent-name>`. A
+   per-agent step waits for `/adding-an-agent` too, and so does a value that
+   belongs to one agent - its bot, its token, its key, its home. A step only a
+   person can do - a token made in a vendor's console, a sign-in - is
+   presented to the person with its exact instructions, and the install goes
+   on without waiting for it. A value the steps need that step 3 did not ask
+   follows question 10's rule: it is asked when someone can answer it, and in
+   an unattended run the skill stays `not configured` and the value goes to
+   the closing summary. `<clone>/tests/fixtures/install/` shows each file's
+   shape with synthetic values; never copy a value from it. A "Record the
+   install" step records the machine it runs on, which is why this item runs
+   on the target. Then run `fleet skills` in `<work>` again. A skill stays
+   `not configured` until its `installation/check`, or the presence of the
+   files its Install section writes, passes: nothing marks a skill configured
+   by hand, and no file records it, because the state is discovered again on
+   every run. Each skill still `not configured` goes to step 8 (Check) and the
+   closing summary.
 6. **Show the diff** [here]: `ssh <host> 'git -C <work> add -A && git -C
    <work> status --short && git -C <work> diff --cached'`, printed WHOLE in the
    session before step 7's question - never a file list, a summary or its
@@ -500,8 +515,8 @@ before an agent exists. The target's agents then clone it from the remote.
    Push on the same OK: the target's agents clone the project from its remote,
    so the commit has to reach the branch they track before an agent is added.
 8. **Clean up**: the patch here, by its literal path, and `<work>` on the
-   target (`rm -rf`, by its literal path) once step 8 has run `fleet skills`
-   in it.
+   target (`rm -rf`, by its literal path) once step 8 (Check) has run `fleet
+   skills` in it.
 
 ## 7. Agent homes that already exist [target]
 
@@ -578,10 +593,11 @@ Homebrew's installed as the administrator) passes.
    never silent; none when nothing is shared or there is no pool - and what is
    left, each item with who does it and the exact command or file. What is
    left includes every selected skill that `fleet skills` still reports `not
-   configured` - run again in an agent's checkout of the project when item 1
-   added one, else step 8's run - each with its reason line, the step that is
-   left and who does it: a person's step with its exact instructions, a
-   per-agent step with the agent it waits for. Say that a session opened in the
+   configured` - `fleet skills <agent-name>` run again for an agent item 1
+   added, else step 8's run - each with its reason line, the step that is left
+   and who does it: a person's step with its exact instructions, a per-agent
+   step with the agent it waits for, and a value an unattended run did not ask
+   (question 10) with who supplies it. Say that a session opened in the
    project on a machine without the fleet, or under a config directory the
    fleet's skills are not linked for, shows the session check's notice, and
    that SETUP's "Your computer shows the fleet's notice" links them here. Its
