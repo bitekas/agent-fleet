@@ -29,7 +29,10 @@ file that is the same on every host leaves a per-host record nothing to say
 
 Who gives which value, and the `SKILL.md` section each one serves:
 
-- **The design file**: its key, or its link. From whoever owns the file.
+- **The design file**: its key, and optionally its link. From whoever owns
+  the file. The map writes the key first, as one word, then the link if there
+  is one, in any form (`<key> https://...`, `<key> [name](https://...)`). Only
+  the key is read; the link is for people and is never parsed.
 - **The three stage pages and the scratch area, by id**: the page for 1
   drafts, 2 approved and ready to build, and 3 implemented and merged (section
   1), and the scratch area tooling writes go to (section 6). Each id is read in
@@ -69,10 +72,12 @@ INSTALLED.
 | In-build mark | `figma.in_build_marker_prefix` |
 | Superseded mark | `figma.deletion_marker_prefix` |
 
-The Design file row agrees with `figma.file_key` when it is the key itself, or
-a link that carries the key as one whole path segment
-(`https://<host>/file/<key>/<name>`); the other four agree only character for
-character, a mark's trailing space included.
+The Design file row's first word, its key, agrees with `figma.file_key`, and
+a page id with its key, when they are the same with the spaces around them
+ignored on both sides. A mark agrees only character for character, its
+trailing space included, so the table writes a mark inside backticks with the
+space before the closing backtick, and `check` reads every character between
+the backticks as the mark.
 
 ## 2. Write `CONTEXT.md`
 
@@ -84,8 +89,9 @@ test -e "$CTX/CONTEXT.md" || install -m 644 /dev/null "$CTX/CONTEXT.md"
 Add this section to `$CTX/CONTEXT.md`, keeping whatever else the file says, and
 replace every `<placeholder>`, copying the five values definition-of-done
 holds from its `config.json` (step 1). Write a mark inside backticks, so a
-trailing space survives as part of it. The first paragraph under the heading is the
-notice that `check` parses the table: keep it beside the table.
+trailing space survives as part of it: `check` reads every character between
+the backticks. The first paragraph under the heading is the notice that `check`
+parses the table: keep it beside the table.
 
 ```markdown
 ## Design map
@@ -97,7 +103,7 @@ VERDICT.
 
 | Value | Setting |
 |---|---|
-| Design file | <the design file's key or link> |
+| Design file | <the design file's key, then optionally its link> |
 | Drafts page | <id of page 1, drafts> |
 | Approved page | <id of page 2, approved and ready to build> |
 | Implemented page | <id of page 3, implemented and merged> |

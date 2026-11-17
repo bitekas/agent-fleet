@@ -190,15 +190,15 @@ the **code-change authorizer** on building it.
 
 ## Install
 
-**Asks for:** the design file (its key or link); the three stage pages by id
-(1 drafts, 2 approved and ready to build, 3 implemented and merged) and the
-scratch area by id; the two literal marks, the in-build mark and the mark for a
-frame a new design supersedes or drops; where the screen-number registry
-lives, in one of three forms: a document in the install repository (its
-repository-relative path), a page or frame in the design file (its id), or
-another system (its link); who holds the design approver, design-file owner
-and code-change authorizer roles; and, optionally, the install's own
-design-tool skills.
+**Asks for:** the design file's key, and optionally its link; the three stage
+pages by id (1 drafts, 2 approved and ready to build, 3 implemented and merged)
+and the scratch area by id; the two literal marks, the in-build mark and the
+mark for a frame a new design supersedes or drops; where the screen-number
+registry lives, in one of three forms: a document in the install repository
+(its repository-relative path), a page or frame in the design file (its id), or
+another system (its link); who holds the design approver, design-file owner and
+code-change authorizer roles; and, optionally, the install's own design-tool
+skills.
 
 **Writes:** `CONTEXT.md` in the install context
 (`fleet where ui-design CONTEXT.md`): the design map, as the table

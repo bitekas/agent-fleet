@@ -16,7 +16,7 @@ VERDICT.
 
 | Value | Setting |
 |---|---|
-| Design file | https://design.example.com/file/ExAmPlEfIlEkEy0000000/Example |
+| Design file | `ExAmPlEfIlEkEy0000000` https://design.example.com/file/ExAmPlEfIlEkEy0000000/Example |
 | Drafts page | `300:1` |
 | Approved page | `200:1` |
 | Implemented page | `100:1` |

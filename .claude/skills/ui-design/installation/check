@@ -85,23 +85,39 @@ red) and what deleting the leg would let through:
             `design` and `link` are checked for FORM ONLY, because nothing on a
             host opens a design-file node or another system without that tool's
             own access; the OK line says the registry was recorded, not opened.
+  key       The Design file row has ONE form, whether or not the install has
+            definition-of-done: the file's KEY as its first word (one enclosing
+            code span allowed), then optionally its link in any form. The link
+            is for people and is NEVER PARSED: a URL parse read a URL of another
+            file whose path carries the key, and an unrelated host carrying it,
+            as the same file, and read a Markdown link or a link with no scheme
+            as a different one. A first word that is not a key (it holds a
+            slash, a bracket, an angle bracket or a backtick, as a link does)
+            is NOT INSTALLED. Controls: a URL, a Markdown link and an autolink
+            with no key first, with and without definition-of-done's config.
   pairs     Where definition-of-done's config.json exists in the install
             context, five of its values are the same facts as five rows here
             (PAIRS), and INSTRUCTION.md says they are copied from it and changed
             together. Each pair is compared and a difference is NOT INSTALLED
-            naming the pair. The Design file row matches figma.file_key when the
-            value IS the key, or is a link one of whose path segments is the
-            key, whole: a link names the file by its key, and a substring match
-            would accept a different file whose key starts the same. The other
-            four compare exactly, a mark's trailing space included. A null
-            file_key says the project has no design file, which a design map
-            contradicts: NOT INSTALLED. A config that is not a JSON object, or
-            lacks one of the five keys, is NO VERDICT: definition-of-done's own
-            checks own that file's shape, and a pair not compared is not a pair
-            that agrees. Controls: each of the five changed in turn, the key
-            inside a longer segment, a mark without its trailing space, a null
-            file_key (NOT INSTALLED); the file not JSON, a key missing (NO
-            VERDICT); the file absent (OK, saying nothing was compared).
+            naming the pair. The key and the two page ids compare with
+            whitespace stripped on BOTH sides, since a space around an id
+            names no other node; stripping one side only refused a correct
+            pair and accepted a padded one. The two marks compare EXACTLY, a
+            trailing space included, because a mark is a literal prefix of a
+            frame name and the space is part of it; the map writes a mark
+            inside backticks, and the check reads every character between them.
+            A null file_key says the project has no design file, which a
+            design map contradicts: NOT INSTALLED. A config that is not a JSON
+            object, or lacks one of the five keys, is NO VERDICT:
+            definition-of-done's own checks own that file's shape, and a pair
+            not compared is not a pair that agrees. Controls: each of the five
+            changed in turn, another key first with a link carrying the right
+            one, a key that only starts the same, a mark without its trailing
+            space or with one space too many, a null file_key (NOT INSTALLED);
+            the file not JSON, a key missing (NO VERDICT); the file absent (OK,
+            saying nothing was compared). Green controls: the key followed by a
+            Markdown link, an autolink or a link with no scheme; spaces around
+            a key or a page id on either side.
   version   SKILL.md's `version` is printed in the OK line; an unreadable one is
             NO VERDICT. Control: check.test.py compares the printed version with
             SKILL.md's.
@@ -122,7 +138,6 @@ import json
 import os
 import re
 import sys
-from urllib.parse import urlsplit
 
 sys.dont_write_bytecode = True  # the fleet tree is read-only on a host; write nothing into it
 # realpath, never abspath: reached through an agent's skill link, abspath is the
@@ -155,15 +170,20 @@ ROWS = (
     ("Code-change authorizer", True),
     ("Design-tool skills", False),
 )
-# The rows that are the same facts as definition-of-done's config.json, with the
-# key under its `figma` block. check.test.py holds INSTRUCTION.md's table to it.
+# The rows that are the same facts as definition-of-done's config.json: the key
+# under its `figma` block, and how the two compare ("key": the row's first word,
+# both sides stripped; "id": both sides stripped; "mark": exactly).
+# check.test.py holds INSTRUCTION.md's table to it.
 PAIRS = (
-    ("Design file", ("file_key",)),
-    ("Approved page", ("pages", "incoming")),
-    ("Implemented page", ("pages", "current")),
-    ("In-build mark", ("in_build_marker_prefix",)),
-    ("Superseded mark", ("deletion_marker_prefix",)),
+    ("Design file", ("file_key",), "key"),
+    ("Approved page", ("pages", "incoming"), "id"),
+    ("Implemented page", ("pages", "current"), "id"),
+    ("In-build mark", ("in_build_marker_prefix",), "mark"),
+    ("Superseded mark", ("deletion_marker_prefix",), "mark"),
 )
+DESIGN_FILE = "Design file"
+KEY_WORD = re.compile(r"[^\s\[\]()<>/`]+")
+LEADING_SPAN = re.compile(r"(`+)(.+?)\1(?=\s|$)")
 REGISTRY = "Screen-number registry"
 TOOL_SKILLS = "Design-tool skills"
 FORMS = {
@@ -296,6 +316,15 @@ def unwrap(value):
     return m.group(1) if m else value
 
 
+def file_key(value):
+    """The Design file row's key: its first word, one enclosing code span removed
+    and stripped, or None when that word is not a key (a link written first)."""
+    value = value.strip()
+    m = LEADING_SPAN.match(value)
+    word = m.group(2).strip() if m else (value.split(None, 1) or [""])[0]
+    return word if KEY_WORD.fullmatch(word) else None
+
+
 def registry_leg(value, faults):
     """The registry's note for the OK line, or None with the fault appended."""
     word, _, arg = unwrap(value).partition(" ")
@@ -353,7 +382,7 @@ def dod_figma():
     figma = cfg.get("figma") if isinstance(cfg, dict) else None
     if not isinstance(figma, dict):
         return None, f"{path} has no figma block"
-    for _, keys in PAIRS:
+    for _, keys, _ in PAIRS:
         d = figma
         for k in keys:
             if not isinstance(d, dict) or k not in d:
@@ -370,24 +399,23 @@ def pairs_leg(values, faults):
         return ("nv", f"definition-of-done's config.json could not be compared: {why}")
     if figma is None:
         return ("ok", "no definition-of-done config.json, nothing compared")
-    for label, keys in PAIRS:
+    for label, keys, how in PAIRS:
         if label not in values:
             continue  # its own fault is already listed
         theirs = figma
         for k in keys:
             theirs = theirs[k]
         dotted = "figma." + ".".join(keys)
-        mine = unwrap(values[label])
-        if label == "Design file":
-            if theirs is None:
-                faults.append(f"definition-of-done's figma.file_key is null (the project has no design "
-                              f"file), but the design map names one")
-                continue
-            key = str(theirs).strip()
-            segments = urlsplit(mine).path.split("/") if re.match(SCHEME, mine) else []
-            same = bool(key) and (mine == key or key in segments)  # an empty key matches no file
-        else:
+        if how == "key" and theirs is None:
+            faults.append(f"definition-of-done's figma.file_key is null (the project has no design "
+                          f"file), but the design map names one")
+            continue
+        if how == "mark":
+            mine = unwrap(values[label])
             same = theirs is not None and mine == str(theirs)
+        else:
+            mine = file_key(values[label]) if how == "key" else unwrap(values[label]).strip()
+            same = theirs is not None and bool(mine) and mine == str(theirs).strip()
         if not same:
             faults.append(f"{label} differs from definition-of-done's {dotted} ({mine!r} here, "
                           f"{theirs!r} there; change both together)")
@@ -446,6 +474,9 @@ def main():
                          ("still a <placeholder>", placeholder), ("repeated", repeated)):
         if labels:
             faults.append(f"{what}: {', '.join(labels)}")
+    if DESIGN_FILE in values and file_key(values[DESIGN_FILE]) is None:
+        faults.append(f"{DESIGN_FILE} '{values.pop(DESIGN_FILE)}' must start with the design file's key "
+                      f"(one word, not a link), then optionally its link")
     note = registry_leg(values[REGISTRY], faults) if REGISTRY in values else None
     state, dod_note = pairs_leg(values, faults)
     if faults:

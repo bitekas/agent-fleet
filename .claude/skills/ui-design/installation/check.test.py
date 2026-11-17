@@ -52,13 +52,22 @@ check's header):
             directory, and a path outside the install that EXISTS and holds
             bytes (so only the containment leg can make it red, never the open):
             NOT INSTALLED naming it.
+  key       the Design file row is the file's key as its first word, then
+            optionally a link in any form, with or without definition-of-done:
+            a row that starts with a link (a URL, a Markdown link, an autolink)
+            is NOT INSTALLED, even when the link carries the key. A key followed
+            by a Markdown link, an autolink or a link with no scheme, and a
+            bare key, are OK. The link is never parsed: these are the review's
+            probes, a URL of another file whose path carries the key and an
+            unrelated host carrying it, which a URL parse read as the same file.
   pairs     with definition-of-done's config.json in the install context, each
             of the five shared values changed in turn: NOT INSTALLED naming that
-            pair alone. A link that carries the key only inside a longer path
-            segment, a mark that lost its trailing space, and a null file_key
-            are mismatches; a bare key is a match. The config absent: OK, and
-            the line says nothing was compared. The config not JSON, or missing
-            a key: NO VERDICT.
+            pair alone. Another key first with a link that carries the right
+            one, a mark that lost its trailing space, a mark with one space too
+            many, and a null file_key are mismatches. Whitespace around a key
+            or a page id, on either side, is not a difference; a mark compares
+            exactly. The config absent: OK, and the line says nothing was
+            compared. The config not JSON, or missing a key: NO VERDICT.
   context   FLEET_CONTEXT_ROOT at a directory with no manifest: NO VERDICT.
   template  INSTRUCTION.md's template table carries exactly the check's labels,
             in its order; every value in it is wholly a placeholder, and the
@@ -105,7 +114,7 @@ SUBJECT = importlib.util.module_from_spec(_spec)
 _loader.exec_module(SUBJECT)  # top level only: main() runs under __main__
 LABELS = [label for label, _ in SUBJECT.ROWS]
 REQUIRED = [label for label, req in SUBJECT.ROWS if req]
-PAIRS = getattr(SUBJECT, "PAIRS", ())
+PAIRS = [(p[0], p[1]) for p in getattr(SUBJECT, "PAIRS", ())]  # (label, keys); a third field is how it compares
 
 # realpath: on macOS $TMPDIR is a symlink (/var -> /private/var).
 TMP = os.path.realpath(tempfile.mkdtemp(prefix="ui-design-check-test-"))
@@ -252,11 +261,24 @@ green("a link registry is OK, recorded and not opened",
 green("an autolink registry is a value, not a placeholder",
       install("autolink", row("Screen-number registry", "link <https://wiki.example.com/screens>")),
       ["registry recorded as link https://wiki.example.com/screens, not opened"])
-green("an autolink design file is a value, and carries the key",
-      install("autolink-file", row("Design file", f"<https://design.example.com/file/{DOD_FIGMA['file_key']}/Example>")),
-      ["agrees with definition-of-done"])
-green("the bare file key matches definition-of-done's file_key",
-      install("barekey", row("Design file", f"`{DOD_FIGMA['file_key']}`")), ["agrees with definition-of-done"])
+KEY = DOD_FIGMA["file_key"]
+AGREES = ["agrees with definition-of-done"]
+green("the key followed by a Markdown link is OK",
+      install("key-mdlink", row("Design file", f"{KEY} [Example](https://design.example.com/file/{KEY}/Example)")), AGREES)
+green("the key followed by a link with no scheme is OK",
+      install("key-noscheme", row("Design file", f"{KEY} design.example.com/file/{KEY}/Example")), AGREES)
+green("the key followed by an autolink is OK",
+      install("key-autolink", row("Design file", f"`{KEY}` <https://design.example.com/file/{KEY}/Example>")), AGREES)
+green("the bare key in backticks is OK", install("barekey", row("Design file", f"`{KEY}`")), AGREES)
+green("the bare key with no backticks is OK", install("barekey-plain", row("Design file", KEY)), AGREES)
+green("spaces inside the key's backticks are not a difference",
+      install("key-spaced", row("Design file", f"`{KEY} ` https://design.example.com/x")), AGREES)
+green("a definition-of-done file_key with a trailing space is not a difference",
+      install("dodkey-space", dod=setkey(("file_key",), KEY + " ")), AGREES)
+green("a definition-of-done page id with spaces around it is not a difference",
+      install("dodpage-space", dod=setkey(("pages", "current"), " " + DOD_FIGMA["pages"]["current"] + " ")), AGREES)
+green("a map page id with a space inside its backticks is not a difference",
+      install("mappage-space", row("Approved page", f"` {DOD_FIGMA['pages']['incoming']}`")), AGREES)
 green("the optional row may be absent", install("notools", row("Design-tool skills")),
       ["design-tool skills: not recorded"])
 green("a row of the install's own is ignored",
@@ -385,9 +407,29 @@ for label, keys in PAIRS:
     red(f"{dotted} differing from the {label!r} row is NOT INSTALLED naming that pair alone",
         install("pair-" + re.sub(r"\W", "", label), dod=setkey(keys, "EXAMPLE-DIFFERENT")), 2,
         [NOT, f"{label} differs from definition-of-done's {dotted}"], others)
-red("a link carrying the key only inside a longer path segment is a mismatch",
-    install("pair-substring", row("Design file", f"https://design.example.com/file/{DOD_FIGMA['file_key']}X/Example")),
-    2, [NOT, "Design file differs from definition-of-done's figma.file_key"])
+DIFFERS_KEY = [NOT, "Design file differs from definition-of-done's figma.file_key"]
+FIRST_WORD = [NOT, "Design file", "must start with the design file's key"]
+red("another file's key first, with a link that carries the right key, is a mismatch",
+    install("pair-otherkey", row("Design file", f"OtherFileKey999 https://design.example.com/file/OtherFileKey999/{KEY}")),
+    2, DIFFERS_KEY)
+red("a key that only starts like the right one is a mismatch",
+    install("pair-prefix", row("Design file", f"{KEY}X https://design.example.com/file/{KEY}X/Example")), 2, DIFFERS_KEY)
+red("a URL of another file whose path carries the key is NOT INSTALLED (no key first)",
+    install("url-otherfile", row("Design file", f"https://design.example.com/file/OtherFileKey999/{KEY}")), 2, FIRST_WORD)
+red("an unrelated host carrying the key is NOT INSTALLED (no key first)",
+    install("url-unrelated", row("Design file", f"https://unrelated.example.org/{KEY}")), 2, FIRST_WORD)
+red("a Markdown link with no key first is NOT INSTALLED",
+    install("url-mdlink", row("Design file", f"[Example](https://design.example.com/file/{KEY}/Example)")), 2, FIRST_WORD)
+red("an autolink with no key first is NOT INSTALLED",
+    install("url-autolink", row("Design file", f"<https://design.example.com/file/{KEY}/Example>")), 2, FIRST_WORD)
+red("with no definition-of-done config.json, a link with no key first is still NOT INSTALLED",
+    install("url-nodod", row("Design file", f"https://design.example.com/file/{KEY}/Example"), dod="absent"), 2,
+    FIRST_WORD)
+red("a definition-of-done key with a trailing space, against another key, is a mismatch",
+    install("dodkey-space-other", dod=setkey(("file_key",), "OtherFileKey999 ")), 2, DIFFERS_KEY)
+red("a mark with one space too many is a mismatch",
+    install("pair-space2", row("In-build mark", f"`{DOD_FIGMA['in_build_marker_prefix']} `")),
+    2, [NOT, "In-build mark differs from definition-of-done's figma.in_build_marker_prefix"])
 red("a mark written without backticks loses its trailing space, and is a mismatch",
     install("pair-space", row("In-build mark", DOD_FIGMA["in_build_marker_prefix"].strip())),
     2, [NOT, "In-build mark differs from definition-of-done's figma.in_build_marker_prefix"])
