@@ -26,10 +26,11 @@ Install agent-fleet from https://github.com/bitekas/agent-fleet following its SE
 
 Claude Code asks where the fleet will run - an AWS or Google Cloud instance, or
 a physical Linux or macOS machine - and from your computer, over SSH, gets that
-machine ready, installs what it needs and the fleet itself, asks you only what
-it cannot find out, one question at a time, shows you the change to your
-project before it commits anything, and offers to add your first agent. You
-never open a session on that machine. Later, say "Upgrade agent-fleet
+machine ready, installs what it needs and the fleet itself, asks you which of
+the fleet's skills to install and only what it cannot find out, one question
+at a time, follows each chosen skill's install steps, shows you the change to
+your project before it commits anything, and offers to add your first agent.
+You never open a session on that machine. Later, say "Upgrade agent-fleet
 following ~/agent-fleet/SETUP.md".
 
 **A Claude Code session handed one of those sentences** has none of the fleet's
@@ -64,6 +65,12 @@ given; Claude prompts you for each one when it comes up:
 5. **Invite the agent's bot to its channel and post the test message**
    (`/adding-an-agent` section 6). Only a member of the channel can invite the
    bot, and only a person's message proves the agent hears the channel.
+6. **A vendor's console step, for a skill you chose that needs one**: a token,
+   a key or an app made in that vendor's web console, or a grant only its
+   administrator gives. Only an account holder there can make it. The skill's
+   `## Install` section says what its install asks for; Claude gives you the
+   exact steps when the install reaches them, and goes on with the rest
+   meanwhile.
 
 That is all, except in two cases, each a secret of its own: a cloud provider's
 credential, when the target is a cloud instance (its guide in `targets/` says
@@ -350,7 +357,8 @@ directory, and nothing otherwise (`CONVENTIONS.md`, "Adopted projects"). An
 interactive session runs it once the folder's workspace trust dialog is
 accepted; a `claude -p` session runs it at once.
 
-Replace every value of the manifest; each `_comment` says what it is. Then, from that checkout,
+Replace every value of the manifest except `skills`, which `fleet skills` sets
+(below); each `_comment` says what it is. Then, from that checkout,
 `fleet settings` prints the resolved settings with the fleet defaults applied.
 `fleet settings` refuses a manifest with an unknown, mistyped or missing key, a
 value still in the template's placeholder form (one `<...>` with a space
@@ -359,13 +367,15 @@ there (a convention skill is the checkout's own `.claude/skills/<name>/SKILL.md`
 or a fleet skill that `skills` lists and the fleet has; a doc path holding a
 `<placeholder>` is not followed), by naming the key.
 
+- **`skills`** is the fleet skills your agents link. Choose them with `fleet
+  skills` (section 5, "Choose the skills") before you set `conventions`: a
+  convention may name a fleet skill only once `skills` lists it.
 - **`conventions`** is the slot for your development process (`CONVENTIONS.md`).
-  To take the fleet's optional software-development group, add every name in
-  its `skills` (`templates/skill-groups.json`) to the manifest's `skills`, and
-  set the keys its `conventions` names to those values. Any other key, or one
-  you keep your own, points at one of your own skills or documents, or is left
-  `null`: then you have no such convention, and the skills that read it skip
-  that step and say so.
+  For a skill group you take, set each key the group's `conventions` names
+  (`templates/skill-groups.json`) to that value. Any other key, or one you keep
+  your own, points at one of your own skills or documents, or is left `null`:
+  then you have no such convention, and the skills that read it skip that step
+  and say so.
 - **`house_rules`** are the fleet's writing and cadence defaults; change only
   what you want different (`CONVENTIONS.md`).
 - **`upstream`** matters only if your agents contribute to the fleet:
@@ -375,40 +385,66 @@ or a fleet skill that `skills` lists and the fleet has; a doc path holding a
 Commit `.claude/fleet.json` and `.claude/settings.json` in the install
 repository. They are the install's, and they stay there.
 
-## 5. Each skill's install context, install-wide
+## 5. The skills, and each one's install
 
-For every skill in the manifest's `skills`, `fleet where <skill>`, run from a
-checkout of the install repository, prints its install context,
-`<install root>/.claude/skills/<skill>/`. Create there:
+Every command here runs from a checkout of the install repository.
 
-- `CONTEXT.md`: what this install's values are and who they belong to, as the
-  skill's `SKILL.md` says its context holds. It is prose, except where a check
-  parses it: the `agent` skill's carries a paths table whose row form its
-  `installation/INSTRUCTION.md` step 0 gives.
-- `config.json`, for a skill that ships a `config.example.json` and reads its
-  config from the install context, copied with `install -m 644` and every
-  placeholder replaced.
+**Choose the skills.** `fleet skills` lists every skill of the fleet: whether
+the install selects it (`yes`, `no`, or `required` for `chat-transport` and
+each enabled transport's skill), what its install takes (`nothing`, `values`
+or `steps`) and, for a selected skill, its state. Set the selection one of two
+ways:
+
+```bash
+fleet skills --ask                           # on a terminal: one prompt per skill, a skill group as one
+fleet skills --select <name>,<name>,<name>   # the whole list, in that order
+```
+
+`--ask` asks for every skill that is not required, and for each group of
+`templates/skill-groups.json` as one item, each answer defaulting to the
+current selection; without a terminal it refuses. Either way only the
+manifest's `skills` changes, a name the fleet has no skill for or a list
+without a required skill is refused with nothing changed, and the `## Install`
+section of each skill it added is printed. A group you take also fills
+conventions keys, which you set by hand (section 4).
+
+**Install each selected skill** that `fleet skills` reports neither
+`configured` nor `nothing to install`, by the `## Install` section at the end
+of its `SKILL.md`:
+
+- **Asks for** is what you supply: each value, credential or choice.
+- **Writes** names every file the install writes. A `CONTEXT.md` or
+  `config.json` named with no other place is in the skill's install context,
+  which `fleet where <skill>` prints (`<install root>/.claude/skills/<skill>/`).
+  A `config.json` is the skill's `config.example.json`, copied with `install -m
+  644` and every placeholder replaced; a `CONTEXT.md` is prose, holding what
+  the skill's `SKILL.md` says its context holds.
+- **Steps** is the skill's `installation/INSTRUCTION.md`, when it has one. Do
+  now only its install-wide steps: a step that needs an agent - its home, its
+  own credential, its own daemon - waits for section 7, and the instruction
+  opens by saying which of its steps those are. A step only a person can do,
+  such as a token made in a vendor's console, is that person's, and the rest
+  goes on meanwhile.
 
 `tests/fixtures/install/.claude/skills/<skill>/`, where it exists, holds a
 worked `CONTEXT.md` and `config.json` with synthetic values.
 
-**A daemon's config is not in the install context.** It is one file per agent,
-in the agent's config directory, at the name its unit reads:
-`<home>/config/scheduler.json` for the scheduler,
-`<home>/config/<watch.job>.json` for each working chat transport's watcher
-(`<home>/config/slack-watch.json` for Slack), and for the stall watchdog
-`/etc/agent-fleet/stall-watchdog/<agent-name>.json`, root's, where an
-administrator installs it ("The two users"), else
-`<home>/config/stall-watchdog.json`. `systemd/README.md`,
-"What runs", is the table the daemon units are rendered from, and
-`python3 <fleet>/systemd/agent-daemons.py jobs --json` prints it.
+**Then run `fleet skills` again**, until it exits 0 or every skill it reports
+`not configured` waits only for a per-agent step (section 7) or a person's
+step. A skill is `configured` when its `installation/check` exits 0, or, with
+no check, when every file its Install section writes is there. Nothing marks a
+skill configured by hand: the state is measured again on every run. A skill
+taken later goes the same way: `fleet skills --ask`, or `--select` with the
+current list and the new names; its Install section; `fleet.min_tag` raised to
+a release that carries it; and, once that is committed, `fleet link
+<agent-name>` and its per-agent steps for each agent (section 7).
 
-Then follow each skill's `installation/INSTRUCTION.md` where it has one, doing
-now only the steps that are install-wide. A step that needs an agent - its
-home, its own credential, its own daemon - waits for step 7; an instruction
-that has such steps opens by saying which they are. The skills with per-agent
-steps are `agent`, `scheduled-tasks`, each working chat transport,
-`stall-watchdog`, `google-spreadsheet` and `web-hierarchy-server`.
+**A daemon's config is not in the install context.** It is one file per agent,
+at the path its unit reads - in the agent's config directory, or a root-owned
+path where an administrator installs the unit ("The two users") - which the
+skill's Install section names, and section 7 writes it. `systemd/README.md`,
+"What runs", is the table the daemon units are rendered from, and `python3
+<fleet>/systemd/agent-daemons.py jobs --json` prints it.
 
 A config names a credential's PATH; the credential itself is a file of its own,
 mode 600, in a secrets directory, and never in the repository. A skill's install is recorded
@@ -432,8 +468,9 @@ for every step of adding one: the interview, the charter from a template in
 long-lived token from `claude setup-token` by default, which makes model
 requests only - Remote Control needs the full-login option), every secret taken
 in without being printed, the chat app, the daemon configs, the per-agent steps
-of the skills in step 5, `fleet link`, the daemon user units, the agent's own
-unit from `templates/claude-agent.service.example` (on macOS
+of the skills section 5 installed (each one's Install section says which),
+`fleet link`, the daemon user units, the agent's own unit from
+`templates/claude-agent.service.example` (on macOS
 `templates/claude-agent.plist.example`) and its stall watchdog from
 `/stall-watchdog` (system units the administrator installs, "The two users"),
 the health check, the privilege check, and a test message that proves the
@@ -444,9 +481,11 @@ agent hears its channel.
 ```bash
 fleet check-all <agent-name>   # every linked skill's installation/check, one table
 fleet status <agent-name>      # links, tag, session check, charter step pointers, daemons, watchdog; exit 1 on any drift
+fleet skills                   # in the agent's checkout of the install: each selected skill's state; exit 1 while one is not configured
 ```
 
-Repeat for every agent until each table is clean and `fleet status` exits 0,
+Repeat for every agent until each table is clean, `fleet status` exits 0,
+`fleet skills` exits 0 or reports `not configured` only for a person's step,
 and the privilege check ("The two users") exits 0 - or 4, UNPROTECTED, on a
 host with no administrator.
 
