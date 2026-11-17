@@ -9,6 +9,8 @@
     "skill of the group, and the conventions name the group's skills, except branch_naming, which",
     "points at a document of the install's own, as an install that keeps one may; workspace reads",
     "only worktree-workflow's section 1, the rule that every write happens in a worktree.",
+    "It also takes ui-design, a skill of no group that cites software-development; its design",
+    "map is .claude/skills/ui-design/CONTEXT.md, and its doc registry docs/screen-numbers.md.",
     "transports.enabled names slack: load it with the registry at tests/fixtures/transports",
     "(FLEET_TRANSPORTS_DIR, or the skills_dir argument) until the fleet tree carries the real",
     "slack-communication/transport.json; the fixture descriptor holds the same values."
@@ -22,7 +24,8 @@
     "notion-workspace", "rate-graphic", "chat-transport", "adding-an-agent",
     "install-agent-fleet", "safe-box", "figma-workspace",
     "software-development", "definition-of-done", "worktree-workflow", "tooling-index",
-    "architecture-map", "e2e-suite", "repo-and-environments", "release", "device-emulators"
+    "architecture-map", "e2e-suite", "repo-and-environments", "release", "device-emulators",
+    "ui-design"
   ],
   "transports": { "enabled": ["slack"], "default": "slack" },
   "conventions": {

@@ -198,6 +198,9 @@ it is.
   [repo-and-environments](.claude/skills/repo-and-environments/SKILL.md),
   [release](.claude/skills/release/SKILL.md),
   [device-emulators](.claude/skills/device-emulators/SKILL.md).
+- **Design:** [ui-design](.claude/skills/ui-design/SKILL.md) (how UI design
+  work is run between people, a design file and a codebase; it pairs with
+  software-development, and its install records the design map).
 
 ## Requirements
 
