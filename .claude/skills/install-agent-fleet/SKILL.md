@@ -8,9 +8,10 @@ description: >
   Linux or macOS machine) and follow that target's guide, install the target's
   prerequisites after one OK and create the dedicated agents user without sudo
   that runs the agents, clone the fleet there at its newest release tag
-  and run `fleet install`, ask the person only what cannot be discovered, one
-  question at a time, adopt the project with `fleet adopt` and the attribution
-  block, show the diff and commit on the person's OK, hand off to
+  and run `fleet install`, ask the person which fleet skills to install and
+  only what cannot be discovered, one question at a time, adopt the project
+  with `fleet adopt` and the attribution block, follow each selected skill's
+  Install section, show the diff and commit on the person's OK, hand off to
   adding-an-agent, and close with a summary. Also upgrades the target to a
   newer release. Load when asked to "install agent-fleet" or to "upgrade
   agent-fleet", and when handed "Install agent-fleet from <repository>
@@ -26,10 +27,11 @@ target runs from here over SSH, and the person never opens a session there.
 This file orders steps that are defined elsewhere and restates none of them:
 `SETUP.md` in the fleet repository is the manual reference for every step and
 lists the steps only the person can do, each `fleet` subcommand prints what it
-changed, the guides in `targets/` beside this file own reaching a machine, and
-`/adding-an-agent` owns everything about an agent. Where this file and one of
-them disagree, they win; correct this file. Asked to upgrade, go straight to
-the Upgrade section at the end.
+changed, the guides in `targets/` beside this file own reaching a machine, the
+`## Install` section at the end of each skill's `SKILL.md` owns what that
+skill's install asks for, writes and does, and `/adding-an-agent` owns
+everything about an agent. Where this file and one of them disagree, they win;
+correct this file. Asked to upgrade, go straight to the Upgrade section.
 
 Placeholders used below:
 
@@ -200,10 +202,11 @@ target's agents, who clone it; creating one is the person's.
 **Only after step 2's `Read back before install` message has been sent**, the
 message step 4's `<read-back file>` carries. All the remaining questions
 come now, so the long machine work after them runs without stopping. Questions
-2 to 7 fill the install manifest, so they are asked
-only for a new one: a branch that already carries a `.claude/fleet.json` holds
-the install's own answers, and its `skills` answers question 3. Questions 8
-and 9 are asked either way. In this order:
+2 to 7 fill the install manifest, so they are asked only for a new one: a
+branch that already carries a `.claude/fleet.json` holds the install's own
+answers, and its `skills` answers question 3, so an existing install is not
+asked again which skills it takes. Questions 8 to 10 are asked either way. In
+this order:
 
 2. **Chat transport** -> `transports.enabled`, `transports.default`. A transport
    is a skill directory holding a `transport.json`
@@ -211,20 +214,29 @@ and 9 are asked either way. In this order:
    whose `status` is not `working` is "not yet" and cannot be enabled. `skills`
    keeps `chat-transport` and each enabled transport's skill. An agent's bot
    token is that agent's own credential and `/adding-an-agent` sets it up.
-3. **Optional skills** -> `skills`. Each skill `<clone>/README.md` lists under
-   "Integrations" needs its own credential and config, and `agent-revive` signs
-   a stuck agent back in through a browser on the target, which needs the
-   browser's system libraries there. Keep the ones the person wants and remove
-   the rest from `skills`; adding one later is a manifest edit plus that
-   skill's `installation/INSTRUCTION.md`. **Each group in
-   `<clone>/templates/skill-groups.json` is ONE more item**, read from that
-   file when asking, never from a list written here: its name and, in one
-   line, what its `_comment` says it is, and that its skills fill conventions
-   keys of question 7. Yes adds every name in the group's `skills` to the
-   manifest's `skills`; no adds nothing to `skills`. The proposal, when the
-   request does not answer it: yes when
-   `<project>` is a code repository the agents will change, no otherwise; the
-   person decides.
+3. **Which skills to install** -> `skills`. One question over every fleet
+   skill, built from what `python3 <clone>/bin/fleet skills`, run in
+   `<project>` [here], lists: before adoption, every skill of the fleet, with
+   the template's `skills` marked `proposed`. Give each skill what it is for in
+   one line (its row in `<clone>/.claude/skills/SKILLS.md`) and what its
+   install asks for (the `**Asks for:**` of its `## Install` section, or
+   nothing when it has nothing to install). `chat-transport` and the skill of
+   each transport question 2 enabled are required: they are listed as required
+   and never offered for removal. `agent-revive` signs a stuck agent back in
+   through a browser on the target, which needs the browser's system libraries
+   there; say so beside it. **Each group in
+   `<clone>/templates/skill-groups.json` is ONE item**, read from that file
+   when asking, never from a list written here, and its skills are not listed
+   one by one: its name and, in one line, what its `_comment` says it is, what
+   its skills' installs ask for, and that its skills fill conventions keys of
+   question 7. Yes adds every name in the group's `skills` to the selection; no
+   adds none of them. The answer - the items to change from the proposal - is
+   one answer, however many items it names. The proposal, when the request does
+   not answer it: yes for every skill in the template's `skills`; a group yes
+   when `<project>` is a code repository the agents will change, no otherwise;
+   `ui-design` yes when the project's user interface is built from a design
+   file; every other skill no. The person decides. A skill taken after the
+   install is the Upgrade section's.
 4. **Where credentials and the knowledge store live on the target** ->
    `secrets.default_dir` (SETUP section 1 step 5; the template's
    `~/.fleet-secrets` is the proposal) and the knowledge store's root
@@ -266,6 +278,19 @@ and 9 are asked either way. In this order:
    and the Mac needs FileVault off (`targets/macos.md` sections 4 and 5). Its
    agents then run as LaunchDaemons and sign in only with a token or an API
    key; say so when asking.
+10. **The selected skills' values** -> each selected skill's install context
+    (step 6 item 5). For each skill question 3 selected, read its `## Install`
+    section (`<clone>/.claude/skills/<skill>/SKILL.md`) and ask each value its
+    `**Asks for:**` names that nothing answers already: not the request, not an
+    earlier question of this step, not the host settings step 2 read, and not
+    the skill's install context on a branch that already carries one. A skill
+    `fleet skills` shows with INSTALL `nothing`, or with STATE `configured`, is
+    not asked about. One value per message, each numbered in the running total,
+    which question 3's answer grows. Two kinds of value are not questions: one
+    that belongs to one agent - its bot, its token, its key, its home - waits
+    for `/adding-an-agent`; one only a person can produce later - a token made
+    in a vendor's console, a sign-in - is a person step, which step 6 item 5
+    presents with its exact instructions.
 
 **`upstream`** is for an install whose agents commit to the fleet repository
 itself (SETUP section 4). Remove the block unless the request says they will;
@@ -289,7 +314,7 @@ removed by its literal path afterwards - or by nothing on a machine whose
 `sudo` asks for none. Without step 2's message in that file `--install`
 refuses, naming the message. Always pass `--with-node`, because `fleet install` runs
 `npm ci` in every Node sub-package of the fleet; add
-`--with-browser` only when question 3 kept `agent-revive`; with an
+`--with-browser` only when question 3 selected `agent-revive`; with an
 administrator, add `--agents-user <agents-user>`, and `--agents-root
 <agents-root>` when the person named a root other than `~/agents`. That makes
 the agents user with no sudo, its agents root, lingering and Claude Code its
@@ -391,22 +416,42 @@ before an agent exists. The target's agents then clone it from the remote.
      `attribution` object already there keeps its other keys and gets these two
      set to `""`, and every other key of the file stays as it is; `python3 -m
      json.tool` on it, on the target, proves it still parses.
-   - **The manifest**: in `.claude/fleet.json`, every placeholder and every
-     example value is replaced with step 3's answers. `fleet.repo` is the URL
+   - **The manifest**: `skills` is never edited by hand. First, on the
+     target, `cd <work> && fleet skills --select <names>`, `<names>` question
+     3's selection comma-separated, every name of a group it took included: it
+     replaces only the `skills` array, prints what it added and removed and
+     the `## Install` section of each skill it added, and refuses (exit 2,
+     nothing changed) a name the fleet has no skill for or a list without a
+     required skill. Then, in `.claude/fleet.json` copied here, every
+     placeholder and every example value is replaced with step 3's answers.
+     `fleet.repo` is the URL
      the fleet was cloned from; `fleet.min_tag` is the tag step 5 checked out,
      the release this install was set up against. The `_comment` keys are
      documentation: keep or delete them. `fleet settings`, run in `<work>` on
      the target, exits 0; a refusal names its key.
-5. **Each skill's install context** [target]: SETUP section 5, for each skill
-   in `skills`, its install-wide steps only, run in `<work>` (`fleet where
-   <skill>` there names the directory). Values come from the host settings, the
-   manifest and step 3; the `agent` skill's `<project-dir>` is the project's
-   directory name. `<clone>/tests/fixtures/install/` shows each file's shape
-   with synthetic values; never copy a value from it. A value that belongs to
-   one agent - its bot, its token, its key, its home - waits for
-   `/adding-an-agent`. A value only the person can give that is not an agent's
-   is one more question, asked as in step 3. A "Record the install" step
-   records the machine it runs on, which is why this step runs on the target.
+5. **Each selected skill's install** [target], in `<work>`: for each skill
+   in `skills` that `fleet skills` there reports neither `configured` nor
+   `nothing to install`, follow the `## Install` section of its `SKILL.md`
+   (SETUP section 5 is the manual form). Write every file its `**Writes:**`
+   names (`fleet where <skill>` in `<work>` names the install context a bare
+   `CONTEXT.md` or `config.json` goes in), with values from the host settings,
+   the manifest and step 3; the `agent` skill's `<project-dir>` is the
+   project's directory name. Then do the install-wide steps its `**Steps:**`
+   names; its `installation/INSTRUCTION.md` opens by saying which of its steps
+   are per agent. A step only a person can do - a token made in a vendor's
+   console, a sign-in - is presented to the person with its exact
+   instructions, and the install goes on without waiting for it. A per-agent
+   step waits for `/adding-an-agent`, and so does a value that belongs to one
+   agent - its bot, its token, its key, its home. A value the steps need that
+   step 3 did not ask is one more question, asked as in step 3.
+   `<clone>/tests/fixtures/install/` shows each file's shape with synthetic
+   values; never copy a value from it. A "Record the install" step records the
+   machine it runs on, which is why this item runs on the target. Then run
+   `fleet skills` in `<work>` again. A skill stays `not configured` until its
+   `installation/check`, or the presence of the files its Install section
+   writes, passes: nothing marks a skill configured by hand, and no file
+   records it, because the state is discovered again on every run. Each skill
+   still `not configured` goes to step 8 and the closing summary.
 6. **Show the diff** [here]: `ssh <host> 'git -C <work> add -A && git -C
    <work> status --short && git -C <work> diff --cached'`, printed WHOLE in the
    session before step 7's question - never a file list, a summary or its
@@ -454,8 +499,9 @@ before an agent exists. The target's agents then clone it from the remote.
    <scratch>/commit-message.txt`, and check again.
    Push on the same OK: the target's agents clone the project from its remote,
    so the commit has to reach the branch they track before an agent is added.
-8. **Clean up**: `rm -rf` `<work>` on the target and the patch here, each by its
-   literal path.
+8. **Clean up**: the patch here, by its literal path, and `<work>` on the
+   target (`rm -rf`, by its literal path) once step 8 has run `fleet skills`
+   in it.
 
 ## 7. Agent homes that already exist [target]
 
@@ -472,6 +518,10 @@ status <agent-name>` for each, read by step 8's rule.
 - a credential the person supplies - named by its path, never its value;
 - a value, a unit or a record that waits for `/adding-an-agent`;
 - a step SETUP lists under "What only you do", with the exact prompt for it.
+
+Then `fleet skills`, in `<work>` and in each agent's checkout of the project
+step 7 linked: it exits 0, or every selected skill it reports `not
+configured` is one of the same classes, its reason line read against them.
 
 Fix anything else and run it again. `fleet check-all <agent-name>` comes with
 an agent: `/adding-an-agent` runs it for each agent it adds.
@@ -524,8 +574,12 @@ Homebrew's installed as the administrator) passes.
    <fleet>/.claude/skills/agent-health/pool_pick.py --shares'` prints, repeated
    as it is - one "N agents share account X" per shared account, so a share is
    never silent; none when nothing is shared or there is no pool - and what is
-   left, each item with who
-   does it and the exact command or file. Say that a session opened in the
+   left, each item with who does it and the exact command or file. What is
+   left includes every selected skill that `fleet skills` still reports `not
+   configured` - run again in an agent's checkout of the project when item 1
+   added one, else step 8's run - each with its reason line, the step that is
+   left and who does it: a person's step with its exact instructions, a
+   per-agent step with the agent it waits for. Say that a session opened in the
    project on a machine without the fleet, or under a config directory the
    fleet's skills are not linked for, shows the session check's notice, and
    that SETUP's "Your computer shows the fleet's notice" links them here. Its
@@ -587,21 +641,34 @@ named; the questions are here.
    rewrites the watchdog's config from the example, so a value tuned in it is
    set again in the staged file first. With no administrator (user units) the
    same steps run without root. Then `verify-privileges.py` as in step 8.
-6. `fleet status`, and `fleet settings` in an agent's checkout of the project:
-   a newer fleet that refuses a manifest key names it, and a charter pointer
+6. `fleet status`, and `fleet settings` and `fleet skills` in an agent's
+   checkout of the project: a newer fleet that refuses a manifest key names
+   it, a selected skill the new release asks more of is `not configured`, its
+   Install section saying what, and a charter pointer
    (`/<skill> step N`) that a renumbered skill no longer resolves is a `DRIFT`
    row naming the charter and its line, which the charter's owner fixes.
    `<clone>` here moves to the same tag [here].
 
-**Taking a skill group later** - the install declined it, or it is new in this
-release - is a change to the project, made, shown and committed as step 6 of
-the install makes one: in `.claude/fleet.json`, add every name in the group's
-`skills` (`<fleet>/templates/skill-groups.json`) to `skills`, set each key its
-`conventions` names to that value unless the person keeps the install's own,
-and raise `fleet.min_tag` to a release that carries the group; then, as step 6
-item 5 does, run each group skill's install-wide steps in `<work>`, so its
-install context is part of the change. `fleet settings` in `<work>` exits 0
-before the diff is shown. Once the commit is on the branch the agents track,
-`fleet link <agent-name>` for each agent [target], then each group skill's
-per-agent and per-host steps (its `installation/INSTRUCTION.md` says which),
-and `fleet status`.
+**Taking a skill later** - one the install did not select, a skill group, or
+one new in this release - is a change to the project, made, shown and
+committed as step 6 of the install makes one, in a working clone `<work>` on
+the target (step 6 items 1 and 2). In `<work>`, `fleet skills --select
+<names>`, `<names>` the install's current `skills` (`fleet settings skills`
+prints them) with the new names added: a group's names are its `skills` in
+`<fleet>/templates/skill-groups.json`, and for a group, each key its
+`conventions` names is set to that value unless the person keeps the
+install's own. Ask the values each new skill's `**Asks for:**` names as step 3
+question 10 does, then do each new skill's install as step 6 item 5 does, so
+its install context is part of the change, and raise `fleet.min_tag` to a
+release that carries the skill and `fleet skills`. `fleet settings` in
+`<work>` exits 0, and `fleet skills` there reports each new skill
+`configured`, or `not configured` only for a per-agent step or a person's
+step, before the diff is shown; then the diff and the commit as step 6 items 6
+and 7, and the patch and `<work>` removed by their literal paths. Once the
+commit is on the branch the agents track, `fleet link <agent-name>` for each
+agent [target], then each new skill's per-agent steps (its Install section
+says which), and `fleet status` and `fleet skills`.
+
+## Install
+
+Nothing to install.
