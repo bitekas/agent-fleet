@@ -20,6 +20,13 @@ Rules, each load-bearing:
     that counted it would see two `## Install` headings in that file, and one
     that closed a ```` fence on a ``` line would read the rest of the example
     as headings.
+  * Indentation is CommonMark's: a fence opens or closes, an ATX heading
+    counts and a field marker starts a field only with 0 to 3 leading spaces.
+    A line indented 4 or more spaces, or by a tab, is indented code: never a
+    fence, a heading or a field. ` ## Later` after the section is a heading
+    after it, which a column-0 reader would miss and print as part of the
+    install; and a four-space ``` that is really code, read as a fence, would
+    swallow every heading below it.
   * A leading `---` frontmatter block is not body: `## x` there is a YAML
     comment, never a heading.
   * `## Install` is the LAST level-1 or level-2 heading: the section runs to the
@@ -31,6 +38,12 @@ Rules, each load-bearing:
   * Form A is recognised by its first sentence alone, `Nothing to install.`;
     anything else is read as form B and held to its three fields, so a section
     that is neither is refused rather than guessed.
+
+Known limits, read as text rather than refused: an HTML comment (a heading or
+a field inside `<!-- -->` counts); a list item's container (a fence inside a
+list item indented 4 or more spaces reads as indented code); a setext
+(underlined) heading; and `steps_instruction`, which is true for any mention of
+installation/INSTRUCTION.md in Steps.
 
 Standard library only. InstallSectionError is a FleetError with exit code
 DRIFT (1), since a malformed SKILL.md is a finding, and a ValueError, so a
@@ -49,9 +62,10 @@ FIELDS = ("Asks for", "Writes", "Steps")
 INSTRUCTION = "installation/INSTRUCTION.md"
 CONTEXT_FILES = ("CONTEXT.md", "config.json")
 
-_FENCE = re.compile(r"[ \t]*(`{3,}|~{3,})(.*)")
-_TOP_HEADING = re.compile(r"#{1,2}(?:[ \t]|$)")
-_MARKER = re.compile(r"\*\*(%s):\*\*" % "|".join(map(re.escape, FIELDS)))
+_FENCE = re.compile(r" {0,3}(`{3,}|~{3,})(.*)")
+_TOP_HEADING = re.compile(r" {0,3}#{1,2}(?:[ \t]|$)")
+_MARKER = re.compile(r" {0,3}\*\*(%s):\*\*" % "|".join(map(re.escape, FIELDS)))
+_CODE = re.compile(r" {0,3}\t| {4}")  # an indented-code line: four columns of indentation
 _BACKTICKED = re.compile(r"`([^`]+)`")  # a code span may cross a line, as in Markdown
 
 
@@ -130,7 +144,7 @@ def install_section(text):
     start = _body_start(lines)
     heads = [(i, lines[i]) for i, fenced in _scan(lines, start)
              if not fenced and _TOP_HEADING.match(lines[i])]
-    installs = [i for i, h in heads if h.rstrip() == HEADING]
+    installs = [i for i, h in heads if h.strip() == HEADING]
     if not installs:
         raise InstallSectionError(f"no '{HEADING}' heading outside fenced code")
     if len(installs) > 1:
@@ -148,7 +162,7 @@ def install_section(text):
         raise InstallSectionError(f"the '{HEADING}' section (line {at + 1}) is empty")
 
     first = _text(paras[0])
-    if first == NOTHING or first.startswith(NOTHING + " "):
+    if not _CODE.match(paras[0][1][0][0]) and (first == NOTHING or first.startswith(NOTHING + " ")):
         if len(paras) > 1:
             raise InstallSectionError(f"form A ('{NOTHING}') is one paragraph; a second one starts at "
                                       f"line {paras[1][0] + 1}")
@@ -158,7 +172,7 @@ def install_section(text):
     found = []  # (field, paragraph number, line index)
     for n, (first_line, plines) in enumerate(paras):
         for k, (line, fenced) in enumerate(plines):
-            m = _MARKER.match(line.lstrip())
+            m = _MARKER.match(line)
             if m and not fenced:
                 if k:
                     raise InstallSectionError(f"'**{m.group(1)}:**' at line {first_line + k + 1} does not "

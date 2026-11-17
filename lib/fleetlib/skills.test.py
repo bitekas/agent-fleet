@@ -55,7 +55,7 @@ class ParseTest(unittest.TestCase):
         self.assertFalse(sec.steps_instruction)
         self.assertEqual(sec.body, "## Install\n\nNothing to install.\n")
 
-    def test_form_a_may_carry_one_more_sentence_over_wrapped_lines(self):
+    def test_form_a_may_carry_a_note_over_wrapped_lines(self):
         sec = install_section(mutate(BASE_A, "Nothing to install.\n",
                                      "Nothing to install. An install may write an\noptional CONTEXT.md.\n"))
         self.assertEqual(sec.form, "nothing")
@@ -202,6 +202,53 @@ class ParseTest(unittest.TestCase):
                 text = mutate(BASE_A, "## 1. Rules\n",
                               f"{open_}\n{inner}\n## Install\n{close}\n\n## 1. Rules\n")
                 self.assertEqual(install_section(text).form, "nothing")
+
+    # ------------------------------------- CommonMark indentation (0 to 3 spaces)
+
+    def test_a_heading_counts_with_up_to_three_leading_spaces(self):
+        for lead in (" ", "  ", "   "):
+            with self.subTest(lead=len(lead)):
+                self.refused(BASE_A + f"\n{lead}## Later\n", "is not the last heading", "'## Later'")
+                text = mutate(BASE_A, "## Install\n", f"{lead}## Install\n")
+                self.assertEqual(install_section(text).form, "nothing")
+
+    def test_four_spaces_or_a_tab_is_indented_code_not_a_heading(self):
+        for lead in ("    ", "\t", " \t"):
+            with self.subTest(lead=lead):
+                self.assertEqual(install_section(BASE_B + f"\n{lead}## Later\n").form, "fields",
+                                 "an indented-code block after Steps is part of the section, not a heading")
+                self.refused(mutate(BASE_A, "## Install\n", f"{lead}## Install\n"), "no '## Install' heading")
+
+    def test_a_fence_opens_only_with_up_to_three_spaces(self):
+        for lead in (" ", "   "):
+            with self.subTest(lead=len(lead)):
+                text = mutate(BASE_A, "## 1. Rules\n", f"{lead}```\n## Install\n{lead}```\n\n## 1. Rules\n")
+                self.assertEqual(install_section(text).form, "nothing", "the fenced heading does not count")
+        for lead in ("    ", "\t"):
+            with self.subTest(lead=lead):
+                # Indented code, not a fence: the real heading below it is not swallowed by an
+                # opener that never was one.
+                text = mutate(BASE_A, "## 1. Rules\n", f"{lead}```\n{lead}x\n\n## 1. Rules\n")
+                self.assertEqual(install_section(text).form, "nothing")
+
+    def test_a_fence_closes_only_with_up_to_three_spaces(self):
+        # The four-space ``` is the fence's content, so the `## Install` after it is still fenced.
+        text = mutate(BASE_A, "## 1. Rules\n", "```\n    ```\n## Install\n```\n\n## 1. Rules\n")
+        self.assertEqual(install_section(text).form, "nothing")
+        text = mutate(BASE_A, "## 1. Rules\n", "```\nx\n   ```\n\n## 1. Rules\n")
+        self.assertEqual(install_section(text).form, "nothing", "a three-space ``` closes it")
+
+    def test_a_field_marker_counts_with_up_to_three_spaces(self):
+        sec = install_section(mutate(BASE_B, "**Writes:**", "   **Writes:**"))
+        self.assertEqual(sec.context_files, ("config.json", "CONTEXT.md"))
+
+    def test_an_indented_code_marker_is_not_a_field(self):
+        self.refused(mutate(BASE_B, "**Writes:**", "    **Writes:**"), "'**Writes:**' is missing")
+        sec = install_section(mutate(BASE_B, "the channel id.\n", "the channel id.\n    **Steps:** quoted, not a field.\n"))
+        self.assertIn("**Steps:** quoted", sec.asks_for, "a lazy continuation line, not a misplaced field")
+
+    def test_indented_code_is_not_form_a(self):
+        self.refused(mutate(BASE_A, "Nothing to install.\n", "    Nothing to install.\n"), "neither form A")
 
     def test_frontmatter_is_not_body(self):
         text = mutate(BASE_A, "requires_install: false\n", "requires_install: false\n## Install\n")

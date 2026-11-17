@@ -121,7 +121,11 @@ SHELL_RULES does not list, and an apostrophe in a ${x:-word} inside a
 double-quoted string or heredoc body that opened on an earlier line (the
 quoting is walked one command line at a time); for install-section, whether
 Asks for and Writes are TRUE (that an install asks for and writes what they
-name), and a setext (underlined) heading after `## Install`.
+name); a setext (underlined) heading after `## Install`; a heading or a field
+inside an HTML comment, which it reads as text; a fence inside a list item
+indented 4 or more spaces, which it reads as indented code (no list container
+is tracked); and whether Steps names installation/INSTRUCTION.md as the pointer
+to the steps, since any mention of that path in Steps counts.
 """
 
 import json
