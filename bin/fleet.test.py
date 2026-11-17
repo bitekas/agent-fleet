@@ -461,11 +461,13 @@ def populate(o):
                          steps="`installation/INSTRUCTION.md`; every step of it is per agent."))
     skill(o, "stall-watchdog", install=NOTHING)
     # FAKE_DEMO_WHERE: the check's last line is where it ran, the install root
-    # and the config dir it was handed.
+    # and the config dir it was handed. FAKE_DEMO_WARN: a line on stderr too;
+    # FAKE_DEMO_QUIET: nothing on stdout.
     skill(o, "demo-skill", [("installation/check", "#!/bin/sh\n"
                                                    "[ -z \"$FAKE_DEMO_WHERE\" ] || { echo \"cwd=$(pwd -P) "
                                                    "ctx=$FLEET_CONTEXT_ROOT cfg=${CLAUDE_CONFIG_DIR:-unset}\"; exit 1; }\n"
-                                                   "echo \"${FAKE_DEMO_LINE:-installed, but an older version}\"\n"
+                                                   "[ -n \"$FAKE_DEMO_QUIET\" ] || echo \"${FAKE_DEMO_LINE:-installed, but an older version}\"\n"
+                                                   "[ -z \"$FAKE_DEMO_WARN\" ] || echo \"$FAKE_DEMO_WARN\" >&2\n"
                                                    "exit \"${FAKE_DEMO_RC:-1}\"\n")],
           install=fields("`config.json`, in the install context.", asks="the demo value."))
     skill(o, "agent-revive", [("signin_driver/package.json", json.dumps({"name": "driver", "dependencies": {"playwright": "1.0.0"}})),
@@ -602,9 +604,9 @@ class World:
                 e[k] = str(v)
         return e
 
-    def fleet_cmd(self, *args, tree=None, **extra):
+    def fleet_cmd(self, *args, tree=None, cwd=None, **extra):
         return subprocess.run([PY, str((tree or self.fleet) / "bin" / "fleet"), *map(str, args)],
-                              cwd=self.root, env=self.env(**extra), capture_output=True, text=True,
+                              cwd=cwd or self.root, env=self.env(**extra), capture_output=True, text=True,
                               stdin=subprocess.DEVNULL, timeout=300)
 
     def calls(self, tool):
@@ -2624,7 +2626,7 @@ def skills_select_refuses_a_bad_selection_and_changes_nothing():
     same(before, snap(w.root))
 
 
-def ask(w, answer, timeout=60, **extra):
+def ask(w, answer, timeout=60, cwd=None, **extra):
     """Run `fleet skills --ask` with stdin and stdout on a pseudo-terminal and
     stderr on a pipe. At each prompt, answer(kind, item, default) is the line
     typed (None types end-of-input, ^D). Returns (exit code, terminal output,
@@ -2634,8 +2636,8 @@ def ask(w, answer, timeout=60, **extra):
     every slave descriptor has closed may drop what the master has not read
     yet, so the output after the last prompt would go missing."""
     master, slave = pty.openpty()
-    p = subprocess.Popen([PY, str(w.fleet / "bin" / "fleet"), "skills", "--ask"], cwd=w.root, env=w.env(**extra),
-                         stdin=slave, stdout=slave, stderr=subprocess.PIPE, close_fds=True)
+    p = subprocess.Popen([PY, str(w.fleet / "bin" / "fleet"), "skills", "--ask"], cwd=cwd or w.root,
+                         env=w.env(**extra), stdin=slave, stdout=slave, stderr=subprocess.PIPE, close_fds=True)
     out, prompts, seen = b"", [], 0
     deadline = time.monotonic() + timeout
     try:
@@ -2664,7 +2666,7 @@ def ask(w, answer, timeout=60, **extra):
     return p.returncode, out.decode(errors="replace").replace("\r\n", "\n"), err, prompts
 
 
-ASK_PROMPT = re.compile(r"(?m)^(skill|group) (\S+) .*\[(Y/n|y/N)\] \Z")
+ASK_PROMPT = re.compile(r"(?m)^(skill|group) (\S+) .*\[(Y/n|y/N|keep/all/none)\] \Z")
 
 
 @case
@@ -2751,18 +2753,153 @@ def skills_ask_on_a_terminal_asks_each_item_once_and_applies_the_answers():
         "demo-skill": "y/N", "scheduled-tasks": "Y/n", "discord-communication": "y/N",
         "relay-communication": "y/N", "stall-watchdog": "Y/n", "ops": "Y/n"}, prompts
     same(before, snap(root))
-    # A group with one member selected defaults to no.
-    write(man, json.dumps(manifest_doc(skills=SKILLS + ["agent-revive"])))
-    seen = {}
 
-    def note_the_group(kind, item, default):
-        if item != "ops":
-            return ""
-        seen[item] = default
-        return None  # end of input: this run changes nothing
 
-    ask(w, note_the_group, FLEET_CONTEXT_ROOT=root)
-    assert seen == {"ops": "y/N"}, seen
+@case
+def skills_ask_enter_at_every_prompt_changes_nothing_with_a_group_partly_selected():
+    # One of the ops group's two members is selected. A yes/no default would
+    # either add the other or drop this one; the prompt offers keep (the
+    # default), all and none, and keep leaves each member as it is.
+    w = World(manifest=manifest_doc(skills=SKILLS + ["agent-revive"]))
+    root = ada_root(w)
+    man = root / ".claude/fleet.json"
+    before = snap(w.root)
+    code, out, err, prompts = ask(w, lambda kind, item, default: "", FLEET_CONTEXT_ROOT=root)
+    assert code == 0 and "nothing changed" in out, f"exit {code}\n{out}\n{err}"
+    assert ("group", "ops", "keep/all/none") in prompts, prompts
+    same(before, snap(w.root))
+    for word, want in (("all", SKILLS + ["agent-revive", "agent-health"]), ("none", SKILLS)):
+        write(man, json.dumps(manifest_doc(skills=SKILLS + ["agent-revive"])))
+        code, out, err, prompts = ask(w, lambda kind, item, default: word if item == "ops" else "",
+                                      FLEET_CONTEXT_ROOT=root)
+        assert code == 0, f"{word}: exit {code}\n{out}\n{err}"
+        assert json.loads(man.read_text())["skills"] == want, (word, man.read_text())
+
+
+@case
+def skills_select_and_ask_change_only_the_install_they_run_in():
+    # An agent session exports CLAUDE_CONFIG_DIR, and the read-only lookup
+    # follows it to the agent's own install when the working tree has none. A
+    # mutating form run from a fresh repository must refuse, naming both places
+    # it looked, and leave the agent's manifest alone.
+    w = World()
+    ada = ada_root(w)
+    repo = w.root / "fresh-repo"
+    (repo / "sub").mkdir(parents=True)
+    git(repo, "init", "-q")
+    cfg = w.agents / "ada/.claude"
+    before = snap(w.root)
+    r = w.fleet_cmd("skills", "--select", ",".join(SKILLS[:2]), cwd=repo / "sub", CLAUDE_CONFIG_DIR=cfg)
+    refused(r, "FLEET_CONTEXT_ROOT")
+    assert f"{repo}" in r.stderr, f"the git top level it looked at is not named:\n{r.stderr}"
+    same(before, snap(w.root))
+    code, out, err, prompts = ask(w, lambda kind, item, default: "", cwd=repo / "sub", CLAUDE_CONFIG_DIR=cfg)
+    assert (code, prompts) == (2, []) and "FLEET_CONTEXT_ROOT" in err, f"exit {code} {prompts}\n{err}"
+    same(before, snap(w.root))
+    # The list only reads: it takes the full lookup, as `fleet settings` does.
+    r = w.fleet_cmd("skills", cwd=repo / "sub", CLAUDE_CONFIG_DIR=cfg)
+    ok(r, 1)
+    assert skill_table(r.stdout)[0]["demo-skill"][0] == "yes", r.stdout
+    # Control: the working tree's own manifest is the one changed, from a subdirectory.
+    write(repo / ".claude/fleet.json", json.dumps(manifest_doc()))
+    ok(w.fleet_cmd("skills", "--select", ",".join(SKILLS[:2]), cwd=repo / "sub", CLAUDE_CONFIG_DIR=cfg))
+    assert json.loads((repo / ".claude/fleet.json").read_text())["skills"] == SKILLS[:2]
+    assert json.loads((ada / ".claude/fleet.json").read_text())["skills"] == SKILLS, "the agent's manifest changed"
+
+
+@case
+def skills_list_proposes_only_when_no_manifest_is_found_anywhere():
+    # A home holding two manifests is the fault check-all reports (exit 3),
+    # never "no install yet".
+    w = World()
+    cfg = w.agents / "ada/.claude"
+    second = write(w.agents / "ada/second/.claude/fleet.json", json.dumps(manifest_doc()))
+    r = w.fleet_cmd("skills", CLAUDE_CONFIG_DIR=cfg)
+    ok(r, 3)
+    assert "2 install manifests" in r.stderr, r.stderr
+    # Control: with no manifest in the home either, nothing is found anywhere.
+    second.unlink()
+    (ada_root(w) / ".claude/fleet.json").unlink()
+    r = w.fleet_cmd("skills", CLAUDE_CONFIG_DIR=cfg)
+    ok(r)
+    assert {v[0] for v in skill_table(r.stdout)[0].values()} == {"proposed", "-"}, r.stdout
+
+
+@case
+def skills_select_keeps_a_crlf_manifest_crlf():
+    # Every byte outside the array stays, line endings included, and a
+    # multi-line array is written with the file's own line ending.
+    w = World()
+    man = ada_root(w) / ".claude/fleet.json"
+    names = ["chat-transport", "slack-communication", "agent-revive"]
+    for layout in ('[\n\t\t"chat-transport", "slack-communication",\n\t\t"scheduled-tasks", "demo-skill"\n\t]',
+                   json.dumps(SKILLS)):
+        head, array, tail = (x.replace("\n", "\r\n") for x in split_manifest(manifest_doc(), layout))
+        write(man, head + array + tail)
+        ok(w.fleet_cmd("skills", "--select", ",".join(names), FLEET_CONTEXT_ROOT=ada_root(w)))
+        after = man.read_bytes()
+        assert after.startswith(head.encode()) and after.endswith(tail.encode()), f"a byte outside changed:\n{after!r}"
+        assert after.count(b"\n") == after.count(b"\r\n"), f"a bare LF:\n{after!r}"
+        assert json.loads(after)["skills"] == names, after
+
+
+@case
+def skills_reports_an_unreadable_or_non_file_context_file_as_its_own_row():
+    # A file of slack-communication's state that cannot be read, or is a
+    # directory, is that skill's row, never a fault of the whole list.
+    w = World()
+    ctx = ada_root(w) / ".claude/skills/slack-communication"
+    for name in ("CONTEXT.md", "config.json"):
+        slack_files(w)
+        p = ctx / name
+        p.chmod(0)
+        try:
+            try:
+                p.open().close()
+                readable = True
+            except PermissionError:
+                readable = False
+            assert not readable, "control: a mode-000 file is readable to this user, so the row cannot be made"
+            r = w.fleet_cmd("skills", FAKE_DEMO_RC="0", FLEET_CONTEXT_ROOT=ada_root(w))
+            ok(r, 1)
+            state = skill_table(r.stdout)[0]["slack-communication"][2]
+            assert state.startswith(f"not configured: {name} cannot be read (Permission denied"), state
+        finally:
+            p.chmod(0o644)
+        p.unlink()
+        p.mkdir()
+        r = w.fleet_cmd("skills", FAKE_DEMO_RC="0", FLEET_CONTEXT_ROOT=ada_root(w))
+        ok(r, 1)
+        state = skill_table(r.stdout)[0]["slack-communication"][2]
+        assert state.startswith(f"not configured: {name} is not a file"), state
+        p.rmdir()
+
+
+# A check's verdict is its stdout's last non-empty line; stderr's only when stdout
+# says nothing. (FAKE_DEMO_* env, the verdict either command must show)
+VERDICTS = [({"FAKE_DEMO_LINE": "NOT INSTALLED: no token", "FAKE_DEMO_WARN": "warning: a deprecated flag"},
+             "NOT INSTALLED: no token"),
+            ({"FAKE_DEMO_QUIET": "1", "FAKE_DEMO_WARN": "fatal: config.json unreadable"},
+             "fatal: config.json unreadable")]
+
+
+@case
+def skills_takes_a_checks_verdict_from_its_stdout():
+    w = World()
+    for extra, verdict in VERDICTS:
+        r = w.fleet_cmd("skills", FAKE_DEMO_RC="2", FLEET_CONTEXT_ROOT=ada_root(w), **extra)
+        ok(r, 1)
+        assert skill_table(r.stdout)[0]["demo-skill"][2] == f"not configured: {verdict}", r.stdout
+
+
+@case
+def check_all_takes_a_checks_verdict_from_its_stdout():
+    w = World()
+    for extra, verdict in VERDICTS:
+        r = w.fleet_cmd("check-all", FAKE_DEMO_RC="2", FLEET_CONTEXT_ROOT=ada_root(w), **extra)
+        ok(r, 1)
+        row = next(ln for ln in r.stdout.splitlines() if ln.startswith("demo-skill "))
+        assert row.endswith("  " + verdict), row
 
 
 @case

@@ -183,12 +183,20 @@ LOAD-BEARING PROPERTIES - each is here because removing it opens a hole:
     validate itself reads) and never against the whole schema, which refuses
     every placeholder.
 
+  * SKILLS --SELECT AND --ASK CHANGE ONLY THE INSTALL THEY RUN IN: the manifest
+    FLEET_CONTEXT_ROOT names, else the git top level of the working directory's.
+    Never one found through CLAUDE_CONFIG_DIR: an agent session exports it, so
+    from a repository with no manifest the read-only lookup lands on that
+    agent's own install, and a write there rewrites the agent's skills. The list
+    keeps the full lookup, as `fleet settings` does: it only reads.
+
   * SKILLS --ASK NEVER WAITS WITHOUT A TERMINAL. The installer is usually an
     agent, whose stdin is a pipe that may never close: a prompt there blocks the
     session with nobody to answer it. So --ask refuses (exit 2) unless stdin
     AND stdout are terminals, before the first prompt, and end of input at a
     prompt is exit 2 with nothing applied. --select is the same choice without
-    a terminal.
+    a terminal. Enter at every prompt changes nothing: each default is the
+    current selection, and a partly selected group's is keep (not all, not none).
 
   * A SKILL'S INSTALL STATE IS DISCOVERED, NEVER RECORDED. `fleet skills`
     reports `configured` only from what is there at each run: the skill's
@@ -1810,21 +1818,27 @@ def agent_daemon_env(env, agent, enabled):
 
 
 def run_check(check, root, env):
-    """(exit code, last line) of one skill's installation/check, run as every
+    """(exit code, verdict line) of one skill's installation/check, run as every
     caller runs it: through its shebang's interpreter, in the install root, with
     `env` and FLEET_CONTEXT_ROOT the install root, no stdin, CHECK_TIMEOUT. A
     check that cannot run is -1 and the error. check-all and skills both call
-    this, so a check sees one environment whichever reports it."""
+    this, so a check sees one environment whichever reports it.
+
+    The verdict is the last non-empty line of the check's STDOUT, and of its
+    stderr only when stdout is empty: read from both together, a warning a
+    library prints to stderr hides `NOT INSTALLED: <reason>`. Whole: a verdict
+    cut short can end in the head of a caveat (a bare "NOT" on an OK row)."""
     try:
         p = subprocess.run(interpreter(check), cwd=root, env={**env, "FLEET_CONTEXT_ROOT": str(root)},
                            capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=CHECK_TIMEOUT)
-        rc, text = p.returncode, (p.stdout + "\n" + p.stderr)
+        rc, streams = p.returncode, (p.stdout, p.stderr)
     except (OSError, subprocess.TimeoutExpired) as exc:
-        rc, text = -1, f"{type(exc).__name__}: {exc}"
-    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-    # Whole: a check's last line is its verdict, and one cut short can end in
-    # the head of a caveat (a bare "NOT" on an OK row).
-    return rc, lines[-1] if lines else ""
+        rc, streams = -1, (f"{type(exc).__name__}: {exc}",)
+    for text in streams:
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        if lines:
+            return rc, lines[-1]
+    return rc, ""
 
 
 def agent_install(agent):
@@ -1913,9 +1927,14 @@ def install_state(name, sec, root, home, env):
     ctx = root / SKILLS / name
     for f in sec.context_files:
         p = ctx / f
-        if not p.is_file():
-            return f"not configured: {f} is missing ({p})"
-        text = p.read_text(encoding="utf-8", errors="replace")
+        try:
+            if not p.exists():   # follows a link: a dangling one is missing
+                return f"not configured: {f} is missing ({p})"
+            if not p.is_file():
+                return f"not configured: {f} is not a file ({p})"
+            text = p.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:   # this skill's row, never a fault of the whole list
+            return f"not configured: {f} cannot be read ({exc.strerror}: {p})"
         if not text.strip():
             return f"not configured: {f} is empty ({p})"
         if f == "config.json":
@@ -1943,23 +1962,49 @@ def unedited_example(config, example):
 
 
 def skills_root():
-    """(install root, None), or (None, why) before an install exists: no
-    FLEET_CONTEXT_ROOT and nothing paths.install_root() resolves. Set without a
-    manifest, FLEET_CONTEXT_ROOT is the environment fault it always is (exit 3)."""
+    """The list's install root through the full lookup, paths.install_root(),
+    which the list may take because it only reads (as `fleet settings` does); or
+    None when no manifest is found ANYWHERE it looks: FLEET_CONTEXT_ROOT unset, none at the git top level, and none in the
+    agent home CLAUDE_CONFIG_DIR names. Every other fault stays exit 3, as
+    check-all reports it: a home holding two manifests is a broken install, not
+    "no install yet", and FLEET_CONTEXT_ROOT naming no manifest is a wrong variable."""
     try:
-        return paths.install_root(), None
-    except fleetlib.EnvironmentFault as exc:
-        if os.environ.get("FLEET_CONTEXT_ROOT"):
+        return paths.install_root()
+    except fleetlib.EnvironmentFault:
+        cfg = os.environ.get("CLAUDE_CONFIG_DIR")
+        home = Path(os.path.realpath(os.path.expanduser(cfg))).parent if cfg else None
+        if os.environ.get("FLEET_CONTEXT_ROOT") or (home is not None and any(home.glob(f"*/{MANIFEST}"))):
             raise
-        return None, str(exc)
+        return None
+
+
+def changeable_root():
+    """The install --select and --ask change: the one FLEET_CONTEXT_ROOT names,
+    else the git top level of the working directory when it holds the manifest,
+    and never one CLAUDE_CONFIG_DIR leads to (SKILLS --SELECT AND --ASK CHANGE
+    ONLY THE INSTALL THEY RUN IN). Refused, naming both places, when neither has
+    one; FLEET_CONTEXT_ROOT naming no manifest is exit 3, as it always is."""
+    if os.environ.get("FLEET_CONTEXT_ROOT"):
+        return paths.install_root()
+    top = paths._git_top(os.getcwd())
+    if top is not None and (top / MANIFEST).is_file():
+        return top
+    where = (f"the git top level of the working directory, {top}, holds no {MANIFEST}" if top is not None
+             else f"the working directory {os.getcwd()} is in no git tree")
+    refuse(f"no install manifest to change: FLEET_CONTEXT_ROOT is unset and {where}. --select and --ask "
+           f"change only the install they run in, never one CLAUDE_CONFIG_DIR leads to: run them from the "
+           f"install's checkout, or set FLEET_CONTEXT_ROOT to its root")
 
 
 def read_manifest_text(path):
     """(text, parsed) of an install manifest, comments kept and no schema
     check: a freshly adopted template still holds placeholders. Refused when it
     is not a JSON object whose `skills` is a list of strings."""
-    text = path.read_text(encoding="utf-8")
+    raw = path.read_bytes()
     try:
+        # Decoded, never read_text: newline translation would turn a CRLF
+        # manifest into LF, and --select writes back every byte it read.
+        text = raw.decode("utf-8")
         data = json.loads(text)
     except ValueError as exc:
         refuse(f"{path} is not valid JSON ({exc}); fix it by hand first")
@@ -2047,7 +2092,8 @@ def with_skills(path, text, names):
     """`text` with its top-level `skills` array's text replaced by `names` and
     every other byte kept. The array keeps its layout: one line when it was one
     line, else item lines of up to ~100 columns at its first item line's indent,
-    closed at its closing line's indent (the template's layout)."""
+    closed at its closing line's indent (the template's layout), each ending as
+    the array's own lines end (CRLF or LF)."""
     spans = top_level_spans(text, "skills")
     if len(spans) != 1:
         refuse(f"{path} holds a top-level `skills` {len(spans)} times; fix it by hand first")
@@ -2056,6 +2102,7 @@ def with_skills(path, text, names):
     if "\n" not in old:
         array = json.dumps(names)
     else:
+        nl = "\r\n" if "\r\n" in old else "\n"   # the array's own line ending
         indent, close = (re.match(r"[ \t]*", old[i + 1:]).group(0) for i in (old.index("\n"), old.rindex("\n")))
         lines, cur = [], ""
         for item in map(json.dumps, names):
@@ -2064,7 +2111,7 @@ def with_skills(path, text, names):
                 cur = ""
             cur = f"{cur}, {item}" if cur else item
         lines.append(cur)
-        array = "[\n" + ",\n".join(indent + ln for ln in lines) + f"\n{close}]"
+        array = "[" + nl + ("," + nl).join(indent + ln for ln in lines) + nl + close + "]"
     new = text[:start] + array + text[end:]
     expected = json.loads(text)
     expected["skills"] = list(names)
@@ -2118,9 +2165,16 @@ def skill_groups(tree):
         fault(f"{p} is not a skill-groups file: {type(exc).__name__}: {exc}")
 
 
-def answer_yes(prompt, default):
-    """One y/n answer from the terminal; Enter takes `default`. End of input or
-    an interrupt refuses the whole --ask, nothing applied."""
+YES_NO = {"y": True, "yes": True, "n": False, "no": False}
+# A partly selected group: keep (None) leaves each member as it is.
+KEEP_ALL_NONE = {"k": None, "keep": None, "a": True, "all": True, "y": True, "yes": True,
+                 "n": False, "none": False, "no": False}
+
+
+def answer(prompt, words, default, hint):
+    """One answer from the terminal: the value of the word typed, a key of
+    `words`; Enter takes `default`. End of input or an interrupt refuses the
+    whole --ask, nothing applied."""
     while True:
         sys.stdout.write(prompt)
         sys.stdout.flush()
@@ -2135,14 +2189,15 @@ def answer_yes(prompt, default):
         word = line.strip().lower()
         if not word:
             return default
-        if word in ("y", "yes", "n", "no"):
-            return word[0] == "y"
-        print("answer y or n (Enter takes the default)")
+        if word in words:
+            return words[word]
+        print(f"answer {hint} (Enter takes the default)")
 
 
 def ask_skills(current, required):
     """The selection --ask makes: one prompt per skill group and per other
-    non-required fleet skill, each defaulting to the current selection."""
+    non-required fleet skill, each defaulting to the current selection, so
+    Enter at every prompt changes nothing."""
     tree = fleet_skills()
     unknown = [n for n in current if n not in tree]
     if unknown:
@@ -2152,14 +2207,19 @@ def ask_skills(current, required):
     grouped = {n for m in groups.values() for n in m}
     for n in required:
         print(f"skill {n}: required, not asked")
-    items = [("skill", n, [n], f"(install: {install_form(tree[n])[0]})")
-             for n in tree if n not in required and n not in grouped]
-    items += [("group", g, m, f"({len(m)} skills: {', '.join(m)})") for g, m in groups.items() if m]
+    items = [("skill", n, [n]) for n in tree if n not in required and n not in grouped]
+    items += [("group", g, m) for g, m in groups.items() if m]
     chosen = {}
-    for kind, name, members, what in items:
-        default = all(n in current for n in members)
-        yes = answer_yes(f"{kind} {name} {what} [{'Y/n' if default else 'y/N'}] ", default)
-        chosen.update((n, yes) for n in members)
+    for kind, name, members in items:
+        have = sum(n in current for n in members)
+        what = (f"(install: {install_form(tree[name])[0]})" if kind == "skill"
+                else f"({len(members)} skills: {', '.join(members)}; {have} selected)")
+        if 0 < have < len(members):   # Enter must change nothing, so keep is the default
+            pick = answer(f"{kind} {name} {what} [keep/all/none] ", KEEP_ALL_NONE, None, "keep, all or none")
+        else:
+            pick = answer(f"{kind} {name} {what} [{'Y/n' if have else 'y/N'}] ", YES_NO, bool(have), "y or n")
+        if pick is not None:
+            chosen.update((n, pick) for n in members)
     out = [n for n in current if chosen.get(n, True)]
     out += [n for n in dict.fromkeys([*required, *chosen]) if n not in out and chosen.get(n, True)]
     return out
@@ -2173,10 +2233,14 @@ def cmd_skills(a):
     if a.ask and not (sys.stdin.isatty() and sys.stdout.isatty()):   # SKILLS --ASK NEVER WAITS
         refuse("--ask needs a terminal on stdin and stdout; without one, choose with "
                "--select <name>[,<name>...]")
-    home, root, why = (*agent_install(a.agent), None) if a.agent else (None, *skills_root())
+    home = None
+    if a.agent:
+        home, root = agent_install(a.agent)
+    elif choose:
+        root = changeable_root()
+    else:
+        root = skills_root()
     if root is None:
-        if choose:
-            refuse(f"no install manifest to change ({why}); `fleet adopt <install root>` writes one")
         print_skills(skill_rows(None, None, ()), installed=False)
         return OK
     path = root / MANIFEST
