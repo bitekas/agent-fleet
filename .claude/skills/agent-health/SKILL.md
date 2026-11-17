@@ -788,9 +788,9 @@ handover (its charter holds the policy); the command that lists the agents with
 a live session; the sweep cadence; where the owning agent keeps its usage
 ledger and its handover ledger; and where handover packages are written.
 
-**Writes:** `CONTEXT.md`.
+**Writes:** `CONTEXT.md`, and the usage ledger at the path it names, created
+once with `parse_usage.py --init --ledger <path>`.
 
-**Steps:** none beyond writing the file above; the usage ledger is created once
-with `parse_usage.py --init --ledger <path>`. The account pool and each
+**Steps:** none beyond writing the files above. The account pool and each
 agent's tmux facts come from the agent-revive install, so that skill is
 installed with this one.

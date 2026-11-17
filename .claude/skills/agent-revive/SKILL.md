@@ -1602,8 +1602,9 @@ each pool account's credential, which enters the pool only through agent-health'
 
 **Writes:** `config.json`, `CONTEXT.md` and `installation/.install-state.json`
 (keyed by host); the sign-in driver's dependencies, `signin_driver/node_modules`
-and `signin_driver/browsers`, in the fleet tree the skill runs from, once per tree;
-the system packages `installation/INSTRUCTION.md` names.
+and `signin_driver/browsers`, once per fleet tree the skill runs from (in a host
+checkout `fleet install` and `fleet upgrade` put them there; in any other tree
+step 2b does); the system packages `installation/INSTRUCTION.md` names.
 
 **Steps:** `installation/INSTRUCTION.md`; no step is per agent.
 `installation/check` reports the state, and `installation/check --online` also

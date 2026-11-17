@@ -869,9 +869,11 @@ and hand over; that bot's user id, handle and display name; a state directory
 and cursor prefix no other watcher on the machine shares. Install-wide: the
 workspace's domain and team id, the agent that owns the surface, a display
 label for every person and bot the agents correspond with, and optionally the
-poll tunables. For `CONTEXT.md`: which workspace and bot, which channels exist
-and what each is for, who the people are and which are authorized and on what
-basis, and where the policy charter lives.
+poll tunables. For `CONTEXT.md`: which workspace and bot, which scopes each
+bot has and when they were verified, which channels exist and what each is
+for, who the people are and which are authorized and on what basis, where the
+policy charter lives, the watcher's units and log, the personal key's path,
+and the model that transcribes a voice message and how its key is resolved.
 
 **Writes:** `config.json`, `CONTEXT.md` and `installation/.install-state.json`
 (the host it was written on); per agent, the bot token at

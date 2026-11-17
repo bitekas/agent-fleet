@@ -463,7 +463,9 @@ and what the delegation grant was probed to cover. Only a Workspace
 administrator can grant the service account domain-wide delegation for exactly
 those scopes and enable the Sheets and Drive APIs on the key's project.
 
-**Writes:** `config.json` and `CONTEXT.md`; per agent, the key file at the
+**Writes:** `config.json` (once: its `identity.agent` is the default agent,
+and a session names another with `GSHEETS_AGENT`) and `CONTEXT.md`; per agent,
+the key file at the
 path `credential.key_path` resolves to (by default
 `<home>/secrets/personal/<subject>-service-account.json`), mode 600 in a
 directory of mode 700; `installation/.install-state.json`, keyed by host and
