@@ -13,6 +13,7 @@ fleet - the agent fleet's host command.
   fleet where <skill> [<file>]
   fleet settings [<dotted.key>]
   fleet check-all [<agent>]
+  fleet skills [<agent> | --select <name>[,<name>...] | --ask]
   fleet leak-scan --staged | --range <a>..<b> | --history | --tree <dir>
   fleet adopt <project dir>
   fleet session-check [--project <dir>]
@@ -168,6 +169,33 @@ LOAD-BEARING PROPERTIES - each is here because removing it opens a hole:
     has no fleet. It carries no install's path or name, so every install's
     settings hold the same bytes, and its SESSION_MARK comment is how `adopt`
     and `status` recognise it.
+
+  * SKILLS --SELECT REPLACES ONE ARRAY'S TEXT AND CHECKS ONLY THE SKILLS RULES.
+    The manifest is the install's own file: its `_comment` keys, its layout and
+    every value but `skills` stay byte for byte, the splice is re-parsed and
+    compared before it is written, and a nested `skills` key (a comment's
+    example) is never the one replaced. A json.dumps rewrite would reformat the
+    file a person reviews. And the installer selects right after `adopt`,
+    while the other values are still the template's placeholders, so the
+    selection is checked against the skills rules alone (a name, a fleet
+    SKILL.md, no duplicate, chat-transport and each enabled transport's skill)
+    and never against the whole schema, which refuses every placeholder.
+
+  * SKILLS --ASK NEVER WAITS WITHOUT A TERMINAL. The installer is usually an
+    agent, whose stdin is a pipe that may never close: a prompt there blocks the
+    session with nobody to answer it. So --ask refuses (exit 2) unless stdin
+    AND stdout are terminals, before the first prompt, and end of input at a
+    prompt is exit 2 with nothing applied. --select is the same choice without
+    a terminal.
+
+  * A SKILL'S INSTALL STATE IS DISCOVERED, NEVER RECORDED. `fleet skills`
+    reports `configured` only from what is there at each run: the skill's
+    installation/check, run exactly as check-all runs it (check_dir, check_env
+    and run_check are the one code both call, so `fleet skills <agent>` and
+    `fleet check-all <agent>` hand a per-agent check the same environment), or,
+    with no check, the CONTEXT.md / config.json its Install section's Writes
+    names, present and non-empty (a config.json a JSON object). A marker written
+    once would say configured after the config it vouched for was deleted.
 """
 import argparse
 import functools
@@ -194,7 +222,8 @@ os.environ["PYTHONDONTWRITEBYTECODE"] = "1"   # every Python this command starts
 sys.path.insert(0, str(FLEET_ROOT / "lib"))
 try:
     import fleetlib
-    from fleetlib import manifest, paths, services
+    from fleetlib import manifest, paths, services, transports
+    from fleetlib.skills import InstallSectionError, install_section
 except ImportError as _exc:
     print(f"fleet: cannot import fleetlib from {FLEET_ROOT / 'lib'}: {_exc}", file=sys.stderr)
     sys.exit(3)
@@ -241,6 +270,8 @@ STEP_POINTER = re.compile(r"(?<![\w./-])/([a-z0-9][a-z0-9-]*)`?(?:['\u2019]s)?\s
 IDENTITIES = "identities.json"   # beside the host settings: THE IDENTITIES UPGRADE TRUSTS
 EMAIL = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
 TEMPLATE = Path("templates") / "fleet.example.json"
+GROUPS = Path("templates") / "skill-groups.json"
+CHECK_TIMEOUT = 300   # seconds an installation/check may run (check-all and skills)
 # The SessionStart hook `adopt` merges into a project's .claude/settings.json
 # ("THE ADOPTED HOOK NEEDS NO FLEET TO SPEAK" above). One line of sh, which
 # Claude Code runs as `sh -c` with the session's environment. No matcher, so it
@@ -1776,44 +1807,391 @@ def agent_daemon_env(env, agent, enabled):
     env[WATCHDOG_CONFIG[0]] = watchdog_config(agent, home)
 
 
-def cmd_check_all(a):
+def run_check(check, root, env):
+    """(exit code, last line) of one skill's installation/check, run as every
+    caller runs it: through its shebang's interpreter, in the install root, with
+    `env` and FLEET_CONTEXT_ROOT the install root, no stdin, CHECK_TIMEOUT. A
+    check that cannot run is -1 and the error. check-all and skills both call
+    this, so a check sees one environment whichever reports it."""
+    try:
+        p = subprocess.run(interpreter(check), cwd=root, env={**env, "FLEET_CONTEXT_ROOT": str(root)},
+                           capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=CHECK_TIMEOUT)
+        rc, text = p.returncode, (p.stdout + "\n" + p.stderr)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        rc, text = -1, f"{type(exc).__name__}: {exc}"
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    # Whole: a check's last line is its verdict, and one cut short can end in
+    # the head of a caveat (a bare "NOT" on an OK row).
+    return rc, lines[-1] if lines else ""
+
+
+def agent_install(agent):
+    """(agent home, install root) of a named agent: its home project."""
+    home = agent_home(host()["agents_root"], agent)
+    return home, paths.home_project(home)
+
+
+def check_env(agent, home, enabled):
+    """The environment every installation/check is run with (run_check adds
+    FLEET_CONTEXT_ROOT). With no agent, the caller's own: its install is the
+    caller's. For an agent, the agent's config dir and its daemon configs
+    (agent_daemon_env, for the transports its install `enabled`), so a per-agent
+    check reads that agent's files, never the caller's. check-all and skills
+    both build it here."""
     env = dict(os.environ)
-    if a.agent:
-        home = agent_home(host()["agents_root"], a.agent)
-        root = paths.home_project(home)
+    if agent:
         env["CLAUDE_CONFIG_DIR"] = str(home / ".claude")
-    else:
-        # The caller's own install: its environment is that install's.
-        home, root = None, paths.install_root()
-    env["FLEET_CONTEXT_ROOT"] = str(root)
+        agent_daemon_env(env, agent, enabled)
+    return env
+
+
+def check_dir(home, name):
+    """The skill directory whose installation/check is run: the agent's link
+    target when its config dir links the skill into a fleet tree, else this
+    tree's."""
+    entry = home / ".claude" / "skills" / name if home else None
+    return Path(os.path.realpath(entry)) if entry and is_fleet_link(entry) else FLEET_ROOT / SKILLS / name
+
+
+def cmd_check_all(a):
+    # With no agent, the caller's own install: its environment is that install's.
+    home, root = agent_install(a.agent) if a.agent else (None, paths.install_root())
     m = manifest.load(root)
-    if home:
-        agent_daemon_env(env, a.agent, m["transports"]["enabled"])
+    env = check_env(a.agent, home, m["transports"]["enabled"])
     rows, bad = [], 0
     for name in m["skills"]:
-        entry = home / ".claude" / "skills" / name if home else None
-        skill_dir = Path(os.path.realpath(entry)) if entry and is_fleet_link(entry) else FLEET_ROOT / SKILLS / name
-        check = skill_dir / "installation" / "check"
+        check = check_dir(home, name) / "installation" / "check"
         if not check.is_file():
             rows.append((name, "-", "no check", ""))
             continue
-        try:
-            p = subprocess.run(interpreter(check), cwd=root, env=env, capture_output=True, text=True,
-                               stdin=subprocess.DEVNULL, timeout=300)
-            rc, text = p.returncode, (p.stdout + "\n" + p.stderr)
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            rc, text = -1, f"{type(exc).__name__}: {exc}"
+        rc, line = run_check(check, root, env)
         state = {0: "installed", 1: "stale", 2: "not installed"}.get(rc, "error")
-        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-        # Whole: a check's last line is its verdict, and one cut short can end
-        # in the head of a caveat (a bare "NOT" on an OK row).
-        rows.append((name, str(rc), state, lines[-1] if lines else ""))
+        rows.append((name, str(rc), state, line))
         bad += rc != 0
     w = max(len(r[0]) for r in rows) if rows else 5
     print(f"{'SKILL':<{w}}  EXIT  {'STATE':<13}  LAST LINE")
     for name, rc, state, line in rows:
         print(f"{name:<{w}}  {rc:<4}  {state:<13}  {line}")
     return DRIFT if bad else OK
+
+
+# ------------------------------------------------------------------ skills
+
+def fleet_skills():
+    """{name: skill dir} of every fleet skill of the tree this command runs from,
+    in name order: each <tree>/.claude/skills/*/SKILL.md."""
+    return {p.parent.name: p.parent for p in sorted((FLEET_ROOT / SKILLS).glob("*/SKILL.md"))}
+
+
+def install_form(skill_dir):
+    """(INSTALL column, InstallSection or None, why it does not parse or None)."""
+    try:
+        sec = install_section((skill_dir / "SKILL.md").read_text(encoding="utf-8"))
+    except InstallSectionError as exc:
+        return "invalid", None, str(exc)
+    if sec.form == "nothing":
+        return "nothing", sec, None
+    return ("steps" if (skill_dir / "installation" / "INSTRUCTION.md").is_file() else "values"), sec, None
+
+
+def install_state(name, sec, root, home, env):
+    """STATE of a selected skill whose Install section parsed: discovered each
+    run, never recorded. Its installation/check (check_dir, run with check_env
+    exactly as check-all runs it), else the presence of the CONTEXT.md and
+    config.json its section's Writes names, in its install context."""
+    if sec.form == "nothing":
+        return "nothing to install"
+    check = check_dir(home, name) / "installation" / "check"
+    if check.is_file():
+        rc, line = run_check(check, root, env)
+        return "configured" if rc == 0 else f"not configured: {line or f'its installation/check exited {rc}'}"
+    if not sec.context_files:
+        return ("not configured: nothing to measure: no installation/check, and its Install section's "
+                "Writes names no `CONTEXT.md` or `config.json`")
+    ctx = root / SKILLS / name
+    for f in sec.context_files:
+        p = ctx / f
+        if not p.is_file():
+            return f"not configured: {f} is missing ({p})"
+        text = p.read_text(encoding="utf-8", errors="replace")
+        if not text.strip():
+            return f"not configured: {f} is empty ({p})"
+        if f == "config.json":
+            try:
+                obj = json.loads(text)
+            except ValueError:
+                obj = None
+            if not isinstance(obj, dict):
+                return f"not configured: {f} is not a JSON object ({p})"
+    return "configured"
+
+
+def skills_root():
+    """(install root, None), or (None, why) before an install exists: no
+    FLEET_CONTEXT_ROOT and nothing paths.install_root() resolves. Set without a
+    manifest, FLEET_CONTEXT_ROOT is the environment fault it always is (exit 3)."""
+    try:
+        return paths.install_root(), None
+    except fleetlib.EnvironmentFault as exc:
+        if os.environ.get("FLEET_CONTEXT_ROOT"):
+            raise
+        return None, str(exc)
+
+
+def read_manifest_text(path):
+    """(text, parsed) of an install manifest, comments kept and no schema
+    check: a freshly adopted template still holds placeholders. Refused when it
+    is not a JSON object whose `skills` is a list of strings."""
+    text = path.read_text(encoding="utf-8")
+    try:
+        data = json.loads(text)
+    except ValueError as exc:
+        refuse(f"{path} is not valid JSON ({exc}); fix it by hand first")
+    if not (isinstance(data, dict) and isinstance(data.get("skills"), list)
+            and all(isinstance(n, str) for n in data["skills"])):
+        refuse(f"{path}: `skills` is not a list of skill names; fix it by hand first")
+    return text, data
+
+
+def required_skills(data, path):
+    """chat-transport and the skill of each transport the manifest enables: what
+    manifest.validate requires `skills` to hold, read from the raw manifest so
+    no other key's check applies."""
+    t = data.get("transports")
+    enabled = t.get("enabled") if isinstance(t, dict) else None
+    if not (isinstance(enabled, list) and all(isinstance(n, str) for n in enabled)):
+        refuse(f"{path}: `transports.enabled` is not a list of transport names; fix it by hand first")
+    registry = {d["name"]: d["skill"] for d in transports.all()}
+    unknown = [n for n in enabled if n not in registry]
+    if unknown:
+        refuse(f"{path}: `transports.enabled` names {', '.join(unknown)}, which no transport.json under "
+               f"{transports.registry_dir()} declares; fix it by hand first")
+    return list(dict.fromkeys([manifest.CHAT_TRANSPORT_SKILL, *(registry[n] for n in enabled)]))
+
+
+def skill_rows(root, data, required, home=None, env=None):
+    """(SKILL, SELECTED, INSTALL, STATE) for every fleet skill, then one row for
+    each name `skills` lists that this tree has no SKILL.md for. `data` None:
+    before an install, the template's `skills` proposed and no state. `home`
+    and `env`: whose checks, run how (check_env)."""
+    tree = fleet_skills()
+    if data is None:
+        try:
+            proposed = manifest.strip_comments(json.loads((FLEET_ROOT / TEMPLATE).read_text(encoding="utf-8")))["skills"]
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            fault(f"{FLEET_ROOT / TEMPLATE} carries no readable `skills`: {exc}")
+        return [(n, "proposed" if n in proposed else "-", install_form(d)[0], "-") for n, d in tree.items()]
+    selected = data["skills"]
+    rows = []
+    for name, d in tree.items():
+        form, sec, why = install_form(d)
+        sel = "required" if name in required else "yes" if name in selected else "no"
+        if sel == "no":
+            state = "-"
+        elif name not in selected:
+            state = "not configured: required, but the manifest's `skills` does not list it"
+        elif sec is None:
+            state = f"not configured: no parseable Install section: {why}"
+        else:
+            state = install_state(name, sec, root, home, env)
+        rows.append((name, sel, form, state))
+    rows += [(n, "yes", "-", f"not configured: this fleet tree has no {FLEET_ROOT / SKILLS / n / 'SKILL.md'}")
+             for n in selected if n not in tree]
+    return rows
+
+
+def print_skills(rows, installed):
+    """Print the list and its closing count line; the number of selected skills
+    not configured."""
+    w = max(len(r[0]) for r in [("SKILL",), *rows])
+    for r in [("SKILL", "SELECTED", "INSTALL", "STATE"), *rows]:
+        print(f"{r[0]:<{w}}  {r[1]:<8}  {r[2]:<7}  {r[3]}")
+    n = len(fleet_skills())
+    if not installed:
+        proposed = sum(r[1] == "proposed" for r in rows)
+        print(f"{n} fleet skills; {proposed} proposed by {TEMPLATE}; no install manifest here yet: "
+              f"`fleet adopt <install root>` writes one")
+        return 0
+    sel = [r[3] for r in rows if r[1] != "no"]
+    bad = sum(s.startswith("not configured") for s in sel)
+    print(f"{n} fleet skills; {len(sel)} selected: {sel.count('configured')} configured, "
+          f"{sel.count('nothing to install')} nothing to install, {bad} not configured")
+    return bad
+
+
+_JSON_WS = re.compile(r"[ \t\n\r]*")
+
+
+def top_level_spans(text, key):
+    """[(start, end)] of the VALUE of each top-level `key` member in a JSON
+    object's text (which json.loads has already accepted)."""
+    dec, spans = json.JSONDecoder(), []
+    i = _JSON_WS.match(text).end()
+    if text[i:i + 1] != "{":
+        return spans
+    i = _JSON_WS.match(text, i + 1).end()
+    while text[i:i + 1] == '"':
+        k, i = dec.raw_decode(text, i)
+        i = _JSON_WS.match(text, _JSON_WS.match(text, i).end() + 1).end()   # past the ':'
+        _, end = dec.raw_decode(text, i)
+        if k == key:
+            spans.append((i, end))
+        i = _JSON_WS.match(text, end).end()
+        if text[i:i + 1] != ",":
+            break
+        i = _JSON_WS.match(text, i + 1).end()
+    return spans
+
+
+def with_skills(path, text, names):
+    """`text` with its top-level `skills` array's text replaced by `names` and
+    every other byte kept. The array keeps its layout: one line when it was one
+    line, else item lines of up to ~100 columns at its first item line's indent,
+    closed at its closing line's indent (the template's layout)."""
+    spans = top_level_spans(text, "skills")
+    if len(spans) != 1:
+        refuse(f"{path} holds a top-level `skills` {len(spans)} times; fix it by hand first")
+    start, end = spans[0]
+    old = text[start:end]
+    if "\n" not in old:
+        array = json.dumps(names)
+    else:
+        indent, close = (re.match(r"[ \t]*", old[i + 1:]).group(0) for i in (old.index("\n"), old.rindex("\n")))
+        lines, cur = [], ""
+        for item in map(json.dumps, names):
+            if cur and len(indent) + len(cur) + 2 + len(item) > 100:
+                lines.append(cur)
+                cur = ""
+            cur = f"{cur}, {item}" if cur else item
+        lines.append(cur)
+        array = "[\n" + ",\n".join(indent + ln for ln in lines) + f"\n{close}]"
+    new = text[:start] + array + text[end:]
+    expected = json.loads(text)
+    expected["skills"] = list(names)
+    if json.loads(new) != expected:
+        refuse(f"{path}: the `skills` array could not be replaced in place; change it by hand")
+    return new
+
+
+def select_skills(path, text, data, names, required):
+    """Make the manifest's `skills` exactly `names`, in order, refusing before
+    the write. Returns the names this call added."""
+    tree = fleet_skills()
+    bad = [n for n in names if not manifest._SKILL.fullmatch(n)]   # the manifest's own name rule
+    if bad:
+        refuse(f"{', '.join(map(repr, bad))} is not a skill name ([a-z0-9-], never a path)")
+    twice = list(dict.fromkeys(n for n in names if names.count(n) > 1))
+    if twice:
+        refuse(f"the selection names {', '.join(twice)} twice")
+    unknown = [n for n in names if n not in tree]
+    if unknown:
+        refuse(f"{', '.join(unknown)} has no SKILL.md in {FLEET_ROOT / SKILLS}")
+    missing = [n for n in required if n not in names]
+    if missing:
+        refuse(f"the selection lacks {', '.join(missing)} (chat-transport and every enabled transport's "
+               f"skill are required)")
+    current = data["skills"]
+    if names == current:
+        print("nothing changed")
+        return []
+    new = with_skills(path, text, names)
+    # Every refusal is behind us.
+    write_replace(path, new, stat.S_IMODE(os.stat(path).st_mode))
+    added = [n for n in names if n not in current]
+    removed = [n for n in current if n not in names]
+    parts = ([f"added {', '.join(added)}"] if added else []) + ([f"removed {', '.join(removed)}"] if removed else [])
+    changed("skills: " + (", ".join(parts) or "reordered"))
+    data["skills"] = list(names)
+    return added
+
+
+def skill_groups(tree):
+    """{group: [member, ...]} of this tree's templates/skill-groups.json, each
+    member a fleet skill of `tree` ({} when the file is absent)."""
+    p = FLEET_ROOT / GROUPS
+    if not p.is_file():
+        return {}
+    try:
+        groups = manifest.strip_comments(json.loads(p.read_text(encoding="utf-8")))
+        return {g: [n for n in v["skills"] if n in tree] for g, v in groups.items()}
+    except (ValueError, KeyError, TypeError, AttributeError) as exc:
+        fault(f"{p} is not a skill-groups file: {type(exc).__name__}: {exc}")
+
+
+def answer_yes(prompt, default):
+    """One y/n answer from the terminal; Enter takes `default`. End of input or
+    an interrupt refuses the whole --ask, nothing applied."""
+    while True:
+        sys.stdout.write(prompt)
+        sys.stdout.flush()
+        try:
+            line = sys.stdin.readline()
+        except KeyboardInterrupt:
+            print()
+            refuse("interrupted at a prompt; no answer was applied")
+        if not line:
+            print()
+            refuse("end of input at a prompt; no answer was applied")
+        word = line.strip().lower()
+        if not word:
+            return default
+        if word in ("y", "yes", "n", "no"):
+            return word[0] == "y"
+        print("answer y or n (Enter takes the default)")
+
+
+def ask_skills(current, required):
+    """The selection --ask makes: one prompt per skill group and per other
+    non-required fleet skill, each defaulting to the current selection."""
+    tree = fleet_skills()
+    unknown = [n for n in current if n not in tree]
+    if unknown:
+        refuse(f"the manifest's `skills` names {', '.join(unknown)}, which this fleet tree has no SKILL.md for; "
+               f"choose with --select instead")
+    groups = {g: [n for n in m if n not in required] for g, m in skill_groups(tree).items()}
+    grouped = {n for m in groups.values() for n in m}
+    for n in required:
+        print(f"skill {n}: required, not asked")
+    items = [("skill", n, [n], f"(install: {install_form(tree[n])[0]})")
+             for n in tree if n not in required and n not in grouped]
+    items += [("group", g, m, f"({len(m)} skills: {', '.join(m)})") for g, m in groups.items() if m]
+    chosen = {}
+    for kind, name, members, what in items:
+        default = all(n in current for n in members)
+        yes = answer_yes(f"{kind} {name} {what} [{'Y/n' if default else 'y/N'}] ", default)
+        chosen.update((n, yes) for n in members)
+    out = [n for n in current if chosen.get(n, True)]
+    out += [n for n in dict.fromkeys([*required, *chosen]) if n not in out and chosen.get(n, True)]
+    return out
+
+
+def cmd_skills(a):
+    choose = a.ask or a.select is not None
+    if a.agent and choose:
+        refuse(f"an agent ({a.agent}) is for the list only: the selection is the install's, so give "
+               f"--select or --ask without one")
+    if a.ask and not (sys.stdin.isatty() and sys.stdout.isatty()):   # SKILLS --ASK NEVER WAITS
+        refuse("--ask needs a terminal on stdin and stdout; without one, choose with "
+               "--select <name>[,<name>...]")
+    home, root, why = (*agent_install(a.agent), None) if a.agent else (None, *skills_root())
+    if root is None:
+        if choose:
+            refuse(f"no install manifest to change ({why}); `fleet adopt <install root>` writes one")
+        print_skills(skill_rows(None, None, ()), installed=False)
+        return OK
+    path = root / MANIFEST
+    text, data = read_manifest_text(path)
+    required = required_skills(data, path)
+    if choose:
+        names = ask_skills(data["skills"], required) if a.ask else [n.strip() for n in a.select.split(",")]
+        for name in select_skills(path, text, data, names, required):
+            print(f"== {name}: install")
+            form, sec, why = install_form(fleet_skills()[name])
+            body = sec.body if sec else f"(no parseable Install section: {why})\n"
+            sys.stdout.write(body if body.endswith("\n") else body + "\n")
+    env = check_env(a.agent, home, data["transports"]["enabled"])
+    bad = print_skills(skill_rows(root, data, required, home, env), installed=True)
+    return OK if choose or not bad else DRIFT
 
 
 def cmd_leak_scan(a):
@@ -1881,6 +2259,24 @@ def parser():
     p = sub.add_parser("check-all", help="run every linked skill's installation/check")
     p.add_argument("agent", nargs="?")
     p.set_defaults(fn=cmd_check_all, mutates=False)
+    p = sub.add_parser("skills", help="list every fleet skill with its selection, install form and install "
+                                      "state; --select or --ask chooses the install's skills",
+                       description="With no option, list every fleet skill of this tree: SELECTED (in the install "
+                                   "manifest's skills, or required), INSTALL (its Install section: nothing, values "
+                                   "or steps) and STATE (configured, read from its installation/check or the files "
+                                   "its section names). Exit 1 when a selected skill is not configured. Before an "
+                                   "install exists, the template's skills are shown as proposed.")
+    p.add_argument("agent", nargs="?",
+                   help="list for this agent: its home project's install, every check run with the environment "
+                        "`fleet check-all <agent>` gives it (a per-agent check passes only so)")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--select", metavar="NAME[,NAME...]",
+                   help="make the manifest's skills exactly these, in this order (only that array's text "
+                        "changes), print each added skill's Install section, then the list")
+    g.add_argument("--ask", action="store_true",
+                   help="choose on a terminal: one question per skill group and per other skill, each "
+                        "defaulting to the current selection; refused without a terminal")
+    p.set_defaults(fn=cmd_skills, mutates=False)
     p = sub.add_parser("leak-scan", help="run the leak check with this host's deny list, "
                                          "in the working directory's repository")
     g = p.add_mutually_exclusive_group(required=True)

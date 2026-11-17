@@ -46,8 +46,10 @@ import itertools
 import json
 import os
 import plistlib
+import pty
 import pwd
 import re
+import select
 import shlex
 import shutil
 import stat
@@ -349,13 +351,18 @@ DAEMON_VARS = ("SCHED_CONFIG", "SLACK_WATCH_CONFIG", "RELAY_WATCH_CONFIG", "STAL
 
 # The synthetic scheduled-tasks check: its last line names the context it ran
 # in, and with FAKE_CHECK_ENV set it records the daemon config variables it was
-# handed, so check-all's environment is read from the check's own process.
+# handed, so check-all's environment is read from the check's own process. With
+# FAKE_SCHED_PER_AGENT set it is a PER-AGENT check, as the real one is: it passes
+# only when SCHED_CONFIG names a scheduler config that exists.
 FAKE_SCHED_CHECK = r'''#!/usr/bin/env python3
 import json, os
 print('installed: scheduled-tasks v1')
 if os.environ.get("FAKE_CHECK_ENV"):
     with open(os.environ["FAKE_CHECK_ENV"], "w") as f:
         json.dump({k: os.environ.get(k) for k in @VARS@}, f)
+if os.environ.get("FAKE_SCHED_PER_AGENT") and not os.path.isfile(os.environ.get("SCHED_CONFIG") or ""):
+    print(f"not installed: no scheduler config at {os.environ.get('SCHED_CONFIG')}")
+    raise SystemExit(2)
 print(f"ctx={os.environ.get('FLEET_CONTEXT_ROOT')} cfg={os.environ.get('CLAUDE_CONFIG_DIR')}")
 '''
 
@@ -399,10 +406,27 @@ REVIVE_STEPS = ("\n## The path\n\n### 1. Connect\n\ntext\n\n### 2. Triage\n\ntex
 CHARTER_FIXTURES = REPO / "tests" / "fixtures" / "charters"
 
 
-def skill(tree, name, extra=(), body=""):
+# The synthetic skills' `## Install` sections, in both forms of claude-skill's
+# rule: form A (nothing to install) and form B (the three fields). `fleet skills`
+# reads them through fleetlib.skills, and its INSTALL and STATE columns are held
+# to them below. relay-communication carries NO section: the unparseable case.
+NOTHING = "\n## Install\n\nNothing to install.\n"
+
+
+def fields(writes, steps="none beyond writing the files above.", asks="nothing."):
+    return f"\n## Install\n\n**Asks for:** {asks}\n\n**Writes:** {writes}\n\n**Steps:** {steps}\n"
+
+
+# The synthetic templates/skill-groups.json: one group, whose two members
+# `fleet skills --ask` must offer as ONE item.
+GROUPS = {"_comment": ["The synthetic skill groups of bin/fleet.test.py."],
+          "ops": {"skills": ["agent-revive", "agent-health"], "conventions": {}}}
+
+
+def skill(tree, name, extra=(), body="", install=""):
     write(tree / ".claude/skills" / name / "SKILL.md",
           f"---\nname: {name}\nversion: 1\ndescription: >\n  Synthetic {name} for the fleet command's tests.\n---\n"
-          + body)
+          + body + install)
     for rel, text in extra:
         write(tree / ".claude/skills" / name / rel, text)
 
@@ -415,22 +439,36 @@ def populate(o):
             write(o / "lib/fleetlib" / p.name, p.read_bytes())
     write(o / ".gitignore", "node_modules/\n__pycache__/\n*.pyc\nbrowsers/\n")
     write(o / "README.md", "synthetic fleet\n")
-    skill(o, "chat-transport")
-    skill(o, "slack-communication", [("transport.json", json.dumps(SLACK)), ("watch.py", "print('stub')\n")])
-    skill(o, "discord-communication", [("transport.json", json.dumps(DISCORD)), ("watch.py", "raise SystemExit(2)\n")])
+    skill(o, "chat-transport", install=NOTHING)
+    # No installation/check: its state is the presence of the two files its Writes names.
+    skill(o, "slack-communication", [("transport.json", json.dumps(SLACK)), ("watch.py", "print('stub')\n")],
+          install=fields("`CONTEXT.md` and `config.json`, in the install context.",
+                         asks="the workspace's bot token and the channel to watch."))
+    skill(o, "discord-communication", [("transport.json", json.dumps(DISCORD)), ("watch.py", "raise SystemExit(2)\n")],
+          install="\n## Install\n\nNothing to install. A placeholder transport has nothing to configure.\n")
     skill(o, "relay-communication", [("transport.json", json.dumps(RELAY)), ("watch.py", "print('stub')\n")])
     skill(o, "scheduled-tasks", [
         ("sched.py", "print('stub')\n"),
-        ("installation/check", FAKE_SCHED_CHECK.replace("@VARS@", repr(DAEMON_VARS)))])
-    skill(o, "stall-watchdog")
-    skill(o, "demo-skill", [("installation/check", "#!/bin/sh\necho \"${FAKE_DEMO_LINE:-installed, but an older version}\"\n"
-                                                   "exit \"${FAKE_DEMO_RC:-1}\"\n")])
+        ("installation/INSTRUCTION.md", "# Installing scheduled-tasks\n\nEvery step is per agent.\n"),
+        ("installation/check", FAKE_SCHED_CHECK.replace("@VARS@", repr(DAEMON_VARS)))],
+          install=fields("per agent, `<home>/config/scheduler.json`.",
+                         steps="`installation/INSTRUCTION.md`; every step of it is per agent."))
+    skill(o, "stall-watchdog", install=NOTHING)
+    # FAKE_DEMO_WHERE: the check's last line is where it ran, the install root
+    # and the config dir it was handed.
+    skill(o, "demo-skill", [("installation/check", "#!/bin/sh\n"
+                                                   "[ -z \"$FAKE_DEMO_WHERE\" ] || { echo \"cwd=$(pwd -P) "
+                                                   "ctx=$FLEET_CONTEXT_ROOT cfg=${CLAUDE_CONFIG_DIR:-unset}\"; exit 1; }\n"
+                                                   "echo \"${FAKE_DEMO_LINE:-installed, but an older version}\"\n"
+                                                   "exit \"${FAKE_DEMO_RC:-1}\"\n")],
+          install=fields("`config.json`, in the install context.", asks="the demo value."))
     skill(o, "agent-revive", [("signin_driver/package.json", json.dumps({"name": "driver", "dependencies": {"playwright": "1.0.0"}})),
                               ("signin_driver/package-lock.json", '{"lockfileVersion": 3, "rev": 1}\n')],
-          body=REVIVE_STEPS)
+          body=REVIVE_STEPS, install=fields("`CONTEXT.md`, in the install context.", asks="the accounts agents sign in with."))
     # The REAL account picker: status's share rows are its answer, never a copy of its rule.
     skill(o, "agent-health", [(f, (REPO / ".claude/skills/agent-health" / f).read_text())
-                              for f in ("pool_pick.py", "parse_usage.py")])
+                              for f in ("pool_pick.py", "parse_usage.py")], install=NOTHING)
+    write(o / "templates/skill-groups.json", json.dumps(GROUPS, indent=2))
     write(o / "systemd/agent-daemons.py", FAKE_RENDER, 0o755)
     # The real job table, with an interpreter and a log directory no real unit
     # uses: a bin/fleet that wrote its own /usr/bin/python3 or state/daemons into
@@ -2194,6 +2232,530 @@ def the_adopted_hook_falls_back_in_plain_sh_and_delegates_to_a_checkout():
     (w.agents / "ada/.claude/skills/demo-skill").unlink()
     out3 = run_hook(command, bare, **host)
     only_cause(out3, "unlinked")
+
+
+# ------------------------------------------------------------------ skills
+#
+# `fleet skills` lists every fleet skill of the tree it runs from with three
+# facts: SELECTED (the install manifest's `skills`, or required by the
+# transports), INSTALL (its `## Install` section's form) and STATE (discovered
+# each run: its installation/check, or the files its section names). --select
+# and --ask change the manifest's `skills` and nothing else.
+#
+# The oracles here are the test's own: the tree's skills are listed from the
+# directory, each section is cut from its SKILL.md by text, and the bytes of the
+# manifest outside the `skills` array are compared against a split the test made
+# itself, never against the subject's idea of where the array is.
+
+SKILL_HEADER = re.compile(r"SKILL +SELECTED +INSTALL +STATE$")
+
+
+def tree_skills(w):
+    return sorted(p.parent.name for p in (w.fleet / ".claude/skills").glob("*/SKILL.md"))
+
+
+def install_text(w, name):
+    """A synthetic skill's `## Install` section, cut by this file: from its heading to EOF."""
+    text = (w.fleet / ".claude/skills" / name / "SKILL.md").read_text()
+    return text[text.index("\n## Install\n") + 1:]
+
+
+def skill_table(out):
+    """({skill: (SELECTED, INSTALL, STATE)}, closing line) of the LAST list in
+    `out`, each row cut at the header's column starts (STATE text has spaces)."""
+    lines = out.replace("\r\n", "\n").splitlines()
+    at = max(i for i, ln in enumerate(lines) if SKILL_HEADER.match(ln))
+    cols = [lines[at].index(c) for c in ("SELECTED", "INSTALL", "STATE")]
+    rows = {ln[:cols[0]].strip(): (ln[cols[0]:cols[1]].strip(), ln[cols[1]:cols[2]].strip(), ln[cols[2]:].strip())
+            for ln in lines[at + 1:-1]}
+    return rows, lines[-1]
+
+
+def ada_root(w):
+    return w.agents / "ada/project"
+
+
+def slack_files(w, context="# Slack\nworkspace: example\n", config='{"channel": "C0123"}'):
+    """Write (or, for None, remove) slack-communication's two install-context files."""
+    ctx = ada_root(w) / ".claude/skills/slack-communication"
+    for name, text in (("CONTEXT.md", context), ("config.json", config)):
+        if text is None:
+            if (ctx / name).exists():
+                (ctx / name).unlink()
+        else:
+            write(ctx / name, text)
+
+
+@case
+def skills_lists_every_fleet_skill_with_its_selection_install_form_and_state():
+    w = World()
+    env = {"FLEET_CONTEXT_ROOT": ada_root(w)}
+    r = w.fleet_cmd("skills", **env)
+    ok(r, 1)
+    rows, last = skill_table(r.stdout)
+    assert sorted(rows) == tree_skills(w), f"not one row per fleet skill:\n{r.stdout}"
+    # A selected skill's STATE, by kind: form A; a check exiting 1 (its last line
+    # named); a check exiting 0; a form-B skill with no check and no files.
+    # Unselected rows say `-`, whatever their section; relay has no section.
+    assert {n: v[:2] for n, v in rows.items()} == {
+        "agent-health": ("no", "nothing"), "agent-revive": ("no", "values"),
+        "chat-transport": ("required", "nothing"), "demo-skill": ("yes", "values"),
+        "discord-communication": ("no", "nothing"), "relay-communication": ("no", "invalid"),
+        "scheduled-tasks": ("yes", "steps"), "slack-communication": ("required", "values"),
+        "stall-watchdog": ("no", "nothing")}, r.stdout
+    assert all(v[2] == "-" for v in rows.values() if v[0] == "no"), r.stdout
+    assert rows["chat-transport"][2] == "nothing to install", rows
+    assert rows["demo-skill"][2] == "not configured: installed, but an older version", rows
+    assert rows["scheduled-tasks"][2] == "configured", rows
+    assert rows["slack-communication"][2].startswith("not configured: CONTEXT.md is missing"), rows
+    assert last == "9 fleet skills; 4 selected: 1 configured, 1 nothing to install, 2 not configured", last
+    # A check exiting 2 is not configured too, naming its last line.
+    r = w.fleet_cmd("skills", FAKE_DEMO_RC="2", FAKE_DEMO_LINE="not installed: no config.json", **env)
+    ok(r, 1)
+    assert skill_table(r.stdout)[0]["demo-skill"][2] == "not configured: not installed: no config.json", r.stdout
+    # The control: every selected skill configured or nothing to install, exit 0.
+    slack_files(w)
+    r = w.fleet_cmd("skills", FAKE_DEMO_RC="0", **env)
+    ok(r)
+    rows, last = skill_table(r.stdout)
+    assert [rows[n][2] for n in ("chat-transport", "demo-skill", "scheduled-tasks", "slack-communication")] == \
+        ["nothing to install", "configured", "configured", "configured"], r.stdout
+    assert last == "9 fleet skills; 4 selected: 3 configured, 1 nothing to install, 0 not configured", last
+
+
+@case
+def skills_measures_a_skill_without_a_check_by_the_files_its_section_names():
+    # slack-communication has no installation/check, and its section's Writes
+    # names `CONTEXT.md` and `config.json`: their presence in its install context
+    # is its state. Each row breaks one property; the last is the control.
+    w = World()
+    for context, config, named in (
+            (None, None, "CONTEXT.md is missing"),
+            ("# Slack\n", None, "config.json is missing"),
+            ("", '{"channel": "C0123"}', "CONTEXT.md is empty"),
+            ("\n  \n", '{"channel": "C0123"}', "CONTEXT.md is empty"),
+            ("# Slack\n", "", "config.json is empty"),
+            ("# Slack\n", "[1, 2]", "config.json is not a JSON object"),
+            ("# Slack\n", '"a string"', "config.json is not a JSON object"),
+            ("# Slack\n", "{", "config.json is not a JSON object")):
+        slack_files(w, context, config)
+        r = w.fleet_cmd("skills", FAKE_DEMO_RC="0", FLEET_CONTEXT_ROOT=ada_root(w))
+        ok(r, 1)
+        state = skill_table(r.stdout)[0]["slack-communication"][2]
+        assert state.startswith(f"not configured: {named}"), (context, config, state)
+    slack_files(w)
+    r = w.fleet_cmd("skills", FAKE_DEMO_RC="0", FLEET_CONTEXT_ROOT=ada_root(w))
+    ok(r)
+    assert skill_table(r.stdout)[0]["slack-communication"][2] == "configured", r.stdout
+
+
+@case
+def skills_runs_a_check_where_and_with_what_check_all_runs_it():
+    # The demo check's last line is its working directory and FLEET_CONTEXT_ROOT;
+    # the command runs from elsewhere (w.root), so an inherited cwd shows here.
+    w = World()
+    root = ada_root(w)
+    where = f"cwd={root} ctx={root} cfg=unset"
+    r = w.fleet_cmd("skills", FAKE_DEMO_WHERE="1", FLEET_CONTEXT_ROOT=root)
+    ok(r, 1)
+    assert skill_table(r.stdout)[0]["demo-skill"][2] == f"not configured: {where}", r.stdout
+    r = w.fleet_cmd("check-all", FAKE_DEMO_WHERE="1", FLEET_CONTEXT_ROOT=root)
+    ok(r, 1)
+    row = next(ln for ln in r.stdout.splitlines() if ln.startswith("demo-skill "))
+    assert row.split()[1:3] == ["1", "stale"] and row.endswith("  " + where), row
+
+
+DEMO_WHERE = re.compile(r"cwd=\S+ ctx=\S+ cfg=\S+$")
+
+
+@case
+def skills_for_an_agent_runs_each_check_with_the_environment_check_all_gives_it():
+    # A per-agent check reads the agent's own files, which only `fleet check-all
+    # <agent>`'s environment names. Here scheduled-tasks' check passes only when
+    # SCHED_CONFIG names a scheduler config that exists: ada has one, and the
+    # caller's own variables point nowhere.
+    w = World()
+    root = ada_root(w)
+    ok(w.fleet_cmd("link", "ada"))
+    write(w.agents / "ada/config/scheduler.json", "{}\n")
+    caller = {v: f"/tmp/fleet-caller/{v.lower()}.json" for v in DAEMON_VARS}
+    env = dict(FAKE_SCHED_PER_AGENT="1", **caller)
+    r = w.fleet_cmd("skills", FLEET_CONTEXT_ROOT=root, **env)
+    ok(r, 1)
+    assert skill_table(r.stdout)[0]["scheduled-tasks"][2] == \
+        f"not configured: not installed: no scheduler config at {caller['SCHED_CONFIG']}", r.stdout
+    # The agent form: no FLEET_CONTEXT_ROOT, ada's home project is the root.
+    r = w.fleet_cmd("skills", "ada", **env)
+    ok(r, 1)
+    rows = skill_table(r.stdout)[0]
+    assert rows["scheduled-tasks"][2] == "configured", r.stdout
+    assert rows["demo-skill"][2] == "not configured: installed, but an older version", "control: exit 1 is demo-skill's"
+    # Exactly check-all's environment: the scheduled-tasks check's own dump of
+    # its daemon variables, and the demo check's cwd, install root and config
+    # dir, are the same under both commands.
+    seen = w.root / "check-env.json"
+    dumps, wheres = [], []
+    for cmd in (("skills", "ada"), ("check-all", "ada")):
+        r = w.fleet_cmd(*cmd, FAKE_CHECK_ENV=seen, FAKE_DEMO_WHERE="1", **env)
+        ok(r, 1)
+        dumps.append(json.loads(seen.read_text()))
+        seen.unlink()
+        row = next(ln for ln in r.stdout.splitlines() if ln.startswith("demo-skill "))
+        wheres.append(DEMO_WHERE.search(row).group(0))
+    assert dumps[0] == dumps[1] and dumps[0]["SCHED_CONFIG"] == f"{w.agents}/ada/config/scheduler.json", dumps
+    assert wheres == [f"cwd={root} ctx={root} cfg={w.agents}/ada/.claude"] * 2, wheres
+
+
+@case
+def skills_refuses_an_agent_with_select_or_ask():
+    # The selection is the install's, so an agent goes with the list only.
+    w = World()
+    before = snap(w.root)
+    refused(w.fleet_cmd("skills", "ada", "--select", ",".join(SKILLS[:2])), "the selection is the install's")
+    refused(w.fleet_cmd("skills", "ada", "--ask"), "the selection is the install's")
+    refused(w.fleet_cmd("skills", "nobody"), "no agent home")
+    same(before, snap(w.root))
+    # Control: the same selection without the agent is taken.
+    ok(w.fleet_cmd("skills", "--select", ",".join(SKILLS[:2]), FLEET_CONTEXT_ROOT=ada_root(w)))
+    assert json.loads((ada_root(w) / ".claude/fleet.json").read_text())["skills"] == SKILLS[:2]
+
+
+@case
+def skills_names_a_selected_skill_whose_install_section_does_not_parse():
+    w = World(manifest=manifest_doc(skills=SKILLS + ["relay-communication"]))
+    slack_files(w)
+    r = w.fleet_cmd("skills", FAKE_DEMO_RC="0", FLEET_CONTEXT_ROOT=ada_root(w))
+    ok(r, 1)
+    rows = skill_table(r.stdout)[0]
+    sel, form, state = rows["relay-communication"]
+    assert (sel, form) == ("yes", "invalid") and state.startswith("not configured: no parseable Install section"), \
+        rows["relay-communication"]
+    assert "'## Install'" in state, f"the reason is not the parser's: {state}"
+    # Control: relay is the only selected row not configured, so it is the exit 1.
+    assert [n for n, v in rows.items() if v[2].startswith("not configured")] == ["relay-communication"], rows
+
+
+@case
+def skills_before_an_install_lists_the_templates_proposal():
+    # No FLEET_CONTEXT_ROOT, no CLAUDE_CONFIG_DIR, and the working directory
+    # (w.root) is in no git tree: there is no install yet, and the list is what
+    # the installer asks from, with the template's `skills` proposed.
+    w = World()
+    assert not any(os.path.lexists(d / ".git") for d in (w.root, *w.root.parents)), "w.root is in a git tree"
+    template = json.loads((REPO / "templates/fleet.example.json").read_text())["skills"]
+    before = snap(w.root)
+    r = w.fleet_cmd("skills")
+    ok(r)
+    rows, last = skill_table(r.stdout)
+    assert sorted(rows) == tree_skills(w), r.stdout
+    assert {n: (v[0], v[2]) for n, v in rows.items()} == \
+        {n: ("proposed" if n in template else "-", "-") for n in tree_skills(w)}, r.stdout
+    assert {v[0] for v in rows.values()} == {"proposed", "-"}, "control: the template proposes some, not all"
+    assert rows["scheduled-tasks"][1] == "steps" and rows["chat-transport"][1] == "nothing", rows
+    assert "fleet adopt" in last and "templates/fleet.example.json" in last, last
+    same(before, snap(w.root))
+    # FLEET_CONTEXT_ROOT naming a directory without a manifest is a fault, not "before an install".
+    r = w.fleet_cmd("skills", FLEET_CONTEXT_ROOT=w.root)
+    ok(r, 3)
+    assert "FLEET_CONTEXT_ROOT" in r.stderr, r.stderr
+    same(before, snap(w.root))
+
+
+def split_manifest(doc, layout):
+    """(head, array, tail): the manifest text `doc` makes with its `skills` array
+    written as `layout`, split by construction around that array.
+
+    The layout is one no json.dumps call with its defaults writes (tab indent,
+    " : " separators, a raw non-ASCII character): a subject that rewrote the
+    whole file with json.dumps would otherwise reproduce the head and tail byte
+    for byte, and this oracle could not see the rewrite (measured: it passed)."""
+    text = json.dumps({**doc, "skills": "@@SKILLS@@"}, indent="\t", separators=(",", " : "),
+                      ensure_ascii=False) + "\n"
+    head, tail = text.split('"@@SKILLS@@"')
+    return head, layout, tail
+
+
+@case
+def skills_select_writes_exactly_that_list_and_no_other_byte():
+    # A nested `skills` key BEFORE the top-level one, and a comment that
+    # mentions skills: only the top level's array is the install's.
+    doc = {"_example": {"skills": ["not", "these"]}, "_comment": "\"skills\": [ is text in a comment, Z\u00fcrich",
+           **manifest_doc()}
+    head, array, tail = split_manifest(doc, '[\n\t\t"chat-transport", "slack-communication",\n'
+                                            '\t\t"scheduled-tasks", "demo-skill"\n\t]')
+    assert "\u00fc" in head and "\t" in head, "the fixture's layout is json.dumps' default after all"
+    w = World()
+    man = ada_root(w) / ".claude/fleet.json"
+    write(man, head + array + tail, 0o640)
+    assert json.loads(man.read_text())["skills"] == SKILLS, "the fixture's own split is wrong"
+    names = ["chat-transport", "agent-revive", "slack-communication", "scheduled-tasks"]
+    r = w.fleet_cmd("skills", "--select", ",".join(names), FLEET_CONTEXT_ROOT=ada_root(w))
+    ok(r)
+    after = man.read_text()
+    assert after.startswith(head) and after.endswith(tail), f"a byte outside the skills array changed:\n{after}"
+    assert json.loads(after[len(head):len(after) - len(tail)]) == names, after
+    assert json.loads(after)["skills"] == names and json.loads(after)["_example"] == {"skills": ["not", "these"]}
+    assert stat.S_IMODE(man.stat().st_mode) == 0o640, oct(man.stat().st_mode)
+    out = r.stdout.splitlines()
+    assert out[0] == "skills: added agent-revive, removed demo-skill", r.stdout
+    # The ADDED skill's section, verbatim, under its line; nothing for a kept one.
+    assert f"\n== agent-revive: install\n{install_text(w, 'agent-revive')}" in r.stdout, r.stdout
+    assert [ln for ln in out if ln.startswith("== ")] == ["== agent-revive: install"], r.stdout
+    rows = skill_table(r.stdout)[0]
+    assert rows["agent-revive"][0] == "yes" and rows["demo-skill"][0] == "no", r.stdout
+    assert r.stdout.index("== agent-revive") < r.stdout.rindex("\nSKILL "), "the list comes after the install sections"
+    # A repeat changes nothing and prints no section.
+    before = snap(ada_root(w))
+    r = w.fleet_cmd("skills", "--select", ",".join(names), FLEET_CONTEXT_ROOT=ada_root(w))
+    ok(r)
+    assert r.stdout.splitlines()[0] == "nothing changed" and "\n== " not in r.stdout, r.stdout
+    same(before, snap(ada_root(w)))
+    # A new order alone is a change.
+    names = names[::-1]
+    names = ["chat-transport"] + [n for n in names if n != "chat-transport"]
+    r = w.fleet_cmd("skills", "--select", ",".join(names), FLEET_CONTEXT_ROOT=ada_root(w))
+    ok(r)
+    assert r.stdout.splitlines()[0] == "skills: reordered", r.stdout
+    after = man.read_text()
+    assert after.startswith(head) and after.endswith(tail) and json.loads(after)["skills"] == names, after
+
+
+TEMPLATE_SKILLS = re.compile(r'"skills"\s*:\s*(\[[^\]]*\])')
+
+
+def around_skills(text):
+    """(head, tail) of a manifest text around its ONE `"skills": [...]` value,
+    found by this file's regex (sound for a text with that key once)."""
+    found = list(TEMPLATE_SKILLS.finditer(text))
+    assert len(found) == 1, f"{len(found)} skills arrays: this oracle needs exactly one"
+    return text[:found[0].start(1)], text[found[0].end(1):]
+
+
+@case
+def skills_select_takes_a_freshly_adopted_template_manifest():
+    # adopt writes the template, whose other values are placeholders a full
+    # manifest load refuses; the selection must still be taken.
+    w = World()
+    project = w.root / "fresh"
+    project.mkdir()
+    ok(w.fleet_cmd("adopt", project))
+    man = project / ".claude/fleet.json"
+    before = man.read_text()
+    template = json.loads(before)["skills"]
+    refused(w.fleet_cmd("settings", FLEET_CONTEXT_ROOT=project), "placeholder")  # control: still the template
+    # The list reads the template too. It names skills this synthetic tree lacks:
+    # each is a row of its own, selected and not configured, never dropped.
+    lacking = [n for n in template if n not in tree_skills(w)]
+    assert lacking, "control: the template names a skill the synthetic tree lacks"
+    r = w.fleet_cmd("skills", FLEET_CONTEXT_ROOT=project)
+    ok(r, 1)
+    rows = skill_table(r.stdout)[0]
+    assert sorted(rows) == sorted(set(tree_skills(w)) | set(lacking)), r.stdout
+    for n in lacking:
+        assert rows[n][:2] == ("yes", "-") and rows[n][2].startswith("not configured: this fleet tree has no "), rows[n]
+    names = ["chat-transport", "slack-communication", "demo-skill", "stall-watchdog"]
+    r = w.fleet_cmd("skills", "--select", ",".join(names), FLEET_CONTEXT_ROOT=project)
+    ok(r)
+    after = man.read_text()
+    assert around_skills(after) == around_skills(before), "a byte outside the skills array changed"
+    assert json.loads(after)["skills"] == names, after
+    assert stat.S_IMODE(man.stat().st_mode) == 0o644, oct(man.stat().st_mode)
+    removed = [n for n in template if n not in names]
+    assert r.stdout.splitlines()[0] == f"skills: added demo-skill, removed {', '.join(removed)}", r.stdout
+    assert [ln for ln in r.stdout.splitlines() if ln.startswith("== ")] == ["== demo-skill: install"], r.stdout
+    assert f"== demo-skill: install\n{install_text(w, 'demo-skill')}" in r.stdout, r.stdout
+    assert {n for n, v in skill_table(r.stdout)[0].items() if v[0] != "no"} == set(names), r.stdout
+    refused(w.fleet_cmd("settings", FLEET_CONTEXT_ROOT=project), "placeholder")  # the rest is still the template
+
+
+@case
+def skills_select_refuses_a_bad_selection_and_changes_nothing():
+    m = manifest_doc()
+    m["transports"]["enabled"] = ["slack", "relay"]  # relay is working: its skill is required too
+    w = World(manifest=m)
+    root = ada_root(w)
+    base = ["chat-transport", "slack-communication", "relay-communication"]
+    for select, reason in (
+            (base + ["ghost-skill"], "ghost-skill has no SKILL.md"),
+            (base + ["demo-skill", "demo-skill"], "demo-skill twice"),
+            (base + ["Demo_Skill"], "'Demo_Skill' is not a skill name"),
+            (base + ["../demo-skill"], "'../demo-skill' is not a skill name"),
+            (base + [""], "'' is not a skill name"),
+            (["slack-communication", "relay-communication", "demo-skill"], "lacks chat-transport"),
+            (["chat-transport", "relay-communication", "demo-skill"], "lacks slack-communication"),
+            (["chat-transport", "slack-communication", "demo-skill"], "lacks relay-communication")):
+        before = snap(w.root)
+        refused(w.fleet_cmd("skills", "--select", ",".join(select), FLEET_CONTEXT_ROOT=root), reason)
+        same(before, snap(w.root), select)
+    # Control: the same manifest takes a good selection.
+    ok(w.fleet_cmd("skills", "--select", ",".join(base), FLEET_CONTEXT_ROOT=root))
+    assert json.loads((root / ".claude/fleet.json").read_text())["skills"] == base
+    # A manifest that is not JSON, and no manifest at all.
+    write(root / ".claude/fleet.json", '{"skills": ["chat-transport"],}\n')
+    before = snap(w.root)
+    refused(w.fleet_cmd("skills", "--select", ",".join(base), FLEET_CONTEXT_ROOT=root), "not valid JSON")
+    refused(w.fleet_cmd("skills", "--select", ",".join(base)), "no install manifest")
+    same(before, snap(w.root))
+
+
+def ask(w, answer, timeout=60, **extra):
+    """Run `fleet skills --ask` with stdin and stdout on a pseudo-terminal and
+    stderr on a pipe. At each prompt, answer(kind, item, default) is the line
+    typed (None types end-of-input, ^D). Returns (exit code, terminal output,
+    stderr, [(kind, item, default), ...]).
+
+    The terminal's slave end stays open here until the end: on macOS a pty whose
+    every slave descriptor has closed may drop what the master has not read
+    yet, so the output after the last prompt would go missing."""
+    master, slave = pty.openpty()
+    p = subprocess.Popen([PY, str(w.fleet / "bin" / "fleet"), "skills", "--ask"], cwd=w.root, env=w.env(**extra),
+                         stdin=slave, stdout=slave, stderr=subprocess.PIPE, close_fds=True)
+    out, prompts, seen = b"", [], 0
+    deadline = time.monotonic() + timeout
+    try:
+        while True:
+            if time.monotonic() > deadline:
+                p.kill()
+                p.wait()
+                raise AssertionError(f"--ask still running after {timeout}s:\n{out.decode(errors='replace')}")
+            ready, _, _ = select.select([master], [], [], 0.1)
+            if ready:
+                out += os.read(master, 65536)
+                text = out.decode(errors="replace")
+                m = ASK_PROMPT.search(text, seen)
+                if m:
+                    prompts.append(m.groups())
+                    typed = answer(*m.groups())
+                    seen = len(text)
+                    os.write(master, b"\x04" if typed is None else typed.encode() + b"\n")
+            elif p.poll() is not None:
+                break
+        err = p.stderr.read().decode()
+    finally:
+        os.close(master)
+        os.close(slave)
+        p.stderr.close()
+    return p.returncode, out.decode(errors="replace").replace("\r\n", "\n"), err, prompts
+
+
+ASK_PROMPT = re.compile(r"(?m)^(skill|group) (\S+) .*\[(Y/n|y/N)\] \Z")
+
+
+@case
+def skills_ask_refuses_without_a_terminal_and_never_waits():
+    # stdin a pipe nobody writes and nobody closes: a command that prompted
+    # anyway would wait on it forever, which is exactly what an agent's run
+    # with no terminal must never do. A null stdin alone could not show that (a
+    # prompt there reads end of input at once), so each half of "stdin AND
+    # stdout are terminals" is also broken alone with an open pipe. Every form
+    # is run and every failure reported, so a red names each form it reached.
+    w = World()
+    root = ada_root(w)
+    before = snap(w.root)
+    problems = []
+    r = w.fleet_cmd("skills", "--ask", FLEET_CONTEXT_ROOT=root)
+    if r.returncode != 2 or "terminal" not in r.stderr:
+        problems.append(f"null stdin: exit {r.returncode}: {r.stderr.strip()}")
+    master, slave = pty.openpty()
+    try:
+        for name, stdin, stdout in (("both pipes", subprocess.PIPE, subprocess.PIPE),
+                                    ("stdout a pipe", slave, subprocess.PIPE),
+                                    ("stdin a pipe", subprocess.PIPE, slave)):
+            p = subprocess.Popen([PY, str(w.fleet / "bin" / "fleet"), "skills", "--ask"], cwd=w.root,
+                                 env=w.env(FLEET_CONTEXT_ROOT=root), stdin=stdin, stdout=stdout,
+                                 stderr=subprocess.PIPE)
+            try:
+                p.wait(timeout=20)
+            except subprocess.TimeoutExpired:
+                p.kill()
+                p.wait()
+                problems.append(f"{name}: waited for input instead of refusing")
+                continue
+            finally:
+                for f in (p.stdin, p.stdout):
+                    if f:
+                        f.close()
+                err = p.stderr.read().decode()
+                p.stderr.close()
+            if p.returncode != 2 or "terminal" not in err:
+                problems.append(f"{name}: exit {p.returncode}: {err.strip()}")
+    finally:
+        os.close(master)
+        os.close(slave)
+    assert not problems, "\n".join(problems)
+    same(before, snap(w.root))
+
+
+@case
+def skills_ask_on_a_terminal_asks_each_item_once_and_applies_the_answers():
+    w = World()
+    root = ada_root(w)
+    man = root / ".claude/fleet.json"
+    answers = {"demo-skill": "n", "discord-communication": "", "relay-communication": "no",
+               "scheduled-tasks": "", "stall-watchdog": "y", "ops": "yes"}
+
+    def answer(kind, item, default):
+        assert item in answers, f"asked about {item}, which is not an item"
+        return answers[item]
+
+    code, out, err, prompts = ask(w, answer, FLEET_CONTEXT_ROOT=root)
+    assert code == 0, f"exit {code}\n{out}\n{err}"
+    asked = [item for _, item, _ in prompts]
+    assert sorted(asked) == sorted(answers) and len(asked) == len(set(asked)), f"asked {asked}"
+    assert {item: (kind, d) for kind, item, d in prompts} == {
+        "demo-skill": ("skill", "Y/n"), "scheduled-tasks": ("skill", "Y/n"),
+        "discord-communication": ("skill", "y/N"), "relay-communication": ("skill", "y/N"),
+        "stall-watchdog": ("skill", "y/N"), "ops": ("group", "y/N")}, prompts
+    first = out.index(prompts[0][0] + " " + prompts[0][1] + " ")
+    for n in ("chat-transport", "slack-communication"):
+        assert re.search(rf"(?m)^.*\b{n}\b.*required", out[:first]), f"{n} is not shown as required:\n{out}"
+    got = json.loads(man.read_text())["skills"]
+    assert got[:3] == ["chat-transport", "slack-communication", "scheduled-tasks"], got
+    assert sorted(got[3:]) == ["agent-health", "agent-revive", "stall-watchdog"], got
+    line = next(ln for ln in out.splitlines() if ln.startswith("skills: "))
+    assert line.startswith("skills: added ") and line.endswith(", removed demo-skill"), line
+    for n in ("agent-revive", "agent-health", "stall-watchdog"):
+        assert f"== {n}: install\n{install_text(w, n)}" in out, f"{n}'s section is not printed:\n{out}"
+    # Every answer the default: the defaults are the selection just made, so
+    # nothing changes - and the group now defaults to yes.
+    before = snap(root)
+    code, out, err, prompts = ask(w, lambda kind, item, default: "", FLEET_CONTEXT_ROOT=root)
+    assert code == 0 and "nothing changed" in out, f"exit {code}\n{out}\n{err}"
+    assert {item: d for _, item, d in prompts} == {
+        "demo-skill": "y/N", "scheduled-tasks": "Y/n", "discord-communication": "y/N",
+        "relay-communication": "y/N", "stall-watchdog": "Y/n", "ops": "Y/n"}, prompts
+    same(before, snap(root))
+    # A group with one member selected defaults to no.
+    write(man, json.dumps(manifest_doc(skills=SKILLS + ["agent-revive"])))
+    seen = {}
+
+    def note_the_group(kind, item, default):
+        if item != "ops":
+            return ""
+        seen[item] = default
+        return None  # end of input: this run changes nothing
+
+    ask(w, note_the_group, FLEET_CONTEXT_ROOT=root)
+    assert seen == {"ops": "y/N"}, seen
+
+
+@case
+def skills_ask_end_of_input_at_a_prompt_changes_nothing():
+    # The first answer would change the selection; end of input at the second
+    # prompt must leave the manifest as it was, the first answer unapplied.
+    w = World()
+    before = snap(w.root)
+    typed = iter(["n", None])
+    code, out, err, prompts = ask(w, lambda kind, item, default: next(typed), FLEET_CONTEXT_ROOT=ada_root(w))
+    assert len(prompts) == 2, prompts
+    assert code == 2 and "end of input" in err, f"exit {code}\n{out}\n{err}"
+    same(before, snap(w.root))
+    # A selected name this tree cannot ask about is refused before any prompt.
+    write(ada_root(w) / ".claude/fleet.json", json.dumps(manifest_doc(skills=SKILLS + ["ghost-skill"])))
+    before = snap(w.root)
+    code, out, err, prompts = ask(w, lambda kind, item, default: "", FLEET_CONTEXT_ROOT=ada_root(w))
+    assert (code, prompts) == (2, []) and "ghost-skill" in err, f"exit {code} {prompts}\n{err}"
+    same(before, snap(w.root))
 
 
 # ------------------------------------------------------------------ main
