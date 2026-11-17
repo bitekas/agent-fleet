@@ -272,7 +272,11 @@ shape of the value is legible and an adopter can pattern-match their own onto
 it. Obviously fake, so nothing shipped unmodified reaches a real system and a
 reviewer can spot an unreplaced placeholder at a glance. Empty strings are the
 safer-looking option and the unusable one: they teach the key's name and nothing
-about what belongs in it.
+about what belongs in it. **No example value is one a real install could keep
+as it is**, including a plausible default such as `docs/`: `fleet skills` reads
+a `config.json` equal to its example as not configured (the `## Install`
+section above), so an example an install could legitimately keep would never
+read configured.
 
 ### `CONTEXT.md` - specific
 
