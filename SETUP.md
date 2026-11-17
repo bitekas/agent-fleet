@@ -426,6 +426,11 @@ of its `SKILL.md`:
   such as a token made in a vendor's console, is that person's, and the rest
   goes on meanwhile.
 
+Do only what is missing: a file already there is kept as it stands, and a
+skill whose remaining `not configured` reason is a per-agent leg is not redone
+here, because that leg cannot pass before the agent exists: section 7 finishes
+it, and `fleet skills <agent-name>` checks it.
+
 `tests/fixtures/install/.claude/skills/<skill>/`, where it exists, holds a
 worked `CONTEXT.md` and `config.json` with synthetic values.
 
@@ -489,7 +494,8 @@ fleet skills <agent-name>      # each selected skill's install state, a skill wi
 ```
 
 Repeat for every agent until each table is clean, `fleet status` exits 0,
-`fleet skills` exits 0 or reports `not configured` only for a person's step,
+`fleet skills <agent-name>` exits 0 or reports `not configured` only for a
+person's step,
 and the privilege check ("The two users") exits 0 - or 4, UNPROTECTED, on a
 host with no administrator.
 
