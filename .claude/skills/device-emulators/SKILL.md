@@ -571,3 +571,29 @@ Every key `config.example.json` carries, and where it is used. The example's
   extraction, device selection, the boot gate and the one-load launch and its
   proof, each with the measurement that justifies it. The install's `CONTEXT.md`
   names the functions that hold each step.
+
+## Install
+
+**Asks for:** which platforms this machine runs (`ios`, `android` or both); the
+project's name and artifact prefix; the repository's build, dev and
+environment-config scripts, the names they use and the artifacts they produce;
+the device types, AVDs, sweep devices and Xcode and JDK floors the team
+standardises on; the hypervisor probe, the build-machine document, the keystore
+directory and the variable carrying the build CLI's CI token; for the remote
+iOS route only, the Mac's host, user and work directory and the Metro-host
+command; optionally, the device-e2e driver, runner and flows. For `CONTEXT.md`:
+which project and machines, what the install's scripts print and leave behind,
+and the remote route's credential channel. Only a person or a machine
+administrator can: sign the build CLI in, accept the Xcode licence, enable KVM
+and grant its group, install the SDKs, runtimes and devices, and authorize the
+SSH key on the Mac.
+
+**Writes:** `config.json`, `CONTEXT.md` and `installation/.install-state.json`
+(one entry per machine); on the remote route, the work directory on the Mac.
+The toolchains and devices are machine state, which the check discovers and no
+file records.
+
+**Steps:** `installation/INSTRUCTION.md`, the shared steps and then those of
+each enabled platform; no step is per agent, and the record is once per
+machine. `installation/check` reports the state, for every enabled platform or
+for one.

@@ -337,3 +337,25 @@ agent thought and cannot show the content. The rest of the protocol is complete.
    means the hash was evicted from the server's bounded image store, and
    re-selecting that agent re-renders its log and re-inserts it. A blank
    thumbnail on a SAVED page is the same by-design gap as (6).
+
+## Install
+
+**Asks for:** the address the servers bind (loopback by default; a VPN or LAN
+address lets anyone who reaches it read every agent's transcript); per agent
+served, its Claude Code config directory, a port and a unit name; the fleet
+label for each config directory and the name the root owner's prompts carry;
+optionally, an identity roster and the repository root and directory pattern
+for artifact packages; for the units, the user the agent sessions run as, the
+agents root, the install checkout and the fleet checkout. For `CONTEXT.md`:
+which agent each server serves, its port and URL, and who the page is for.
+Only a person with root can install the Linux unit.
+
+**Writes:** `config.json` (every server the machine runs), `CONTEXT.md` and
+`installation/.install-state.json` (keyed by host); per agent, a unit,
+`web-hierarchy-<n>.service` in `/etc/systemd/system/` or on macOS a
+LaunchAgent in `~/Library/LaunchAgents/`, and the server's log outside every
+repository.
+
+**Steps:** `installation/INSTRUCTION.md`: step 1 is install-wide, steps 2, 3
+and 5 are per agent, and the record in step 4 is once per machine.
+`installation/check` reports the state of every server `config.json` lists.

@@ -247,3 +247,21 @@ Full detail is in the `rate.mjs` header; the traps, briefly:
   calls and then throw on the append, so the run is billed and the records are
   lost. The script refuses to create a missing log directory, because a mistyped
   path that silently creates one produces a second log nobody reads.
+
+## Install
+
+**Asks for:** where the ratings log is appended, outside the fleet tree, in a
+directory that already exists; which secret, in which cloud project, holds the
+multimodal API key; where the service-account key file goes (a path or glob that
+resolves to one file outside every checkout); optionally, another API base. For
+`CONTEXT.md`: where the real log lives and how a fresh clone restores the key.
+Only a person with access to that cloud project can download the service-account
+key and grant it read access to the secret.
+
+**Writes:** `config.json`, `CONTEXT.md` and `installation/.install-state.json`
+(the host it was written on); the service-account key file, mode 600, at the
+path the config resolves.
+
+**Steps:** `installation/INSTRUCTION.md`; every step is install-wide, and the
+record is redone once per machine. `installation/check` reports the state, and
+exits 0 only when it is asked to measure the grant too, as its step 6 says.

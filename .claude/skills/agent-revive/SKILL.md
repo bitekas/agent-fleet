@@ -1583,3 +1583,28 @@ not evidence about the route.
   to nobody else**, over the charter's channel, one entry and not the whole file, and
   are never logged - and only on the fallback (step 7e): tap-to-solve carries none. Where that order hands off to the next person, the hand-off carries
   a FRESH URL and the SAME account (step 4, step 5).
+
+## Install
+
+**Asks for:** the fleet's layout conventions (where agent homes live; how each
+agent's tmux socket directory, session and service unit are named; which daemons a
+session keeps running), where the template's values usually fit. The account pool's
+absolute paths in the organization secrets (the pool file, the lease file,
+agent-health's usage ledger and the stored-profiles directory; optionally the
+handover ledger and the tokens directory) and any account no pick may name; the
+recovery mailbox every pool account carries; on Linux, the tap-to-solve share's
+ports, noVNC directory and tailscale command. For `CONTEXT.md`: who performs a
+real-browser sign-in, one person or an ordered list with a timeout between them.
+Only a person can: install the system packages with sudo, allow Tailscale Funnel on
+the share's port and let the agent's user run tailscale unattended, and hand over
+each pool account's credential, which enters the pool only through agent-health's
+`pool_pick.py --register`.
+
+**Writes:** `config.json`, `CONTEXT.md` and `installation/.install-state.json`
+(keyed by host); the sign-in driver's dependencies, `signin_driver/node_modules`
+and `signin_driver/browsers`, in the fleet tree the skill runs from, once per tree;
+the system packages `installation/INSTRUCTION.md` names.
+
+**Steps:** `installation/INSTRUCTION.md`; no step is per agent.
+`installation/check` reports the state, and `installation/check --online` also
+installs the driver's dependencies.

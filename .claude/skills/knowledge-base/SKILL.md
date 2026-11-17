@@ -301,3 +301,21 @@ Three things are deployment-specific and are decided in `config.json` and
    by accident does not. An agent that writes down everything it encounters
    produces a store curated by nobody, which is how a knowledge base becomes an
    archive nobody reads.
+
+## Install
+
+**Asks for:** where the store lives: an absolute path with no other purpose,
+made its own git repository and never nested inside another checkout; whether it
+is shared by every agent or belongs to one. For `CONTEXT.md`: who shares it,
+what may be written in it and what may never leave it, whether capture is
+agent-initiated or human-initiated, its remote and branch if it has one, and the
+commit identity form an agent uses outside its service unit.
+
+**Writes:** `config.json` (the store root), `CONTEXT.md` and
+`installation/.install-state.json` (one entry per host); at the store root,
+`index.md` from the fleet's empty-store template in a new git repository, and
+nothing else.
+
+**Steps:** `installation/INSTRUCTION.md`; no step is per agent, and the record
+is redone once per machine. `installation/check` reports the state, the store's
+indexes included.

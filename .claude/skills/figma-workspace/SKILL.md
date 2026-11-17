@@ -400,3 +400,27 @@ pages under `https://developers.figma.com/docs/rest-api/` - and is marked
 - **Policy:** the calling agent's charter, named in `CONTEXT.md`
 - **Design work:** the design skill the install has, named in `CONTEXT.md`
 - **Closest sibling:** the `/notion-workspace` skill
+
+## Install
+
+**Asks for:** the design files agents read comments on (an alias and the key
+from each file's URL); whether the hosted MCP connector is used, and the name
+the client records it under; whether agents may post, and if so the prefix
+that marks an agent-written comment; whether anchor names are resolved, with
+which token, and how long they are cached; where each agent keeps its cursor
+(by default its state directory). For `CONTEXT.md`: whose account the
+connector and each token act as, that person's seat and plan, what each file
+is for, each token's scopes and expiry date, which agents may read and which
+may post, and the design skill this install uses. Only a person can: sign the
+connector in as the account the agents act as, and generate each personal
+access token (read, and optionally write and content) in Figma's settings.
+
+**Writes:** `config.json`, `CONTEXT.md` and
+`installation/.install-state.json` (keyed by host); one token file per role,
+mode 600, in the organization secrets directory outside every checkout. The
+per-agent cursor and name cache are made by the helper on first use, not by
+the install.
+
+**Steps:** `installation/INSTRUCTION.md`; every step is install-wide.
+`installation/check` reports the state, and `installation/check --online`
+also reads each configured file's comments.

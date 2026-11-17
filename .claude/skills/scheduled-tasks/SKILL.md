@@ -709,3 +709,21 @@ into a forked child with `setrlimit` **before** that happens, not after.
 - `sched.test.py` - the regression guard; run it after any change to the engine
 - The owning agent's charter - policy: who may schedule, and what a task may do
 - `/chat-transport` - the origin grammar and the transport registry; the `via=` transport's own skill (its `transport.json` sits beside it) is the one that reaches an origin
+
+## Install
+
+**Asks for:** whether the deployment runs one shared scheduler or one per agent, and
+which agents have one; the IANA timezone wall-clock schedules use; optionally, a
+roster file that maps a chat user id to a display name, and the key inside it. Per
+agent, nothing beyond its home, from which every path derives.
+
+**Writes:** `CONTEXT.md`, the scheduler decision and any agent set up differently; per
+agent, `<home>/config/scheduler.json` (mode 600, the three required keys and the
+optional roster keys; `config.example.json` is the reference for tunables, not a file
+to copy) and the directory `<home>/state/scheduler/` (mode 700) that holds the
+database; `installation/.install-state.json`, keyed by host and then by agent.
+
+**Steps:** `installation/INSTRUCTION.md`: step 1 is install-wide, once; steps 2 to 5
+are per agent that owns schedules, and step 5 is redone on each machine. Installing is
+not arming: running the daemon and its follower is `SKILL.md` section 8.
+`installation/check` reports the state for the agent that runs it.

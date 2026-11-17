@@ -318,3 +318,26 @@ leak.
 - **Policy, authorization, triage:** the calling agent's charter, named in
   `CONTEXT.md`
 - **Closest sibling surface:** the `/slack-communication` skill
+
+## Install
+
+**Asks for:** which Notion workspace this install is for, with its name and
+id; whether the hosted MCP connector is used, the name the client records it
+under, and the person it acts as; the integration's bot name, id and owner;
+where the token file goes, outside every checkout; optionally, where the OAuth
+client credentials file goes and the exact redirect URI registered with the
+integration. For `CONTEXT.md`: whose workspace and which project, who each
+path writes as, where the credential files live, which integration kind and
+why, what the token was verified to reach, and which agents may use the
+surface. Only a person can: authorize the connector against the workspace,
+create or install the integration and hand over its token, and share with it
+the pages and databases it needs.
+
+**Writes:** `config.json`, `CONTEXT.md` and `installation/.install-state.json`
+(the host it was written on); the token file, mode 600, and optionally the
+OAuth credentials file, mode 600, both outside every checkout.
+
+**Steps:** `installation/INSTRUCTION.md`; every step is install-wide, and the
+record is redone once per machine. `installation/check` reports the state, and
+`installation/check --online` also compares the identity against the live
+token.

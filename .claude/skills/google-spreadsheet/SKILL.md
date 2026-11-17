@@ -450,3 +450,27 @@ touched. (The refusal arrives as HTTP 401 carrying that error code, so read the
 code and not the status - a 401 here is a missing GRANT, not a bad key.) That probe costs nothing, touches no document, and is
 the only honest answer to "can this agent write to Drive?" - record what it says
 in `CONTEXT.md` rather than inferring it from what the key *could* do.
+
+## Install
+
+**Asks for:** per agent: its name, the template that builds its Workspace user
+address, and a service-account key for it, a JSON key downloaded from one of
+the organization's Google Cloud projects, with where that key file goes (by
+default the agent's personal-secrets directory). Install-wide: the OAuth
+scopes the agents need, read-only where they only read, and the Sheets and
+Drive API roots (the template's values). For `CONTEXT.md`: the identity form,
+and what the delegation grant was probed to cover. Only a Workspace
+administrator can grant the service account domain-wide delegation for exactly
+those scopes and enable the Sheets and Drive APIs on the key's project.
+
+**Writes:** `config.json` and `CONTEXT.md`; per agent, the key file at the
+path `credential.key_path` resolves to (by default
+`<home>/secrets/personal/<subject>-service-account.json`), mode 600 in a
+directory of mode 700; `installation/.install-state.json`, keyed by host and
+then by agent; once per machine, the pinned Python packages of
+`installation/requirements.txt`.
+
+**Steps:** `installation/INSTRUCTION.md`: step 1 is machine-wide, steps 2 to 5
+are per agent, and the delegation grant and API enablement in step 3 are an
+administrator's. `installation/check --online` reports the state for one
+agent.

@@ -381,3 +381,24 @@ State 1 is the reason it exists: absent is loud, stale is silent.
   agent, and teaches the next reader that STALE means nothing. The test is whether an
   install performed under the old text is now WRONG, not whether the text is now
   better.
+
+## Install
+
+**Asks for:** per watched agent session, which must already run inside tmux: its
+tmux socket directory and target, the user that owns it, its project checkout and
+the unit that starts it; a state directory only this session's watchdog uses; how
+long a prompt sits unchanged before it is refused, which assumes nobody is at the
+terminal; whether to keep the shipped answer to the session-resume prompt, a
+deployment decision; and the idle-signature window, measured against the live pane.
+For `CONTEXT.md`: which sessions are watched, where their files live, and that
+decision. Only a person with root can install the unit.
+
+**Writes:** `CONTEXT.md` and `installation/.install-state.json` (keyed by host, then
+by config path); per watched session, `<home>/config/stall-watchdog.json` (mode 600,
+outside every repository), its state directory, and a system unit:
+`claude-agent-<agent>-stall-watchdog.service` in `/etc/systemd/system/`, or on macOS
+a LaunchDaemon in `/Library/LaunchDaemons/`.
+
+**Steps:** `installation/INSTRUCTION.md`, which points at `SKILL.md` sections 1 to
+7: every step is per watched session, and only `CONTEXT.md` is install-wide.
+`installation/check`, given a session's config, reports that session's state.

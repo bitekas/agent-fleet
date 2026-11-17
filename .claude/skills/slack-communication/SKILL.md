@@ -859,3 +859,28 @@ An empty-text watcher line usually means a FILE:
 - **Claim:** `/chat-transport`, *Claiming a request*
 - **Policy, identity, authorization, triage:** the owning agent's charter, named
   in `CONTEXT.md`
+
+## Install
+
+**Asks for:** per agent that talks on Slack: a Slack app installed to the
+workspace with the scopes `SKILL.md` "Setting up a workspace" names, and its
+bot token, which only a person who can install apps to the workspace can create
+and hand over; that bot's user id, handle and display name; a state directory
+and cursor prefix no other watcher on the machine shares. Install-wide: the
+workspace's domain and team id, the agent that owns the surface, a display
+label for every person and bot the agents correspond with, and optionally the
+poll tunables. For `CONTEXT.md`: which workspace and bot, which channels exist
+and what each is for, who the people are and which are authorized and on what
+basis, and where the policy charter lives.
+
+**Writes:** `config.json`, `CONTEXT.md` and `installation/.install-state.json`
+(the host it was written on); per agent, the bot token at
+`<home>/secrets/personal/slack-bot.key` and the watcher config at
+`<home>/config/slack-watch.json`, both mode 600. The host's claims directory is
+made by `fleet install`; this install only checks it.
+
+**Steps:** `installation/INSTRUCTION.md`: steps 1 to 3 are per agent, and
+`/adding-an-agent` section 4 runs them for each agent it adds; the install
+context's `config.json` and steps 4, 5 and 7 are install-wide, once. Arming the
+watcher is not part of the install. `installation/check` reports the state of
+the install context's files.

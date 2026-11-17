@@ -504,3 +504,20 @@ an agent must not get wrong.
   `upstream.outside_pr_reviewer` is the only reviewer of outside pull requests.
   Agent work lands on `main` directly, through the landing sequence in
   `CONTRIBUTING.md`.
+
+## Install
+
+**Asks for:** the install checkout's directory name, and whether the fleet's
+default home layout (one home per agent under the agents root) holds on this
+machine or which of its paths differ. Nothing per agent: the agent's name and
+home come with the agent, from `/adding-an-agent`.
+
+**Writes:** `CONTEXT.md`, the paths table that maps each directory of
+`SKILL.md` section 3 to its path; per agent, `<home>/blockers/blockers.md`,
+copied from `templates/blockers.md` and never overwritten once it holds rows.
+There is no `installation/.install-state.json`: the check compares the
+installed file against the template.
+
+**Steps:** `installation/INSTRUCTION.md`: step 0 is install-wide, once; step 1
+is per agent home and waits until that home exists. `installation/check`, run
+as the agent, reports the state for that agent.
