@@ -100,8 +100,9 @@ default, and `<tag>` the newest release. `SETUP.md` is the rest of the way.
   project as an install (`fleet adopt <project>`: its manifest, and the session
   check that tells every session started there when the fleet is missing,
   outdated or not linked), links each agent's skills, upgrades and rolls back
-  the host checkout, resolves an install's settings, runs every skill's install
-  check, and reports drift.
+  the host checkout, resolves an install's settings, chooses the install's
+  skills and reports each one's install state (`fleet skills`), runs every
+  skill's install check, and reports drift.
 - **Templates** (`templates/`): the install manifest, the optional skill groups
   (`skill-groups.json`), three persona charters (a lead engineer, a health
   doctor, a root orchestrator), the agent's system unit and its launchd form,
