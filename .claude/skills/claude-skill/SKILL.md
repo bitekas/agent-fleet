@@ -48,6 +48,7 @@ while the agent using it is not.
 ```
 <skill-name>/
   SKILL.md                  the mechanism, + version in frontmatter    COMMON
+                            ending in its ## Install section
   config.example.json       every key, placeholder values, comments    COMMON
   config.json               real values for this install               SPECIFIC
   CONTEXT.md                the local human layer                      SPECIFIC
@@ -181,6 +182,73 @@ that one instance; a reader told *why* recognises the next member of the same
 class. State what the trap costs when it fires - a wrong asset that passes
 review, days of red CI - because that is the part which makes a rule survive
 being inconvenient; the incident that taught it belongs in the commit message.
+
+#### The `## Install` section
+
+**Every `SKILL.md` ends with an `## Install` section, and a skill without one is
+not finished.** One heading, exactly `## Install` and unnumbered, the last `#`
+or `##` heading outside fenced code: the section runs to the end of the file,
+and adding it moves no section number. It takes one of two forms.
+
+**Form A, nothing to install**: one paragraph whose first sentence is exactly
+`Nothing to install.`, and at most one more sentence (naming an optional
+`CONTEXT.md` an install may write, say). Only for a skill with no
+`installation/` directory, no `config.example.json`, and
+`requires_install: false`.
+
+**Form B, everything else**: three paragraphs, each opening with its field, in
+this order, none empty, and further paragraphs only after Steps:
+
+- `**Asks for:**` each value, credential or choice the install needs from a
+  person or an agent, in plain words; `nothing` when it asks for none.
+- `**Writes:**` every file the install writes, by name in backticks, and where.
+  A backticked `CONTEXT.md` or `config.json` with no place named is the skill's
+  install context (`fleet where <skill>`); a per-agent or system file says so
+  ("per agent, `<home>/config/<file>`"). Only the files the skill needs: an
+  optional one is mentioned without backticks, or after Steps.
+- `**Steps:**` `installation/INSTRUCTION.md` when the skill has one, saying
+  which of its steps are per agent; otherwise
+  `none beyond writing the files above`.
+
+```markdown
+## Install
+
+**Asks for:** the bot token's path, and the channel the bot posts to.
+
+**Writes:** `config.json` and `CONTEXT.md`.
+
+**Steps:** `installation/INSTRUCTION.md`; its steps 4 and 5 are per agent.
+```
+
+**The steps live in `installation/INSTRUCTION.md` only.** The section says what
+an install asks for and writes, and points at the steps; it never restates
+them. One home, one pointer: a step copied into the section is a second copy,
+and the next edit of the instruction leaves it wrong.
+
+**The skill's files agree with the section**, and in the fleet repository the
+`install-section` gate (`tests/gates/gates.py`) refuses a skill where they do
+not:
+
+- `installation/INSTRUCTION.md` exists exactly when `requires_install` is
+  `true`, and exactly when Steps names it;
+- an `INSTRUCTION.md` has an `installation/check` beside it;
+- a `config.example.json` means Writes names `config.json`;
+- a form-B skill with no `installation/check` names `CONTEXT.md` or
+  `config.json`, backticked, in Writes.
+
+**This section is machine-read prose** (section 7): `fleet skills` reads it
+through `fleetlib.skills` (`lib/fleetlib/skills.py`, the one parser of the
+format). Form A reads as nothing to install. For a form-B skill with no
+`installation/check`, the backticked `CONTEXT.md` and `config.json` in Writes
+are the files whose presence is its install state, so a name taken out of its
+backticks, or a field marker reworded, changes what the command reports. `fleet
+skills --select` prints the section verbatim for each skill it adds: it is what
+an installer reads first.
+
+**An install's state is discovered each time, never recorded by hand**: by
+`installation/check` when the skill has one, otherwise by those files being
+present. Nothing marks a skill configured, because a marker goes on saying so
+after the thing it stood for is gone.
 
 ### `config.example.json` / `config.json`
 
@@ -613,9 +681,10 @@ synthetic ones under `tests/fixtures/install/`.
 
 ## 6. The test that says a skill is finished
 
-> **Could a stranger at another company clone this, fill in
-> `config.example.json` and `CONTEXT.md`, run `installation/check` until it
-> exits 0, and have the skill work - without editing `SKILL.md`?**
+> **Could a stranger at another company clone this, do what its `## Install`
+> section says (fill in `config.example.json` and `CONTEXT.md`, run
+> `installation/check` until it exits 0), and have the skill work - without
+> editing `SKILL.md`?**
 
 If it needs a `SKILL.md` edit, the split is not done. Run the test **per skill
 as each one is converted**, never once at the end.
@@ -764,3 +833,15 @@ clean result from it.
 and should be corrected in place.** A convention that quietly drifts from the
 world is worse than no convention. The same applies to the install's
 `CONTEXT.md` for this skill.
+
+---
+
+## Install
+
+**Asks for:** who rules on open questions about these conventions, where the
+install keeps the real data and credentials its skills name (section 4), and
+how the install pins its own checks (section 3).
+
+**Writes:** `CONTEXT.md`, those answers and the install's local paths.
+
+**Steps:** none beyond writing the file above.
