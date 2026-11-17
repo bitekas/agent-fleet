@@ -1,0 +1,313 @@
+#!/usr/bin/env python3
+"""[" -f "${BASH_SOURCE:-$0}" ] || { echo "a Python script: run it with python3" >&2; exit 126; }; exec python3 "${BASH_SOURCE:-$0}" "$@" || exit # sh/bash: hand off to python3 before reading the docstring
+Is the ui-design skill configured for this install, and which version is it?
+
+Prints ONE line and exits:
+
+    0  configured        OK: configured (version N) ...      -> proceed
+    1  NO VERDICT        the design map could not be read     -> not a pass; fix the map's form
+    2  not installed     NOT INSTALLED: <every fault, named>  -> follow INSTRUCTION.md
+
+WHAT IS INSTALLED. The skill is prose; its one install artifact is the design
+map: the `## Design map` table in this skill's CONTEXT.md in the install
+context (fleetlib.paths.skill_context('ui-design')), committed in the install
+repository. This check reads that file and nothing else on the host.
+
+THE ARTIFACT FORM (claude-skill section 3), so there is NO .install-state.json.
+The map is one committed file, the same on every host and for every agent, so a
+per-host record would restate it and could lie where the file cannot. The check
+PRINTS SKILL.md's version rather than comparing a recorded one, and staleness
+shows as a row: a version that asks for a new value adds its label to ROWS, and
+a map written for the older version then reports that row missing.
+
+THE PARSE IS BY CONTENT, AND THE COUPLING IS DECLARED WHERE THE VALUES LIVE.
+The table is prose a person edits. INSTRUCTION.md step 2 writes a line above it
+saying this check parses it by its row labels, so whoever relabels a row is told
+what breaks. A map this check cannot find is NO VERDICT (exit 1), never OK and
+never NOT INSTALLED: a reformat costs the measurement loudly, and it does not
+pose as "every value is missing", which would send the person to re-ask values
+they already gave.
+
+LEGS, each with its negative control (a case in check.test.py that must go
+red) and what deleting the leg would let through:
+
+  context   The install context resolves through fleetlib. A fleetlib refusal
+            (no manifest for FLEET_CONTEXT_ROOT, no install root) is NO VERDICT:
+            nothing was looked at. Only fleetlib.FleetError is caught, so a
+            renamed fleetlib function is a traceback, which
+            bin/installation-checks.test.py reds, never a quiet verdict.
+            Control: FLEET_CONTEXT_ROOT at a directory with no manifest.
+  file      CONTEXT.md is OPENED and read, never stat'ed: exists() is green on
+            a file this process cannot read. Absent or unreadable is NOT
+            INSTALLED naming the path and the errno. Control: the file removed.
+  table     Exactly one `## Design map` heading outside fenced code, and under
+            it, before the next heading, a pipe table: a header row of at least
+            two cells and its separator row. Controls: no heading, the heading
+            only inside a fence, prose where the table was, no separator row,
+            two such headings: each NO VERDICT. Without this leg a reformatted
+            map reads as every row missing.
+  rows      Every required label of ROWS exactly once, its value non-empty and
+            not a `<placeholder>` (a `<...>` with no `@` in it, the form
+            INSTRUCTION.md's template writes; `<ada@example.com>` is a value).
+            Controls: each required row removed in turn, one value emptied, one
+            left a placeholder, one row repeated: each NOT INSTALLED naming that
+            label and no other. The optional row may be absent; a placeholder
+            in it is still NOT INSTALLED, since an unedited template row is an
+            unanswered question. Without this leg a half-filled copy of the
+            template is OK, and an agent reads `<id of page 3>` as the page it
+            builds from.
+  registry  The registry row is one of three forms: `doc <path>` (a document in
+            the install repository), `design <id>` (a page or frame in the
+            design file, one token) or `link <url>` (another system, with a
+            scheme). Controls: another form word, a form with no argument, a
+            link with no scheme, a design id with a space: each NOT INSTALLED.
+  doc       For `doc`, the path is resolved against the install root by
+            fleetlib.paths.resolve_repo_path, must stay inside that root, and
+            the file is OPENED and one byte read. Controls: a missing file, an
+            empty file, a directory, a path that climbs out of the install:
+            each NOT INSTALLED naming it. `design` and `link` are checked for
+            FORM ONLY, because nothing on a host opens a design-file node or
+            another system without that tool's own access; the OK line says
+            the registry was recorded, not opened.
+  version   SKILL.md's `version` is printed in the OK line; an unreadable one is
+            NO VERDICT. Control: check.test.py compares the printed version with
+            SKILL.md's.
+
+IF A NEGATIVE CONTROL PASSES, NO VERDICT. check.test.py reports a fault case
+that came back OK as NO VERDICT for the whole run (exit 3), not as a failure of
+one case and never as a pass: a check that cannot go red for a reason says
+nothing about that reason when it is green.
+
+THE EXIT CODE IS LOSSY; THE PRINTED LINE IS THE VERDICT. `fleet skills` shows it
+as the reason a skill is not configured.
+
+Environment: FLEET_CONTEXT_ROOT (read by fleetlib) selects the install;
+otherwise the git top level of the working directory, then the calling agent's
+home project, as `fleet where` resolves them.
+"""
+import os
+import re
+import sys
+
+sys.dont_write_bytecode = True  # the fleet tree is read-only on a host; write nothing into it
+# realpath, never abspath: reached through an agent's skill link, abspath is the
+# link's path under the agent's config directory, and no fleet tree is above it.
+HERE = os.path.dirname(os.path.realpath(__file__))
+SKILL_DIR = os.path.dirname(HERE)
+FLEET_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(SKILL_DIR)))
+sys.path.insert(0, os.path.join(FLEET_ROOT, "lib"))
+import fleetlib  # noqa: E402
+from fleetlib import paths  # noqa: E402
+
+SKILL = "ui-design"
+MAP_HEADING = "## Design map"
+# The design map's row labels, in the order INSTRUCTION.md's template writes
+# them, and whether each is required. check.test.py holds the template to this
+# list, so the two cannot drift; a row added here is a value every install must
+# then give, which is a version bump (claude-skill section 3).
+ROWS = (
+    ("Design file", True),
+    ("Drafts page", True),
+    ("Approved page", True),
+    ("Implemented page", True),
+    ("Scratch area", True),
+    ("In-build mark", True),
+    ("Superseded mark", True),
+    ("Screen-number registry", True),
+    ("Design approver", True),
+    ("Design-file owner", True),
+    ("Code-change authorizer", True),
+    ("Design-tool skills", False),
+)
+REGISTRY = "Screen-number registry"
+TOOL_SKILLS = "Design-tool skills"
+FORMS = {
+    "doc": re.compile(r"\S(?:.*\S)?"),
+    "design": re.compile(r"\S+"),
+    "link": re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://\S+"),
+}
+PLACEHOLDER = re.compile(r"<[^<>@]*>")
+FENCE = re.compile(r"[ \t]*(`{3,}|~{3,})(.*)")
+HEADING = re.compile(r" {0,3}#{1,6}(?:[ \t]|$)")
+SEPARATOR = re.compile(r"\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)*\|?\s*")
+CODE_SPAN = re.compile(r"(`+)(.*)\1", re.S)
+
+
+def out(code, msg):
+    print(msg)
+    sys.exit(code)
+
+
+def declared_version():
+    try:
+        with open(os.path.join(SKILL_DIR, "SKILL.md"), encoding="utf-8") as f:
+            m = re.search(r"^version:\s*(\d+)\s*$", f.read(4096), re.M)
+    except (OSError, ValueError) as e:
+        out(1, f"NO VERDICT: this skill's SKILL.md cannot be read ({type(e).__name__}: {e})")
+    if not m:
+        out(1, "NO VERDICT: this skill's SKILL.md declares no version, so the install cannot be "
+               "said to be of one")
+    return int(m.group(1))
+
+
+def outside_fences(lines):
+    """(index, line) of every line outside fenced code (``` or ~~~): a heading or
+    a table inside a fence is an example, not the map."""
+    fence = None
+    for i, line in enumerate(lines):
+        m = FENCE.match(line)
+        if fence is None:
+            if m:
+                fence = m.group(1)
+                continue
+            yield i, line
+        elif m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence) and not m.group(2).strip():
+            fence = None
+
+
+def cells(line):
+    """A pipe-table row's cells, `\\|` kept as a literal pipe."""
+    s = line.strip()
+    if s.startswith("|"):
+        s = s[1:]
+    if s.endswith("|") and not s.endswith("\\|"):
+        s = s[:-1]
+    return [c.replace("\\|", "|").strip() for c in re.split(r"(?<!\\)\|", s)]
+
+
+def design_map(text):
+    """[(label, value), ...] of the design map, or a string saying why there is none."""
+    lines = text.split("\n")
+    seen = list(outside_fences(lines))
+    heads = [k for k, (_, line) in enumerate(seen) if line.rstrip() == MAP_HEADING]
+    if not heads:
+        return f"no '{MAP_HEADING}' heading outside fenced code"
+    if len(heads) > 1:
+        return f"{len(heads)} '{MAP_HEADING}' headings, so which map is meant cannot be told"
+    section = []
+    for i, line in seen[heads[0] + 1:]:
+        if HEADING.match(line):
+            break
+        section.append((i, line))
+    for k in range(len(section) - 1):
+        (i, line), (j, nxt) = section[k], section[k + 1]
+        if line.lstrip().startswith("|") and j == i + 1 and SEPARATOR.fullmatch(nxt):
+            if len(cells(line)) < 2:
+                return "its table's header has fewer than two cells (label, value)"
+            rows, last = [], j
+            for i2, row in section[k + 2:]:
+                if i2 != last + 1 or not row.lstrip().startswith("|"):
+                    break
+                c = cells(row)
+                rows.append((c[0], c[1] if len(c) > 1 else ""))
+                last = i2
+            return rows
+    return f"no pipe table (a header row and its separator row) under '{MAP_HEADING}'"
+
+
+def unspan(value):
+    """The value without one enclosing code span: `IN-BUILD ` is the mark itself."""
+    value = value.strip()
+    m = CODE_SPAN.fullmatch(value)
+    return m.group(2) if m else value
+
+
+def registry_leg(value, faults):
+    """The registry's note for the OK line, or None with the fault appended."""
+    word, _, arg = unspan(value).partition(" ")
+    arg = unspan(arg)
+    if word not in FORMS:
+        faults.append(f"{REGISTRY} '{value}' is none of the three forms: doc <repository path>, "
+                      f"design <id>, link <url>")
+        return None
+    if not FORMS[word].fullmatch(arg):
+        want = {"doc": "a repository-relative path", "design": "one id with no space",
+                "link": "a URL with its scheme (https://...)"}[word]
+        faults.append(f"{REGISTRY} '{value}': '{word}' takes {want}")
+        return None
+    if word != "doc":
+        return f"registry recorded as {word} {arg}, not opened (only that tool or system can open it)"
+    try:
+        root = os.path.realpath(paths.install_root())
+        path = os.path.realpath(paths.resolve_repo_path(arg))
+    except fleetlib.FleetError as e:
+        faults.append(f"{REGISTRY} 'doc {arg}' does not resolve ({e})")
+        return None
+    if os.path.commonpath([root, path]) != root:
+        faults.append(f"{REGISTRY} 'doc {arg}' resolves to {path}, outside the install repository "
+                      f"{root}; write the path relative to the install root")
+        return None
+    try:
+        with open(path, "rb") as f:
+            byte = f.read(1)
+    except OSError as e:
+        faults.append(f"{REGISTRY} 'doc {arg}': {path} cannot be read ({e.strerror or type(e).__name__})")
+        return None
+    if not byte:
+        faults.append(f"{REGISTRY} 'doc {arg}': {path} is empty")
+        return None
+    return f"registry doc {arg} opened and read"
+
+
+def main():
+    if sys.argv[1:]:
+        out(1, "NO VERDICT: usage: check (it takes no arguments); nothing was looked at")
+    try:
+        ctx = paths.skill_context(SKILL)
+    except fleetlib.FleetError as e:
+        out(1, f"NO VERDICT: no install context for this skill ({e}). Nothing was looked at, so "
+               f"this says nothing about the design map.")
+    path = os.path.join(str(ctx), "CONTEXT.md")
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+    except FileNotFoundError:
+        out(2, f"NOT INSTALLED: no {path}: the design map is not written. Follow "
+               f"installation/INSTRUCTION.md.")
+    except UnicodeDecodeError as e:
+        out(1, f"NO VERDICT: {path} is not UTF-8 text ({e.reason}), so no design map could be read")
+    except OSError as e:
+        out(2, f"NOT INSTALLED: {path} cannot be read ({e.strerror or type(e).__name__}); an agent "
+               f"cannot read the design map either")
+
+    rows = design_map(text)
+    if isinstance(rows, str):
+        out(1, f"NO VERDICT: {path} has no design map this check can read: {rows}. The values were "
+               f"not measured, so this is not a pass; installation/INSTRUCTION.md step 2 gives the form.")
+
+    faults, missing, empty, placeholder, repeated = [], [], [], [], []
+    values = {}
+    for label, required in ROWS:
+        found = [v for lab, v in rows if lab == label]
+        if len(found) > 1:
+            repeated.append(label)
+            continue
+        if not found:
+            if required:
+                missing.append(label)
+            continue
+        value = found[0]
+        if PLACEHOLDER.search(value):
+            placeholder.append(label)
+        elif not unspan(value).strip():
+            if required:
+                empty.append(label)
+        else:
+            values[label] = value
+    for what, labels in (("missing", missing), ("empty", empty),
+                         ("still a <placeholder>", placeholder), ("repeated", repeated)):
+        if labels:
+            faults.append(f"{what}: {', '.join(labels)}")
+    note = registry_leg(values[REGISTRY], faults) if REGISTRY in values else None
+    if faults:
+        out(2, f"NOT INSTALLED: the design map in {path}: {'; '.join(faults)}. Follow "
+               f"installation/INSTRUCTION.md.")
+
+    version = declared_version()
+    tools = unspan(values[TOOL_SKILLS]) if TOOL_SKILLS in values else "not recorded"
+    out(0, f"OK: configured (version {version}); design map in {path}: "
+           f"{sum(1 for _, req in ROWS if req)} required values; {note}; design-tool skills: {tools}")
+
+
+if __name__ == "__main__":
+    main()
