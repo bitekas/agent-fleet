@@ -31,12 +31,16 @@ Rules, each load-bearing:
     anything else is read as form B and held to its three fields, so a section
     that is neither is refused rather than guessed.
 
-Standard library only. InstallSectionError's message says what is wrong and
-where (a line number of the text), never a path: the caller knows the path.
+Standard library only. InstallSectionError is a FleetError with exit code
+DRIFT (1), since a malformed SKILL.md is a finding, and a ValueError, so a
+caller catching either keeps working. Its message says what is wrong and where
+(a line number of the text), never a path: the caller knows the path.
 """
 
 import re
 from dataclasses import dataclass
+
+from . import DRIFT, FleetError
 
 HEADING = "## Install"
 NOTHING = "Nothing to install."
@@ -50,8 +54,10 @@ _MARKER = re.compile(r"\*\*(%s):\*\*" % "|".join(map(re.escape, FIELDS)))
 _CONTEXT_FILE = re.compile(r"`(%s)`" % "|".join(map(re.escape, CONTEXT_FILES)))
 
 
-class InstallSectionError(ValueError):
-    """The text has no readable `## Install` section; the message says why."""
+class InstallSectionError(FleetError, ValueError):
+    """The text has no readable `## Install` section; the message says why (exit 1)."""
+
+    exit_code = DRIFT
 
 
 @dataclass(frozen=True)

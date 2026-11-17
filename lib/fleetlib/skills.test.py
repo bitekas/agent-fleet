@@ -15,7 +15,7 @@ import unittest
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 
-from fleetlib import skills  # noqa: E402
+from fleetlib import DRIFT, FleetError, skills  # noqa: E402
 from fleetlib.skills import InstallSectionError, install_section  # noqa: E402
 
 FRONT = "---\nname: zz\nversion: 1\ndescription: >\n  A test skill.\nrequires_install: false\n---\n\n# zz\n\nIntro.\n\n"
@@ -202,6 +202,14 @@ class ParseTest(unittest.TestCase):
         sec = install_section(BASE_B.replace("\n", "\r\n"))
         self.assertEqual((sec.form, sec.context_files), ("fields", ("config.json", "CONTEXT.md")))
         self.assertTrue(sec.body.startswith("## Install\r\n"), "the body is verbatim, line endings kept")
+
+    def test_error_is_a_fleet_error_with_the_drift_code(self):
+        err = self.refused("# zz\n\nNo section.\n", "no '## Install' heading")
+        self.assertIsInstance(err, FleetError)
+        self.assertIsInstance(err, ValueError, "an `except ValueError` caller keeps catching it")
+        self.assertEqual(err.exit_code, DRIFT)
+        self.assertEqual(DRIFT, 1)
+        self.assertEqual(str(err), err.message, "str() is the message, with nothing appended")
 
     def test_message_names_no_path(self):
         err = self.refused("# zz\n\nNo section.\n", "no '## Install' heading")
