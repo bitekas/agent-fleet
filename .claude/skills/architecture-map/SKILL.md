@@ -175,3 +175,15 @@ as growth.
 - **The map is prose, so it is the artifact class nothing else can see.** No
   test, spec, typecheck, lint or visual gate reads it. Whatever discipline it
   gets, it gets from the person editing the code beside it.
+
+## Install
+
+**Asks for:** where the repository's design packages live (a path relative to
+the repository root, or a wiki's base URL), and the map itself: the
+cross-cutting facts of this codebase, one slice per seam between components,
+each naming the design package that owns it.
+
+**Writes:** `config.json`, and `CONTEXT.md`, which is the map.
+
+**Steps:** none beyond writing the files above; sections 1 to 5 say what earns
+a slice and what a slice records.

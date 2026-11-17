@@ -2101,3 +2101,23 @@ the install, and section 8 there names the install's own documents for each row.
 made.** Who authorizes a code change, a release, or a change to one of the
 rulings `CONTEXT.md` records is the agent's charter and the install's
 `CONTEXT.md`, never this file.
+
+## Install
+
+**Asks for:** the install's name for each environment role (dev machine,
+shared dev, live, and a live copy where there is one) and the selector
+variable the app bundle carries; the shared checkout's path, the repository's
+owner/name on its forge, the landing and default branches, and the
+shared-checkout worktrees directory; and every branch that deploys, with the
+environment it deploys to. For `CONTEXT.md`: the inventory, a role table
+naming the file that plays each tool role, then each numbered section's values
+and runnable commands (cloud projects, lanes, git hooks, store tracks and
+identities, the version markers, the env sources, the native config files, and
+where design packages live).
+
+**Writes:** `config.json` and `CONTEXT.md`.
+
+**Steps:** none beyond writing the files above; `CONTEXT.md` keeps this file's
+section numbers, with the role table ahead of section 1 ("How this file names
+things"). Enabling the git hooks is per clone (section 3.4), not part of this
+install.

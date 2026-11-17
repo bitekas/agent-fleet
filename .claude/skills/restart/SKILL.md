@@ -81,3 +81,17 @@ agents only with automatic login on for the agents user.
 If you find the handoff note (`handoff.file`) at session start, read it, act on it
 (or surface it to the user), then delete it - it is one-shot state, not
 documentation.
+
+## Install
+
+**Asks for:** the agent's service unit and reattach command, written with the
+`<agent>` token (the example carries the fleet's own; on macOS the unit is the
+session job's launchd label); the command that reboots the machine (a wrapper,
+so its authorization lives in one place); the dev stack's scoped teardown
+command and the machine-wide process patterns it misses, or none where there is
+no dev stack; and where the handoff note is written.
+
+**Writes:** `config.json`.
+
+**Steps:** none beyond writing the file above; a handoff note inside a
+repository is gitignored there before the first run.

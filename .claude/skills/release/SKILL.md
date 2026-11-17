@@ -1711,3 +1711,21 @@ check green** (it is the only mitigation there is, and nothing before this point
 ends it), and **any step whose UI differed from the text above has been
 corrected in this engagement, where the living-document rule says.** Say in the
 report which steps you corrected, or that none differed.
+
+## Install
+
+**Asks for:** the landing branch, the release branch the store lane builds from
+(never the same branch), and the release-candidate branch prefix; the version
+file; and where design packages live, or none. For `CONTEXT.md`: what plays
+each role of its role table (the UI evidence skill and its visual sweep, the
+design-source skill, the cloud-secret procedure, the release plan file); who
+specifies the steps, authorizes the merge into the release branch and approves
+each cherry-pick; the branches and the lane; the shared tester account and
+where a build's install link is delivered; the string catalog a QA row quotes;
+and each numbered step's exact commands.
+
+**Writes:** `config.json` and `CONTEXT.md`.
+
+**Steps:** none beyond writing the files above; the opening section says which
+five sections `CONTEXT.md` carries ahead of its section 1, and its numbered
+sections match this file's.

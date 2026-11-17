@@ -427,3 +427,20 @@ controls that hold it up; read that before editing it.
 Whether a request to soft-restart is yours to act on, and who may make one, are
 your charter's and the install's `CONTEXT.md`'s. This file is the mechanism and
 the order.
+
+## Install
+
+**Asks for:** the agent's service unit, written with the `<agent>` token (the
+example carries the fleet's own; on macOS it is the session job's launchd
+label); the checkpoint note's path under the agent's state directory, and the
+file name a subagent's handoff note takes; the dev stack's scoped teardown
+command, or none; the return time to announce, sized above the service's start
+timeout; and the health agent's name and chat address, or none. For
+`CONTEXT.md`: who may ask for a soft restart, the health agent and any
+precondition of reaching it, the record of open requests a charter reads at
+session start, and the service shape behind the return time.
+
+**Writes:** `config.json` and `CONTEXT.md`.
+
+**Steps:** none beyond writing the files above; "What CONTEXT.md carries" says
+what `CONTEXT.md` holds.

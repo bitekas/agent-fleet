@@ -781,3 +781,23 @@ it never becomes a ticket for afterwards.
 
 `CONTEXT.md` names where each surface lives on the install, the storefronts,
 and the roadmap a follow-up is filed in.
+
+## Install
+
+**Asks for:** the landing branch, the shared-checkout worktrees directory, and
+the one command that runs the dev stack and the one that deploys; the e2e
+runner and its spec directory; the path of the consistency-scan prompt; the
+design file's key, the ids of its current and incoming pages, the name prefixes
+of a frame marked for deletion and of one in build, and the design-id registry
+probe (or none, where there is no design file or no probe); the feature
+checklist directory, the people who may waive a row, and the pattern a chat
+message permalink matches. For `CONTEXT.md`: the human principal and the
+design's approvers, what fills each role of the role table (or how its rule is
+met without one), the e2e runner's scoped invocations, the design-id registry,
+the dev-build commands, which clock times the tester's pass and how its floor
+is sized, and where each Rule 7 surface, the storefronts and the roadmap live.
+
+**Writes:** `config.json` and `CONTEXT.md`.
+
+**Steps:** none beyond writing the files above; "What the install names" says
+what `CONTEXT.md` carries.

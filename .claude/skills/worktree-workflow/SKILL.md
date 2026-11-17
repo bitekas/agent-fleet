@@ -706,3 +706,22 @@ have not read the mechanism, say so in words that survive one relay.
     existed**: a post-fix search that is **empty by construction** must not be
     read as eliminating a cause. Where no positive control on the same instrument
     is possible, look on a **different** instrument.
+
+## Install
+
+**Asks for:** the main checkout's path, the shared-checkout worktrees
+directory, the default landing branch, the per-worktree dependency install
+command covering every root with its own lockfile, and the dev-stack command;
+the install's name for each environment role; and the branch and
+commit-subject forms, the slug case, and the closed list of branch types with
+their meanings. For `CONTEXT.md`: the checkout and workspaces directories and
+the one listing that finds every worktree; which branch each kind of work cuts
+from and lands on; example names, the exempt lanes and CI subjects, the names
+no agent may take, and whether anything enforces the forms; the dependency
+roots; where the repository's credentials live; what the dev stack brings up
+and whether it claims a port slot; and who reviews.
+
+**Writes:** `config.json` and `CONTEXT.md`.
+
+**Steps:** none beyond writing the files above; the table at the top of this
+file says what `CONTEXT.md` carries.

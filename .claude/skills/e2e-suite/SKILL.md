@@ -830,3 +830,26 @@ For tighter loops than reuse mode, hand-boot the mock-service stack and call
 the test runner directly from the spec directory (the install's `CONTEXT.md`
 has the two commands). That path never passes the exclusive project, so none of
 the scoping defect class above applies to it.
+
+## Install
+
+**Asks for:** the e2e runner (the wrapper that boots and tears down the stack)
+and the spec directory; the test runner's parallel, serial and exclusive
+project names and the exclusive tag; the exact pass and fail verdict strings;
+the environment variables and defaults for the worker count, the artifacts
+root and the run lock, with the lock's file names, timeout exit code, share
+flag and library (the example's names, flags and numbers are working
+defaults); the port-slot file, or none for fixed ports; the device harness and
+the instrument-fault policy, where the install has them; the router's
+navigation call forms and route table symbol; and the static checks run with
+every pass. For `CONTEXT.md`: the runner's invocations, phases, exit codes and
+verdict line; where the suite runs in CI and how a branch is gated on demand;
+the measured runtime, its hardware and the worker plateau; the fan-out greps;
+the serial phase's shared documents, the import chains a spec must not reach,
+the scoping probe, the fast-iteration commands, and whether the device harness
+runs in CI.
+
+**Writes:** `config.json` and `CONTEXT.md`.
+
+**Steps:** none beyond writing the files above; the "Values" paragraph at the
+top says what `CONTEXT.md` carries.

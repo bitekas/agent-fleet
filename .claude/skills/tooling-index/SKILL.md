@@ -167,3 +167,17 @@ doctor, and the installer is the only instrument that sees a mismatch.
 doctor reports.** The tally moves with the framework version, so a pinned count
 reds on an upgrade that changed nothing - and the fix a blocked reader reaches
 for is to relax the gate, which is the one outcome the gate exists to prevent.
+
+## Install
+
+**Asks for:** the framework whose packages are added only through its own
+installer, with its add, fix and doctor commands, or none where the repository
+has no such framework; and the scratch directory outside the checkout where a
+one-off script goes. For `CONTEXT.md`: the index itself, one row per reusable
+tool the repository owns, and which of the framework's package manifests was
+read, at which framework version (section 7).
+
+**Writes:** `config.json`, and `CONTEXT.md`, which is the index.
+
+**Steps:** none beyond writing the files above; section 2 says what a row
+holds.

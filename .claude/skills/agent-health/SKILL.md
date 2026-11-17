@@ -780,3 +780,17 @@ python3 "${CLAUDE_SKILL_DIR}/pool_pick.py" --record --agent <agent> --account <n
   the account's usage lands twice per sweep; read it under the reader's own name
   and the next sweep, read by another holder, finds no baseline. `--shares --json`
   says who reads and where (step 1).
+
+## Install
+
+**Asks for:** which agent owns this surface and runs the sweep and every
+handover (its charter holds the policy); the command that lists the agents with
+a live session; the sweep cadence; where the owning agent keeps its usage
+ledger and its handover ledger; and where handover packages are written.
+
+**Writes:** `CONTEXT.md`.
+
+**Steps:** none beyond writing the file above; the usage ledger is created once
+with `parse_usage.py --init --ledger <path>`. The account pool and each
+agent's tmux facts come from the agent-revive install, so that skill is
+installed with this one.
