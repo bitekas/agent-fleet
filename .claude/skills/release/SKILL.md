@@ -280,12 +280,14 @@ exactly what section 3 is about to read.
 live-copy environment, the backmerge job moves its branch to the RC and
 redeploys it (`/repo-and-environments` section 5.2), so the live-copy
 environment runs the candidate from the cut on. Check its run as section 10's
-move 3 says, and say so when you announce the cut. **A CI token may be refused a
-push that changes a workflow file** - GitHub's default job token is - so when
-the landing branch changed a workflow file since the live-copy branch was last
-moved, the job cannot make that move: its run is red, by design and not as a
-defect to chase, and the move is made by hand with your own credentials before
-you announce the cut (`CONTEXT.md` section 1 has the job's message and the
+move 3 says, and say so when you announce the cut. **The move goes through
+when the landing branch changed a workflow file since the live-copy branch was
+last moved**: the live-copy branch only ever takes the RC's workflow files,
+which already exist on the RC branch, and GitHub lets the job's default token
+push a workflow file another branch already holds (`/repo-and-environments`
+section 5.2). Should the run nevertheless be red with **"downstream this landing
+by hand"**, run the commands it prints with your own credentials before you
+announce the cut (`CONTEXT.md` section 1 has the job's message and the
 commands).
 
 **The RC branch keeps its `repo.rc_branch_prefix` name and takes no per-author
@@ -1327,9 +1329,12 @@ only after the last one:
    A version-file conflict is computed, as in section 2; any other conflict reds
    the run, which names the paths and prints the resolution, and resolving it is
    a human's - and the live-copy branch waits for it, because it only ever moves
-   to what the landing branch holds. A landing that changes a workflow file can
-   be refused to the job's token (section 1): the run then says so, with the
-   commands, and you run them with your own credentials.
+   to what the landing branch holds. A landing that changes a workflow file goes
+   through too, unless the landing branch has its own change to that same file:
+   the merge then combines the two into contents no branch holds, and GitHub
+   refuses the job's token that push (`/repo-and-environments` section 5.2). The
+   run says **"downstream this landing by hand"**, with the commands, and you
+   run them with your own credentials.
 4. **Re-run section 3's gates on the new RC tip**, and update section 5's
    documents with the fix (row, commit, SHA).
 5. **Rebuild what the fix reaches, from the new tip.** A backend change restarts

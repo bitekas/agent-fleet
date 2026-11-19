@@ -1523,17 +1523,30 @@ flag is given (`CONTEXT.md` section 2), because promoting the landing branch
 mid-window is exactly how the live-copy branch comes to carry commits the
 candidate lacks.
 
-**WARNING: a landing that changes a workflow file cannot be pushed by the
-default token**, a fast-forward to commits already in the repository included,
-and no permission grants it (GitHub Actions, community-reported; `CONTEXT.md`
-section 5.2 says whether the install's runs have shown it). That is an accepted
-limit, not a gap to close with a person's credential: the job recognises the
-refusal, never retries it - a retry is refused identically - and reports it as
-an explicit, actionable refusal, **"downstream this landing by hand"**, naming
-the workflow files and the commands for every edge still owed. It is the
-expected outcome of a window's FIRST landing whenever the landing branch changed
-a workflow since the live-copy branch was last promoted; landings that leave the
-workflows alone go through unattended.
+**A landing that adds or updates a workflow file goes through with the default
+token when every such file, at the same path with the same contents, already
+exists on another branch of the repository.** GitHub refuses a push that adds
+or updates a file under `.github/workflows/` to a credential without the
+workflow permission, which the default token does not hold and no
+`permissions:` key grants, and exempts a file whose path and contents another
+branch already holds (GitHub's OAuth scopes documentation, the `workflow`
+scope). Measured for the default job token 2026-11-19: a merge commit carrying
+a release candidate's workflow change into the landing branch, and a
+fast-forward of the live-copy branch across that change, both pushed. So this
+job's pushes normally qualify: the live-copy branch only ever takes the
+candidate's workflow files, and a merge into the landing branch takes the
+candidate's copy of a workflow file that only the candidate changed.
+`CONTEXT.md` section 5.2 records what the install's runs have shown.
+
+**WARNING: the exemption does not reach a merge in which BOTH sides changed the
+same workflow file.** Git may combine the two without a conflict, but the
+combined contents exist on no branch, so the rule refuses that push (not
+measured). The job recognises the refusal, never retries it - a retry is
+refused identically - and reports it as an explicit, actionable refusal,
+**"downstream this landing by hand"**, naming the workflow files and the
+commands for every edge still owed, which a person runs with their own
+credentials. The job is never given a token with the workflow permission
+instead: every token but the default one triggers workflows (section 5).
 
 **WARNING: the redeploy is a DISPATCH, and it costs a whole deploy.** The job's
 pushes use the default token, so the live-copy push starts no run; the job
