@@ -618,7 +618,7 @@ a start took is read from the console's OK/KO and never from adb's exit code -
 and a stop-then-start boundary loses about 0.15 s of screen (measured
 2026-11-25, `android.avd.default`, headless). Check every segment's duration
 (`ffprobe`) rather than trusting that the file ends where the flow did; a
-device e2e runner owes both, and joins the parts.
+device e2e runner owes both, and the join of the parts.
 
 Stock limits on the on-device recorder (A and B): **~3 minutes** per recording
 by default, which `--time-limit <s>` can shorten but not exceed; **no audio**;

@@ -783,8 +783,9 @@ place"* - depends on **one package name in one track**, and neither holds.
 
 **What DOES hold, and it is the part worth carrying forward:**
 
-- **The one shared counter is one counter.** A number consumed by any
-  environment's upload is consumed for the repo. Section 4.3's receipt rules and
+- **The one shared counter is one counter, except where the install forks it
+  for a release window (below).** A number consumed by any environment's upload
+  is consumed for the repo outside that fork. Section 4.3's receipt rules and
   the live-to-landing handoff (section 5) all rest on that. **Routing a
   candidate's bumps to the candidate forks it for the window**: where the
   install lands the bump of each tester build of a release candidate on the
@@ -1696,7 +1697,7 @@ arms every symbol upload a native build makes (the JS source map and bundle,
 iOS debug symbols, and the Android code shrinker's mapping file). The deploy
 script skips them all when the DSN **or** the token is empty, so an
 environment with no token still reports normally with **unsymbolicated**
-frames (on Android, native-language frames keep the shrinker's obfuscated
+frames (on Android, Java and Kotlin frames keep the shrinker's obfuscated
 names). Nothing in the runtime reads the token. **No code change turns
 symbolication on later, just the secret.**
 
