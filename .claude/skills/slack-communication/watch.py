@@ -1022,7 +1022,7 @@ def new_sweep(edge: str | None) -> dict | None:
 # Slack error codes about ONE thread rather than the conversation or the service:
 # the sweep goes on past that thread (`_sweep_thread`). Anything else stops it.
 THREAD_GONE_ERRORS = frozenset({"thread_not_found"})
-# (conversation, parent ts) of history-pass threads already reported gone.
+# (conversation, parent ts) of threads already reported gone.
 _REPORTED_GONE: set = set()
 
 
@@ -1041,12 +1041,13 @@ def _sweep_thread(channel_id: str, channel_name: str | None, state: dict, parent
     says is gone (THREAD_GONE_ERRORS) does not stop the sweep, so it cannot hide
     the threads after it; every other error is raised and stops the sweep.
     `start` is `_read_thread`'s: where a thread with no cursor starts reading.
-    ⚠️ Only the old-parent pass (`latest_reply` None) forgets the thread: nothing
-    else would ever list it again. A thread from a history read (the history
-    pass, the revival scan) keeps its cursor and is reported once per process -
-    its parent is still listed, so forgetting it would repeat the line every
-    sweep, and on an answer that turned out transient would read it again from
-    the floor and re-send replies already delivered."""
+    ⚠️ The thread KEEPS its cursor and is reported once per process, whichever
+    pass read it. Its parent is listed again - by the history pass, or, older
+    than the window, by the revival scan - and a forgotten thread is read from
+    the floor or the window edge: on an answer that turned out transient, that
+    re-sends replies already delivered. A thread whose parent really was
+    deleted costs the old-parent pass one call per sweep until its cursor
+    leaves the window; history lists it no more."""
     try:
         return _read_thread(channel_id, channel_name, state, parent_ts, latest_reply,
                             state["sweep_floor_ts"], is_dm, off_page=True, budget=budget,
@@ -1054,15 +1055,11 @@ def _sweep_thread(channel_id: str, channel_name: str | None, state: dict, parent
     except SlackApiError as e:
         if e.code not in THREAD_GONE_ERRORS:
             raise
-        where = _where(channel_id, channel_name, is_dm, with_id=True)
-        if latest_reply is None:
-            state["threads"].pop(parent_ts, None)
-            print(f"WATCH-INFO {where}: thread {parent_ts} is gone (Slack says {e.code}) - "
-                  f"no longer read", file=sys.stderr, flush=True)
-        elif (channel_id, parent_ts) not in _REPORTED_GONE:
+        if (channel_id, parent_ts) not in _REPORTED_GONE:
             _REPORTED_GONE.add((channel_id, parent_ts))
-            print(f"WATCH-INFO {where}: thread {parent_ts} answers {e.code} - skipped, its "
-                  f"cursor kept; not reported again by this process", file=sys.stderr, flush=True)
+            print(f"WATCH-INFO {_where(channel_id, channel_name, is_dm, with_id=True)}: thread "
+                  f"{parent_ts} answers {e.code} - skipped, its cursor kept; not reported again "
+                  f"by this process", file=sys.stderr, flush=True)
         return True
 
 
@@ -1128,6 +1125,12 @@ def revive_channel(channel_id: str, channel_name: str | None, state: dict, pos: 
     parent's `latest_reply` moved past where the thread is read from - a
     tracked thread from its cursor, one with no cursor from the window edge
     (`start`), both from no lower than the sweep floor.
+    ⚠️ Each page is read with `latest` at the oldest ts of the one before, which
+    reaches every page only because a call bounded by BOTH `latest` and
+    `oldest` returns the newest messages below `latest` first (measured
+    2026-11-25: 11,911 messages of one conversation's range came back whole as
+    60 such pages). A call bounded by `oldest` alone does the opposite
+    (`_recent_window_messages`), so do not drop `latest` from this call.
     ⚠️ `revival_ts` is written only once a page's threads are all read, so a
     restart part-way through a page re-reads that one page - its threads
     already read cost no call, their cursors being on disk - and skips nothing.
@@ -1137,9 +1140,17 @@ def revive_channel(channel_id: str, channel_name: str | None, state: dict, pos: 
     while True:
         while pos["pending"]:
             parent_ts, latest_reply = pos["pending"][0]
+            before = state["threads"].get(parent_ts)
             if not _sweep_thread(channel_id, channel_name, state, parent_ts, latest_reply, is_dm,
                                  budget, start=pos["window_start"]):
                 return False
+            # ⚠️ A full replies page stops the cursor at the newest reply read, and
+            # the scan lists this parent again only a cycle later - so the rest of a
+            # long backlog, its newest reply last, is read now. Only while the
+            # cursor moves: a cursor never moves back, so this ends.
+            after = state["threads"].get(parent_ts)
+            if after != before and float(after) < float(latest_reply):
+                continue
             pos["pending"].pop(0)
         if pos["page_end"] == "":
             state.pop("revival_ts", None)
@@ -1150,7 +1161,7 @@ def revive_channel(channel_id: str, channel_name: str | None, state: dict, pos: 
         if pos["pages"] <= 0:
             return True
         horizon = f"{time.time() - REVIVAL_HORIZON_SECS:.6f}"
-        latest = min(state.get("revival_ts") or pos["reach"], pos["reach"], key=float)
+        latest = state.get("revival_ts") or pos["reach"]
         if float(latest) <= float(horizon):
             state.pop("revival_ts", None)
             return True

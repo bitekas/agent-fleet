@@ -491,24 +491,27 @@ page** at the default 300 s. Measured across six agents' watchers: most
 conversations are 1 to 3 pages (5 to 15 minutes), a busy DM 8 to 9 pages (40 to
 45 minutes), and the worst, a feed channel holding about 12,000 top-level
 messages in that range, 60 pages - **five hours**. A cycle survives restarts;
-sweeps that take the whole budget slow it down.
+sweeps that take the whole budget slow it down, and sweeps that take it every
+poll stop it, with no line to say so.
 
 **Errors.** A sweep error is **one** `WATCH-ERROR sweep <conversation> ...`
-line. It never retires the conversation (a sweep runs only after a successful
+line, and so is a revival step's - the same line, the same policy. It never
+retires the conversation (a sweep runs only after a successful
 poll of the same conversation) and never costs that poll, and the state is
 saved either way. After a **rate limit** (HTTP 429 or `ratelimited`) the sweep
-resumes from where it stopped on the next poll; after **anything else** the next
-attempt is the next due sweep, so a fault that does not clear costs one line per
-`sweep_secs`, never one per poll - a non-429 line every poll is the flood that
-stops the follower's Monitor. A thread Slack says is gone (`thread_not_found`,
-its parent deleted) does not stop the sweep, so it cannot hide the threads
-after it. In the pass over threads whose parent is older than the window it is
-**dropped from tracking** with one `WATCH-INFO ... thread <ts> is gone` line,
-since nothing would ever list it again; a thread whose parent history still
-lists **keeps its cursor** and is reported once per process, because forgetting
-it would repeat the line every sweep and, on an answer that proved transient,
-re-send replies already delivered. Any other error on a thread stops the sweep
-like the rest. A 429 line carries `429` like
+or revival step resumes from where it stopped on the next poll; after
+**anything else** the next attempt is the next due sweep, so a fault that does
+not clear costs one line per `sweep_secs`, never one per poll - a non-429 line
+every poll is the flood that stops the follower's Monitor. A thread Slack says
+is gone (`thread_not_found`, its parent deleted) does not stop the sweep, so it
+cannot hide the threads after it. It **keeps its cursor** and is reported once
+per process, by one `WATCH-INFO ... thread <ts> answers thread_not_found` line,
+because its parent is listed again - by the history pass, or by the revival
+scan when it is older than the window - and a thread read again with no cursor
+would, on an answer that proved transient, re-send replies already delivered.
+A thread whose parent really was deleted costs the old-parent pass one call per
+sweep until its cursor leaves the window. Any other error on a thread stops the
+sweep like the rest. A 429 line carries `429` like
 the per-conversation one, so the follower's filter drops it alike.
 
 **Saving.** Every poll's state is saved, **a failed poll's included**: the
@@ -643,7 +646,7 @@ further polls or lines for it. (The case it covers: a DM that stays in
   window edge and the horizon. Measured: 1 to 3 pages (5 to 15 minutes) for
   most conversations, 60 pages (five hours) for the busiest. Sweeps that take
   the whole per-poll budget slow the cycle, because the scan spends only what
-  they leave. Of such a thread only the replies after its cursor arrive - or,
+  they leave; sweeps that take it every poll stop it, and no line says so. Of such a thread only the replies after its cursor arrive - or,
   for a thread the watcher never read, the replies newer than the window edge.
   THE WINDOW BOUND above.
 - A reply in a thread whose parent is **older than the 90-day horizon and off
