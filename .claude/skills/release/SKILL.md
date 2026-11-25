@@ -182,8 +182,10 @@ Inside it, four rules hold, and every step below is written against them:
    rides the next one.
 2. **Nothing flows from the landing branch into the RC after the cut** - except
    a cherry-pick the person `CONTEXT.md` names has explicitly approved, one
-   commit at a time, recorded in section 5's documents. The one other merge INTO
-   the RC is section 2's, from the release branch.
+   commit at a time, recorded in section 5's documents. The other merges INTO the
+   RC come from the release branch: section 2's at the cut, and the backmerge
+   job's whenever the release branch moves during the window
+   (`/repo-and-environments` section 5).
 3. **Every tester build of the candidate is built from the RC** - never from the
    landing branch, a fix branch or a feature branch - and none is made before
    the cut. Section 7's builds are the one tester build in the window that is
@@ -400,9 +402,11 @@ inside a worktree where a broken merge harms nobody.
 
 **Direction is the whole point: release branch -> RC branch.** Never the
 reverse, and never resolved on either shared branch. The reverse direction is
-section 11 and happens only after section 10 passes. This is the one merge into
-the RC the window's second rule allows besides a fix landing; it carries the
-live line's own fixes, never the landing branch's work.
+section 11 and happens only after section 10 passes. This merge, and the backmerge
+job's merges of the release branch into the RC whenever the release branch
+moves during the window (`/repo-and-environments` section 5), are the merges
+into the RC the window's second rule allows besides a fix landing; they carry
+the live line's own fixes, never the landing branch's work.
 
 The backmerge (`/repo-and-environments` section 5) normally keeps the landing
 branch caught up, so this merge is often empty or near-empty. **An empty merge
@@ -1409,9 +1413,10 @@ un-applied step. A step the entry marks to run after the push - a store-listing
 edit, say - is confirmed as owned, not as done.
 
 **Merge direction: RC branch -> release branch.** Resolve nothing on the release
-branch - if the release branch has moved since section 2, merge it into the RC
-again first and resolve there, which moves the RC and sends it back through
-section 3 and the rows that merge can reach.
+branch - if the release branch has moved since section 2, the backmerge job has
+merged it into the RC (`/repo-and-environments` section 5); where that run is
+red, merge it into the RC by hand and resolve there. Either merge moves the RC
+and sends it back through section 3 and the rows that merge can reach.
 
 **The gate-outcome file reaches the release branch only by a FAST-FORWARD of the
 gated SHA**, where section 3's dispatch commits one. That file is the quality
@@ -1444,15 +1449,16 @@ the landing branch without its content, and is lost there silently.
 **Re-derive section 4's commit range first, and account for every commit in
 it.** It must be section 4's range plus exactly what the window allows onto the
 RC: section 10's fix commits and the approved cherry-picks section 5 lists, with
-the version-bump and gate-outcome commits CI writes. **A commit outside those is
+the version-bump, gate-outcome and release-branch merge commits CI writes. **A commit outside those is
 a landing->RC flow nobody approved**: stop, and take it to the person
 authorizing the merge - it goes back out of the RC, or it is approved and the
 passes it can reach run again. **Do not silently ship a range nobody was
 shown.**
 
 **Only CI's own commits may sit above section 10's final RC SHA.** Two kinds are
-allowed past it: the version-bump commit a CI tester build dispatched on the RC
-writes, and the gate-outcome commit a green section 3 dispatch on the final tree
+allowed past it: the version-bump commit a CI tester build of the RC writes (a
+dispatch on the RC ref, or a live-copy redeploy whose bump the install lands on
+the RC), and the gate-outcome commit a green section 3 dispatch on the final tree
 writes, which `CONTEXT.md` section 11 describes as the intended state. So
 `git diff <final RC SHA>..<RC tip> --name-only` names the version file, the
 gate-outcome file, both, or nothing. Anything else is code no tester ran, and it
@@ -1472,8 +1478,10 @@ deploy and both native builds at once (`/repo-and-environments` section 3.2).
    "the run went green", and it is the only one that catches the `[skip ci]`
    no-op section 1 told you to watch for: a version-bump tip suppresses the
    entire release, silently, with the branch advancing and nothing red. **The
-   RC's own tip is a version-bump commit whenever a CI tester build was
-   dispatched on it last**, so read the subject of the commit you are pushing,
+   RC's own tip is a version-bump commit whenever a CI tester build of it - a
+   dispatch on it, or a live-copy redeploy whose bump lands on it - was the
+   last thing to land on it**, which after a passing live-copy build is the
+   usual case, so read the subject of the commit you are pushing,
    not only the one section 1 recorded. **Never read a successful push as a
    fired release.** Recovery is a dispatch of the release workflow on the
    release branch that force-runs every job regardless of the path filter

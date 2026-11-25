@@ -576,6 +576,21 @@ ssh <remote> '<login shell> "cd <workdir>/<repo> && \
   git -c user.name=<automation actor> -c user.email=<automation actor> commit -q -m snapshot"'
 ```
 
+**A build that must BE a given commit forces the first snapshot, before step
+4.** A fresh `git init` tracks nothing, so `git add -A` applies `.gitignore` to
+every file, including the files the source repository tracks although they
+match it (`git ls-files -ci --exclude-standard` in the source lists them): the
+plain snapshot above is not the source's tree. For such a build the first
+snapshot uses `git add -A -f`, taken right after the step-3 sync and before the
+step-4 install, since after it `-f` adds `node_modules` as well; and the sync
+excludes every file the source checkout holds that the commit does not track
+(a build artifact, a credential file, the worktree's `workspace.md`), because
+`-A` adds the untracked ones and `-f` the ignored ones. Then prove it:
+`git rev-parse HEAD^{tree}` in the snapshot equals `git rev-parse <sha>^{tree}`
+in the source, and a build does not start on a mismatch. A re-sync afterwards
+keeps the plain `git add -A`: the files the first snapshot forced in stay
+tracked, so their changes are staged without `-f`.
+
 **Because the archive comes from git, an rsync alone is invisible to the
 build.** Every re-sync is followed by `git add -A && git commit` in the same
 breath, or the build compiles the tree as it was at the last commit while the
@@ -918,18 +933,20 @@ should not be there.
 
 Where the install has one, `device_e2e.runner` is its route through all of
 this, and what such a runner owes is: resolve a booted simulator, check the
-stack the build loads from, run the flows in `device_e2e.flows_dir` with
-`device_e2e.driver`, record the run to video (section 6), and collect the
-artifacts. Where it points the app the selected flows drive at that stack, it
-does so with the pointing launch of section 4 and refuses to run a flow if the
-load is not proven; the install's `CONTEXT.md` says on which platforms its
-runner points. **It points one app or none**: the app id comes from the flows'
-own `appId:`, and when the selected flows name more than one it points none and
-says so, because one serve cannot be right for two identities - run one flow per
-identity to pin each. `/tooling-index` has the runner's row, and `/e2e-suite`
-owns what a change owes it in coverage; the install's `CONTEXT.md` names what
-its runner adds beyond this (another platform, a per-flow check over the
-screenshots a flow took).
+stack the build loads from, claim the device for the run, and then, for each
+selected flow in `device_e2e.flows_dir` in turn, record it to video (section
+6), run it with `device_e2e.driver`, and collect its artifacts. Where it points
+the app a flow drives at that stack, it does so before that flow, with the
+pointing launch of section 4, and stops the run if the load is not proven; the
+install's `CONTEXT.md` says on which platforms its runner points. **It points
+per flow, so one run can drive several app identities against one serve**:
+each flow's app id is passed to the driver for that flow, and the install's
+`CONTEXT.md` says how a flow names its identity. A flow that needs a platform
+or a capability the target lacks is reported NOT COVERED and is not run, never
+passed. `/tooling-index` has the runner's row, and `/e2e-suite` owns what a
+change owes it in coverage; the install's `CONTEXT.md` names what its runner
+adds beyond this (another platform, a per-flow check run right after a green
+flow over the screenshots it took or the screen it left).
 
 **From a non-Mac host it runs ON the Mac**, against the Metro served from the
 operator's machine: sync the tree to a directory of your own under
@@ -967,7 +984,9 @@ Things a device run establishes that are worth knowing here:
   `DevicePreferences.<UDID>.ConnectHardwareKeyboard` in the same domain and is
   what Simulator.app applies when it IS running. **Do not trust a preference
   read: before any keyboard run, prove the keyboard is up** - a screenshot, or
-  the hierarchy carrying `inputView` (`maestro hierarchy`). A keyboard check
+  the hierarchy carrying `inputView` (`maestro --device <udid>
+  --driver-host-port <your port> hierarchy`: on the default port the read can
+  come from another session's simulator, SKILL.md trap 11). A keyboard check
   that finds no keyboard on screen issues NO VERDICT, never a pass, for exactly
   this reason.
 - **The dev client's floating TOOLS BUTTON takes taps meant for the app, and
@@ -977,6 +996,32 @@ Things a device run establishes that are worth knowing here:
   Switch it off once per device in the dev menu (Tools button); the setting
   persisted across launches on both the simulator and an Android emulator
   (measured 2026-09-24), so the trap and the fix are the same on Android.
+- **WARNING: on a dev-client build a screen opened from a modal can be MISSING
+  from the accessibility hierarchy while it is plainly on screen, and that is
+  React Native, not the app.** With `__DEV__` true, `<Modal>` wraps its
+  children in the dev `AppContainer`, whose `DebuggingOverlay` wrapper is a
+  full-window, empty view after the content; Fabric can hand it the
+  just-closed sheet's backdrop `UIView` still carrying
+  `accessibilityViewIsModal`, and every sibling drops out of the tree.
+  XCUITest - so `maestro hierarchy` and every `assertVisible` / `tapOn` by id -
+  then sees only the status bar, while AXe's `describe-ui` ignores the flag and
+  still lists the elements. A production bundle has no wrapper; the wrapper
+  follows the JS `__DEV__`, not the native configuration. An id missing only
+  on a dev client is neither an app regression nor evidence about VoiceOver in
+  a release: re-run the same flow on production JS before believing it. The
+  install's `CONTEXT.md` names its measured instance.
+- **WARNING: VoiceOver is not an instrument on the simulator from an agent
+  session.** The runtime ships VoiceOverTouch (`vot`, launchd job
+  `com.apple.VoiceOverTouch`, idle by default);
+  `simctl spawn <udid> defaults write com.apple.Accessibility VoiceOverTouchEnabled -bool YES`
+  plus `simctl spawn <udid> launchctl kickstart system/com.apple.VoiceOverTouch`
+  starts it and it can draw its cursor on a system alert, but over the app it
+  focused nothing, so its silence proves nothing; the Settings > Accessibility
+  > VoiceOver switch does not turn on in the simulator; Accessibility Inspector
+  has no command line and needs the GUI scripting refused above. The headless
+  instrument that honours `accessibilityViewIsModal` is XCUITest (the driver's
+  backend on iOS), with the same flow on a dev client as the control that shows
+  it can fail. Measured 2026-11-25, iOS 27.0.
 
 ## 8. Observed failures
 

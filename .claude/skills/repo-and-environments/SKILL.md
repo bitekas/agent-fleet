@@ -9,8 +9,9 @@ description: >
   standing rules (the environment is never part of a build profile, there is no
   persistent .env, a consumed public env key fans out to every native-feeding
   source), where a mobile build lands per environment, the version number and
-  what advances it, the backmerges (live to landing; release candidate to
-  landing and live-copy), how a build gets its configuration and how that is
+  what advances it, the backmerges (live to landing and to the open release
+  candidate; release candidate to landing and live-copy), how a build gets its
+  configuration and how that is
   proved on the finished artifact, and the git hooks every clone must enable.
   Load before changing anything about environments, branches, deploys or
   releases; before answering "where does this branch ship / which track /
@@ -784,7 +785,15 @@ place"* - depends on **one package name in one track**, and neither holds.
 
 - **The one shared counter is one counter.** A number consumed by any
   environment's upload is consumed for the repo. Section 4.3's receipt rules and
-  the live-to-landing handoff (section 5) all rest on that.
+  the live-to-landing handoff (section 5) all rest on that. **Routing a
+  candidate's bumps to the candidate forks it for the window**: where the
+  install lands the bump of each tester build of a release candidate on the
+  candidate (section 4.3), those builds count on from the candidate's own
+  version file, so each carries its own number and the store build cut from
+  the candidate is above all of them, and those numbers can repeat ones the
+  landing branch's builds took after the cut. Only the live environment burns
+  (next bullet), so the repeat is two tester assemblies of different trees
+  claiming one number, never a store rejection.
 - **But only the LIVE environment burns.** A store upload makes that number
   unusable forever on that store; a tester-distribution upload does not -
   re-using a number there is accepted, not rejected. So the *counter* is shared
@@ -1161,8 +1170,9 @@ Two things, neither reachable from the live-to-landing direction:
 - **Every other mapped branch.** A release from one uploads, consumes a number
   from the one shared sequence **globally** (section 4.1) - burning it only where
   that environment is the live one, per the receipt/burn table above - and bumps
-  its own branch alone, unless the install routes that branch's bump to another
-  branch; no other branch learns. There is no backmerge on those edges.
+  one branch: its own, unless the install routes that branch's bump to another
+  branch (the live-copy branch's to the landing branch, say, or inside a release
+  window to the candidate it built); no other branch learns. There is no backmerge on those edges.
   `CONTEXT.md` section 2 says which such branches exist on origin, what a push
   to each one costs, and where each one's bump lands.
 
@@ -1322,15 +1332,19 @@ metadata directory for that lane, so write it yourself first - the recipe is in
 `CONTEXT.md` section 4.5. A TestFlight note is edited by hand in App Store
 Connect; there is no lane for it.
 
-## 5. The backmerge: live -> landing, and release candidate -> landing and live-copy
+## 5. The backmerge: live -> landing and the open candidate, and release candidate -> landing and live-copy
 
 One workflow carries a commit that lands on a release line to every branch that
 must hold it too, with **one mode per source branch** and one merge
 implementation behind both (`CONTEXT.md` section 5 names the files):
 
 - **live mode**, on **every push to the live branch**: the live branch is merged
-  into the landing branch. Everything in this section above section 5.1
-  describes it.
+  into the landing branch, and, while a release window is open (the newest
+  release candidate carries a commit the live branch lacks other than CI's own
+  version bumps), into that candidate, after which the job dispatches itself on
+  the candidate so its release-candidate mode carries the merge on (section
+  5.2). Everything in this section above section 5.1 describes the
+  landing-branch edge.
 - **release-candidate mode**, on every push to a release-candidate branch:
   section 5.2.
 
@@ -1372,7 +1386,10 @@ that means shipping a regression to the public. The workflow makes that
 divergence **structurally impossible** instead of something a human has to
 remember.
 
-**It syncs the branches; it deliberately does NOT deploy.** The release workflow
+**It syncs the branches; it deliberately does NOT deploy the landing branch.**
+(During a release window its dispatch of the release-candidate mode redeploys
+the live-copy environment, exactly as a candidate landing does, section 5.2.)
+The release workflow
 triggers on push to the landing branch and deploys the shared-dev environment,
 native builds included, so an automatic build would fire right after every live
 release.
@@ -1400,7 +1417,8 @@ the clobber. Ordinary landing-branch pushes from feature work still deploy
 normally.
 
 Related properties, each deliberate: the workflow declares `contents: write`
-(and `actions: write`, for section 5.2's dispatch) where the repo's default
+(and `actions: write`, for section 5.2's dispatch and the live mode's dispatch
+of itself on the open candidate) where the repo's default
 workflow permissions are read-only (measure it, do not assume it; `CONTEXT.md`
 section 5 records the install's); on conflict it **fails loudly** naming the
 conflicting paths rather than skipping or auto-resolving (**a silent skip would
@@ -1492,8 +1510,10 @@ the change-detection refs in the log before diagnosing** (`CONTEXT.md` section
 ### 5.2 The release-candidate mode: the candidate reaches the landing branch, then the live-copy branch, on every landing
 
 **During a release window, every push to the release-candidate branch** (the
-cut, each fix landing, an approved cherry-pick) runs the backmerge workflow in
-its release-candidate mode, which does the two things `/release` section 10
+cut, each fix landing, an approved cherry-pick), and the live mode's merge of
+the live branch into it (by a dispatch, since that push is the default
+token's), runs the backmerge workflow in its release-candidate mode, which
+does the two things `/release` section 10
 requires after every landing, in this order:
 
 1. **merges the candidate into the landing branch**, so no fix found in testing
@@ -1548,28 +1568,37 @@ commands for every edge still owed, which a person runs with their own
 credentials. The job is never given a token with the workflow permission
 instead: every token but the default one triggers workflows (section 5).
 
-**WARNING: the redeploy is a DISPATCH, and it costs a whole deploy.** The job's
+**WARNING: the redeploy is a DISPATCH, and it rebuilds the apps only when the
+landing can change them.** The job's
 pushes use the default token, so the live-copy push starts no run; the job
 dispatches the release workflow on the live-copy branch instead (one of the
 token's two documented exceptions), then waits, bounded, for a NEW run whose
 head is the commit it pushed, and goes red if none appears or if it could not
 read the run list before dispatching - **a dispatch is a request, not a
 result.** A dispatch carries no before-SHA, so the release workflow's path
-filter cannot choose for it: it runs with the all-jobs filter, and every landing
-that moves the live-copy branch redeploys it whole, both native builds and one
-number from the shared counter included.
+filter cannot choose for it, and the job chooses the native half itself: it
+runs the all-jobs filter, and adds the release workflow's input that skips
+the native half (`CONTEXT.md` section 5.2 names it) - the backend and the web
+app redeploy, the native tester builds and the number they would consume do
+not - when the commit the live-copy branch left has a
+known-good deploy and the native builds' own trigger (section 2), read out of
+the new tip's own tree, finds nothing in the move that can reach the apps.
+Anything it cannot read builds both. Where the install lands each native
+upload's bump on the candidate (section 4.3; `CONTEXT.md` section 2), every
+tester build of the candidate carries a number of its own.
 
 **The landing-branch merge deploys nothing**, by the same default-token rule as
 the live mode. **WARNING: so the shared-dev environment does not receive the
 candidate's fixes on the next ordinary landing-branch push either**: the release
 workflow's path filter compares only that push's own before and after, and the
 backmerge's merge sits before both. A lane redeploys them only when a later push
-touches that lane's paths. The merge carries **one rule the live mode does
-not**: where the install commits a gate-outcome file (`CONTEXT.md` section 5.2
-names it), it keeps the TARGET's side, conflicted or not, because the
-candidate's copy attests a gate run on the candidate and is a stale green
-anywhere else (`/release` section 11: the file is honest only on the tree the
-gates measured). The version file conflicts by design
+touches that lane's paths. The merge carries **one rule the live mode's
+landing-branch edge does not**: where the install commits a gate-outcome file
+(`CONTEXT.md` section 5.2 names it), it keeps the TARGET's side, conflicted or
+not, because the candidate's copy attests a gate run on the candidate and is a
+stale green anywhere else (`/release` section 11: the file is honest only on
+the tree the gates measured); the live mode's merge into the candidate keeps
+the candidate's side by the same rule. The version file conflicts by design
 here too and is computed exactly as in the live mode.
 
 **WARNING: the job reads only branch tips, never the pushed SHA**, because
@@ -1661,11 +1690,14 @@ and both directions are load-bearing:
   "real backend" flag. **Nothing sends from that environment either way; that is
   what a redundant layer looks like while it is working.**
 
-**Source-map upload is a separate axis from reporting, and only it needs a
-token.** The upload token is a build-machine CI secret, per environment; the
-deploy script skips the upload when the DSN **or** the token is empty, so an
+**Symbol upload is a separate axis from reporting, and only it needs a
+token.** The upload token is a build-machine CI secret, per environment; it
+arms every symbol upload a native build makes (the JS source map and bundle,
+iOS debug symbols, and the Android code shrinker's mapping file). The deploy
+script skips them all when the DSN **or** the token is empty, so an
 environment with no token still reports normally with **unsymbolicated**
-frames. Nothing in the runtime reads the token. **No code change turns
+frames (on Android, native-language frames keep the shrinker's obfuscated
+names). Nothing in the runtime reads the token. **No code change turns
 symbolication on later, just the secret.**
 
 **WARNING: a key pointing at a project that does not exist sends every event

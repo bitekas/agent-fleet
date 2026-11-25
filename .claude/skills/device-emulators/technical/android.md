@@ -602,7 +602,8 @@ adb -s emulator-5554 emu screenrecord start /tmp/rec.webm
 adb -s emulator-5554 emu screenrecord stop
 ```
 
-VERIFIED - both commands answer `OK` and the output is valid WebM. It is an
+VERIFIED - both commands answer `OK` (a `start` while one is recording answers
+`KO: Recording has already started`, adb exit 0) and the output is valid WebM. It is an
 **emulator-console** feature, so it exists on an emulator and not on a physical
 device, and the container is WebM rather than MP4. The output path resolves
 against the EMULATOR process's working directory, not the caller's, so pass an
@@ -610,9 +611,14 @@ absolute one. With no on-device file to pull, it is the natural route for a
 device e2e runner. **It is capped at 3 minutes too**: on an API 36 AVD a console
 recording stopped itself at exactly 180.0 s with no error and no marker, the
 `stop` that followed answering as usual (measured 2026-10-05). A flow longer than
-that is recorded as consecutive segments, each started before the previous one
-would hit the cap; check every segment's duration (`ffprobe`) rather than trusting
-that the file ends where the flow did.
+that is recorded as consecutive segments, the previous one STOPPED and the next
+started before the cap: they cannot overlap - a second `start` while one
+records answers `KO: Recording has already started` and adb exits 0, so whether
+a start took is read from the console's OK/KO and never from adb's exit code -
+and a stop-then-start boundary loses about 0.15 s of screen (measured
+2026-11-25, `android.avd.default`, headless). Check every segment's duration
+(`ffprobe`) rather than trusting that the file ends where the flow did; a
+device e2e runner owes both, and joins the parts.
 
 Stock limits on the on-device recorder (A and B): **~3 minutes** per recording
 by default, which `--time-limit <s>` can shorten but not exceed; **no audio**;

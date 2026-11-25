@@ -535,6 +535,28 @@ Each one has already presented as something other than what it was.
    that same hardware-keyboard mode, and an accessibility-tree read still lists
    the keys there, so on iOS only the screenshot is proof (section 7).
 
+11. **A TAP DRIVER TALKS TO ITS ON-DEVICE DRIVER THROUGH A HOST PORT, AND ON A
+   SHARED MACHINE THE DEFAULT PORT CAN BELONG TO SOMEBODY ELSE'S DEVICE.**
+   Maestro's default host port is one number for every device, so while another
+   session holds it for ITS simulator or emulator, `maestro --device <yours>`
+   launches on yours and then reads and taps through the driver already
+   listening - another tenant's device - with no error. Measured 2026-11-17 on
+   a Mac shared by several sessions: `maestro --device <ours> hierarchy`
+   returned another session's 402-wide screen with a keyboard up while ours,
+   390 wide, showed a sheet and no keyboard; with
+   `--driver-host-port <a port of our own>` it returned ours. Every driver call
+   names its own port: a runner (`device_e2e.runner`) derives one per device
+   and hands it to whatever it runs against that device (the install's
+   `CONTEXT.md` names how); a call by hand passes `--driver-host-port`. This
+   includes the keyboard proof in trap 10: an `inputView` read on the default
+   port can be another device's keyboard.
+
+12. **ON A DEV-CLIENT BUILD A SCREEN CAN BE MISSING FROM THE iOS ACCESSIBILITY
+   HIERARCHY WHILE IT IS PLAINLY ON SCREEN.** A screen opened from a modal can
+   read empty to the tap driver on development JS and complete on production
+   JS; an id missing only there is neither an app regression nor evidence
+   about a release: `technical/ios.md` section 7.
+
 ## Config keys
 
 Every key `config.example.json` carries, and where it is used. The example's

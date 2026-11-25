@@ -68,7 +68,7 @@ the browser, and records the run to video.
 | Drives | the web bundle | the native build, through a tap driver (`e2e.device.driver`) |
 | Stack | **owns the lifecycle** - tears the dev stack down and rebuilds it | **non-destructive** - uses the stack and device already up, refuses if either is missing |
 | Specs | under `e2e.specs_dir` | flows under `e2e.device.flows_dir`, platform-neutral |
-| Artifacts | reports + the verdict line | a video of the run, per-step screenshots, driver logs |
+| Artifacts | reports + the verdict line | per flow: a video, screenshots and driver logs; per run: a verdict table and a JUnit file |
 
 **The browser suite remains THE coverage instrument**, and nothing in this
 section moves an obligation onto the device one. The device suite exists for

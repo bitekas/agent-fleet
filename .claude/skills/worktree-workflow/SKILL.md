@@ -187,7 +187,8 @@ else.
 **Which branch you cut from and land on depends on the work**: a fix for the
 live line cuts from the branch serving the live environment
 (`environments.live`) and backmerges to the landing branch
-(`repo.landing_branch`); where the install cuts release candidates, a fix for one
+(`repo.landing_branch`), and during a release window to the release candidate
+too (`/repo-and-environments` section 5); where the install cuts release candidates, a fix for one
 found in its testing cuts from and lands on that release candidate branch, which
 is then back-merged into the landing branch (`/release`); feature work cuts from
 the landing branch. The branch-to-environment map is single-sourced by
