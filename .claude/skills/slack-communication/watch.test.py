@@ -5314,6 +5314,49 @@ check("17y. the pass takes the poll's rotated order: the two big windows share w
 check("17y. ...and no error line", not _pz_errors(_ID), f"stderr={_pz_errors(_ID)[:2]}")
 
 
+# 17y (f). THE CEILING. However the passes share it, a poll makes at most one call
+#      per conversation (its page) plus SWEEP_BUDGET: the regular sweeps, the
+#      revival steps and the last pass all spend from the poll's one budget. That
+#      ceiling is what keeps a watcher under Slack's rate limit (SKILL.md, the
+#      bound). Pinned on every run of 17u and 17y; REGIME CONTROL: on some polls of
+#      17y (d) all three spend in the same poll. A last pass handed a budget of its
+#      own reds this. And the pass goes on, in the poll's order, while budget is
+#      left: on some poll of 17y (d) it serves both capped windows - one that
+#      stopped after its first capped sweep never would.
+def _pz_polls(run):
+    """{poll: (calls, budgeted calls, whether regular sweeps, revival steps and the
+    last pass all spent in it)}. Regular sweeps run beside the polls; after the
+    last poll call come the revival steps, then the last pass."""
+    by, out = {}, {}
+    for i, ph, c, m, p in run.log:
+        by.setdefault(i, []).append(ph)
+    for i, phases in by.items():
+        cut = max(k for k, ph in enumerate(phases) if ph == "poll") + 1
+        rev = [k for k, ph in enumerate(phases[cut:]) if ph == "revival"]
+        last = [k for k, ph in enumerate(phases[cut:]) if ph == "sweep"]
+        out[i] = (len(phases), sum(ph != "poll" for ph in phases),
+                  "sweep" in phases[:cut] and bool(rev) and bool(last) and max(rev) < min(last))
+    return out
+
+
+_cl_runs = {"17u": _PZ, "17y idle 30 s": _IB[30], "17y idle 5 s": _IB[5], "17y (d)": _ID}
+_cl = {k: _pz_polls(r) for k, r in _cl_runs.items()}
+check("17y. REGIME CONTROL: on some polls the regular sweeps, the revival steps and the last pass all spend",
+      sum(v[2] for v in _cl["17y (d)"].values()) >= 1,
+      f"polls with all three={sorted(i for i, v in _cl['17y (d)'].items() if v[2])}")
+check("17y. the ceiling: every poll makes at most a call per conversation plus SWEEP_BUDGET, every pass included",
+      all(max(v[0] for v in _cl[k].values()) <= len(r.names) + 3 and max(v[1] for v in _cl[k].values()) <= 3
+          for k, r in _cl_runs.items()),
+      f"(conversations, most calls, most budgeted calls in a poll)="
+      f"{ {k: (len(r.names), max(v[0] for v in _cl[k].values()), max(v[1] for v in _cl[k].values())) for k, r in _cl_runs.items()} }")
+_cl_both = {}
+for _i, _c, _capped_step, _n in _ID.steps:
+    if not _capped_step and _c in ("C_BIG", "C_BIG2"):
+        _cl_both.setdefault(_i, set()).add(_c)
+check("17y. the last pass goes on in the poll's order while budget is left: some poll serves both capped windows",
+      any(len(v) == 2 for v in _cl_both.values()), f"polls={sorted(i for i, v in _cl_both.items() if len(v) == 2)}")
+
+
 class _PageRefused:
     """Refuses for rate, once, the `n`th history page of a sweep (`latest` and an
     `oldest` inside the last eight days)."""

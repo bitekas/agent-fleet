@@ -770,7 +770,8 @@ further polls or lines for it. (The case it covers: a DM that stays in
   wait about one more span. A watcher that restarts more often than a sweep's
   span - a crash loop - can keep the tail of a large window unread until those
   parents leave the window. Any sweep error other than a rate limit does the
-  same: the next due poll starts the sweep again at its first page.
+  same, in a poll's last pass past the cap as in its regular steps: the sweep's
+  position is discarded and the next due poll starts it again at its first page.
 - A catch-up delivers at most the **newest 200** top-level messages of a
   conversation; older messages and the replies under them are announced - ISO
   UTC range, no count - in one `WATCH-INFO` line and read on demand with the
