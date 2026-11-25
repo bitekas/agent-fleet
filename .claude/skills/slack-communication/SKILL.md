@@ -123,8 +123,9 @@ every `poll.poll_secs` seconds (default 5; env override
 `SLACK_WATCH_POLL_SECS`) and prints one line per new
 **deliverable** message - top-level and thread replies. A reply in a thread
 whose parent has scrolled off the poll's 50-message page is read by a slower
-**sweep** instead (every 300 s, env `SLACK_WATCH_SWEEP_SECS`) - see *Threads off
-the page, and the sweep*. Deliverable is every
+**sweep** instead (every 300 s, env `SLACK_WATCH_SWEEP_SECS`; spread over
+several such periods in a conversation whose window holds more history pages
+than one poll's budget) - see *Threads off the page, and the sweep*. Deliverable is every
 message except this bot's own and anything carrying a subtype other than
 `thread_broadcast`: a thread reply also sent to the channel is delivered once, as
 a reply in its thread.
@@ -427,8 +428,10 @@ again (delivery is gated on the cursor, so nothing repeats).
   moves to the newest message, so the line is printed once and not every poll.
 
 **The sweep.** Every `poll.sweep_secs` (default **300 s**; env
-`SLACK_WATCH_SWEEP_SECS`) each conversation starts a sweep, at a phase of its
-own so they do not start together. It pages history from the poll's edge back to
+`SLACK_WATCH_SWEEP_SECS`) each conversation is **due** a sweep, at a phase of its
+own so they do not start together: a due poll starts one, or gives the one in
+progress a new period of history pages (*What sweeps cost, and the budget*). It
+pages history from the poll's edge back to
 the window start and calls `conversations.replies` only for a parent whose
 `latest_reply` moved past its thread's cursor. That covers every thread whose
 parent was posted inside the window, tracked or not - including one whose FIRST
@@ -443,8 +446,10 @@ history pages, only those old-parent replies calls.
 **The revival scan.** It reads the threads the sweep cannot: those whose
 parent and newest read reply are both older than the window - a colleague
 answering a three-week-old post, the bot itself answering one, a human
-answering the bot there. A sweep that completes arms ONE revival step for its
-conversation. The step reads one `conversations.history` page of 200 top-level
+answering the bot there. Each due poll of a conversation arms ONE revival step
+for it when none is armed or in progress - whether a sweep starts on that poll,
+continues or fails - so the scan keeps the conversation's own clock, one step
+every `sweep_secs`, however many periods its sweeps take. The step reads one `conversations.history` page of 200 top-level
 messages (`REVIVAL_PAGES`) from the history between the window edge and the
 **horizon**, `REVIVAL_HORIZON_SECS` (**90 days**), and calls
 `conversations.replies` only for a parent whose `latest_reply` moved past where
@@ -475,7 +480,19 @@ nothing is migrated.
 `SLACK_WATCH_SWEEP_BUDGET`) - history pages and replies calls alike, revival
 steps included, one budget shared by every conversation, so sweeps in progress
 at once cannot stack. A sweep the budget stops resumes on the next poll where
-it stopped. **The revival scan spends only what the sweeps leave:** every
+it stopped. **The pacing:** a sweep re-reads every history page of its
+conversation's window to learn which parents' `latest_reply` moved, so a feed
+of 2,000 top-level messages a week costs ten pages a sweep whether or not
+anything moved. So a sweep reads at most `sweep_budget` history pages (3 at the
+default) in one sweep period of its conversation, and waits, in progress, for
+the next due poll to read more: a window of N pages takes ceil(N / `sweep_budget`)
+periods, at an even rate of at most one poll's budget of pages a period and
+never in one burst, and the next sweep starts on the first due poll after it
+completes. A window of up to `sweep_budget` pages sweeps whole every period; one
+of ten, every fourth. Replies calls are not capped - they are threads with new
+activity - and neither is `--once`, which sweeps every conversation in full. The
+revival scan keeps the plain cadence (*The revival scan*).
+**The revival scan spends only what the sweeps leave:** every
 revival step of a poll runs after every poll and sweep of that poll, on the
 budget they left; a step that finds the budget spent waits for the next poll
 that leaves some. It adds at most one history page per conversation per
@@ -487,11 +504,22 @@ a whole sweep period (`sweep_secs`) without a call **runs first** on the next
 poll, before any sweep, until its page is done: the sweeps are delayed, never
 starved for good, the scan keeps moving, and the per-poll ceiling does not
 change. When sweeps still in progress find the whole budget spent on every poll
-of a sweep period, one `WATCH-INFO sweeps found the whole budget (<n> calls a
-poll) spent on each of the last <n> polls, <n> still in progress - off-page
-replies arrive late` line says so, at most once an hour: that is the old-parent
-pass's own scaling limit, and off-page replies are late while it lasts. Slack
-rate-limits per method, per workspace, per app, so the bound to hold is:
+of a sweep period, one line says so, at most once an hour, and off-page replies
+are late while it lasts:
+
+    WATCH-INFO sweeps found the whole budget (<n> calls a poll) spent on each of the last <n> polls, <n> still in progress - off-page replies arrive late (SKILL.md, the budget); top: #<name> <calls> (<n> pages, <n> reads, <n> revival), ...
+
+`top:` names the three conversations that made the most budgeted calls in the
+polls the line names, most first (a DM as `DM <id>`), each split into the
+history pages of its sweeps, its replies calls from any pass, and the history
+pages of its revival scan: the count starts again on every poll that is not
+saturated, so it covers the reported streak and nothing before it. Pages point at
+a conversation whose window is large; reads at threads with new replies, or at
+the old-parent pass's own scaling limit - one call a sweep for every tracked
+thread whose parent is older than the window and whose cursor is inside it;
+revival at the scan. `watch.test.py` sections 17u (the
+pacing), 17v (the revival's clock) and 17w (this line). Slack rate-limits per
+method, per workspace, per app, so the bound to hold is:
 
     conversations.history calls/min <= (watched conversations + sweep_budget) x 60 / poll_secs
 
@@ -508,12 +536,16 @@ default, (conversations + 3) x 12 <= 50 leaves room for a single conversation.
 This bound is the one statement of how to size `sweep_secs`, `sweep_budget`
 and the poll interval together.
 
-**How late an off-page reply can be:** one sweep when its thread's parent is
-inside the window - `sweep_secs` to start, plus the polls the sweep needs at the
-shared budget. A 25-page busy feed needs at least 9 polls (about 4.5 minutes at
-a 30 s poll), more while other sweeps share the budget. When the parent is
+**How late an off-page reply can be:** one sweep of its conversation when its
+thread's parent is inside the window - in a conversation whose window is N
+history pages, up to ceil(N / `sweep_budget`) sweep periods (one `sweep_secs`
+for N up to `sweep_budget`; the pacing above), because each of its pages is read
+once in that many periods, plus the polls the sweep needs at the shared budget.
+A 10-page feed: up to four periods (20 minutes at the default 300 s); a 25-page
+one: up to nine (45 minutes); more while other sweeps share the budget. When the parent is
 between the window and the horizon, one **revival cycle**: the scan reads one
-page per sweep, so a cycle takes one `sweep_secs` per page, a page being 200
+page per sweep period, on the conversation's own clock however many periods its
+sweeps take, so a cycle takes one `sweep_secs` per page, a page being 200
 top-level messages between the window edge and the horizon - **five minutes per
 page** at the default 300 s. Measured across six agents' watchers: most
 conversations are 1 to 3 pages (5 to 15 minutes), a busy DM 8 to 9 pages (40 to
@@ -587,8 +619,8 @@ message or thread reply older than the newest 200 top-level messages a catch-up
 delivers is not delivered either - both announced by that catch-up's one
 `WATCH-INFO` line, with the range and the fetch recipe that reads them on
 demand.
-Everything else is delivered: on the page within one poll, off it within one
-sweep. A reply also sent to the channel is listed in history at its own ts, so it
+Everything else is delivered: on the page within one poll, off it within its
+conversation's next sweep. A reply also sent to the channel is listed in history at its own ts, so it
 is read as a top-level message is, whatever its parent's age or place. Inside a
 thread nothing is
 dropped: `conversations.replies` pages forward from the thread cursor, and on a
@@ -608,7 +640,7 @@ The channel cursor moves with **every** top-level message a poll processes, not
 once at the end of the poll: a call that fails later in the same poll leaves
 the messages already delivered behind the cursor, so they are not delivered
 again. `watch.test.py` section 10y-ix; the sweep and the window, sections 10y and 17;
-the revival scan, sections 10y-v, 10z, 17n and 17o.
+the revival scan, sections 10y-v, 10z, 17n, 17o and 17v.
 
 ### Retiring a conversation Slack says is gone
 
@@ -710,8 +742,10 @@ further polls or lines for it. (The case it covers: a DM that stays in
   UTC range, no count - in one `WATCH-INFO` line and read on demand with the
   fetch recipe.
 - A reply in a thread whose parent is off the poll's page and inside the window
-  arrives within one **sweep** (300 s to start, plus the polls the sweep needs
-  at the shared per-poll budget), not one poll.
+  arrives within one **sweep** of its conversation, not one poll: within 300 s,
+  up to ceil(N / `sweep_budget`) times that in a conversation whose window is N
+  history pages, plus the polls the sweep needs at the shared per-poll budget
+  (*How late an off-page reply can be*).
 - The bot never sees channels of **other workspaces/orgs** it isn't installed
   in.
 - DMs are invisible if the `im:*` scopes are ever dropped.
