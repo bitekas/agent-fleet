@@ -3933,10 +3933,8 @@ check("17c. each failed sweep is ONE `WATCH-ERROR sweep` line naming the convers
 check("17c. a failed sweep never retires the conversation and never stops its poll",
       not _info(_lines) and _polled == {"C_RL": 3, "D_GONE": 3},
       f"info={_info(_lines)} polled={_polled}")
-# The third save per poll is the revival step's: a due poll arms one whatever
-# that poll's sweep did, failing included (the revival's own clock, 17v).
-check("17c. the state is saved after every sweep, failed or not (one save per poll, sweep and revival step)",
-      len(_saves) == 18, f"saves={len(_saves)}")
+check("17c. the state is saved after every sweep, failed or not (one save per poll + one per sweep)",
+      len(_saves) == 12, f"saves={len(_saves)}")
 
 # 17d. THE FOLLOWER STILL DROPS A 429, and still passes every other sweep error.
 #      The follower's filter is the default in transport.json (`watch.follow_include`),
@@ -4316,7 +4314,7 @@ class _SimClock(_Clock):
         super().sleep(_secs)
 
 
-def _drive_live(polls, convs, sweep_every=1, once=False, revival=True, clock=None):
+def _drive_live(polls, convs, sweep_every=1, once=False, revival=True, clock=None, emit=None):
     """Run main() `polls` times. `convs` maps a conversation id to (name, fake,
     state); each state is that conversation's file, loaded once and kept, as
     main() keeps it. Every Slack call is logged as (poll index, phase, id,
@@ -4324,6 +4322,7 @@ def _drive_live(polls, convs, sweep_every=1, once=False, revival=True, clock=Non
     inside revive_channel and "poll" otherwise. `revival=False` replaces
     revive_channel by a step that makes no call: the control run.
     `clock` replaces the real time (`_SimClock`); its sleep ends the run.
+    `emit` replaces the REAL emit, which prints the SLACK lines.
     Returns (SLACK lines from the REAL emit, stderr lines, the call log)."""
     log, phase, clock = [], {"now": "poll"}, clock or _LiveClock(polls)
 
@@ -4357,7 +4356,7 @@ def _drive_live(polls, convs, sweep_every=1, once=False, revival=True, clock=Non
         w.time = clock
         w.SWEEP_EVERY = sweep_every
         w.api = _api
-        w.emit = _REAL_EMIT
+        w.emit = emit or _REAL_EMIT
         w.sweep_channel = _tagged(saved["sweep_channel"], "sweep")
         if saved["revive_channel"] is not _ABSENT:
             w.revive_channel = _tagged(saved["revive_channel"] if revival else (lambda *_a, **_k: True),
@@ -4570,7 +4569,8 @@ class _BigFake:
     sort per call - with _FakeSlack's semantics for what the loop asks: history
     newest-first under `latest`/`oldest` (both exclusive) paged by
     `next_cursor`; replies after `oldest`, the earliest first, `limit` a page.
-    Records (poll index, method, params) per call."""
+    A reply is visible from its own ts on the clock, so replies can arrive
+    during a run. Records (poll index, method, params) per call."""
 
     def __init__(self, clock, top, threads):
         self.clock = clock
@@ -4579,9 +4579,13 @@ class _BigFake:
         self.threads = {p: sorted(r, key=float) for p, r in threads.items()}
         self.calls = []
 
+    def _replies(self, ts):
+        now = self.clock.time()
+        return [r for r in self.threads.get(ts, ()) if float(r) <= now]
+
     def _msg(self, ts):
         m = {"ts": ts, "user": _HUMAN, "text": f"post {ts}"}
-        reps = self.threads.get(ts)
+        reps = self._replies(ts)
         if reps:
             m.update(reply_count=len(reps), latest_reply=reps[-1])
         return m
@@ -4601,7 +4605,7 @@ class _BigFake:
                 out["response_metadata"] = {"next_cursor": str(start + limit)}
             return out
         if method == "conversations.replies":
-            reps = [r for r in self.threads.get(p["ts"], []) if float(r) > float(p["oldest"])]
+            reps = [r for r in self._replies(p["ts"]) if float(r) > float(p["oldest"])]
             page = reps[:int(p.get("limit", 50))]
             return {"messages": [self._msg(p["ts"])]
                     + [{"ts": r, "user": _HUMAN, "text": f"reply {r}"} for r in page],
@@ -4704,76 +4708,135 @@ check("17t. every poll hands the armed step the same position",
       len({id(p) for _c, _i, p in _tlog}) == 1, f"positions={len({id(p) for _c, _i, p in _tlog})}")
 
 
-# === 17u/17v/17w. THE PACING, THE REVIVAL'S OWN CLOCK, THE TOP SPENDERS ==========
+# === 17u-17x. THE PACING, THE REVIVAL'S COUPLING, THE TOP SPENDERS, LONG SWEEPS ==
 # The measured shape: a bot feed of about 2,000 top-level messages a week - ten
 # history pages of 200 that its sweep re-reads to learn which parents'
-# `latest_reply` moved - beside 21 smaller conversations, a 30 s poll and the
-# default budget of 3: 30 budgeted calls a sweep period. The fixture: the feed
-# (2,000 posts inside the window, 450 more between 10 and 83 days old - three
-# revival pages, no threads) and 21 small conversations whose page reaches back
-# past the horizon, each tracking one quiet thread under a parent older still: each
-# of their sweeps costs one replies call and their revival steps cost none. Demand a
-# period, the feed's sweep read whole every period: 21 reads + 10 feed pages + 1
-# feed revival page = 32 of 30. Paced, a sweep reads at most 3 history pages a
-# period, so the feed's ten take four periods: 21 + 3 + 1 = 25 at most in any
-# period. The real loop on a simulated clock, 240 polls (two hours of watcher
-# time); the CONTROL run lifts the page cap.
-_PZ_SMALL = [f"C_SM{k:02d}" for k in range(21)]
+# `latest_reply` moved - beside smaller conversations, a 30 s poll and the
+# default budget of 3: 30 budgeted calls a sweep period. The fixture, 23
+# conversations, each shape a real one:
+#   the feed  2,000 posts inside the window and 450 between 10 and 83 days old;
+#             40 replies arrive during the run under parents off its page.
+#   mid       500 posts in the last three days: three history pages a sweep, and
+#             a revival step that reads one (empty) page.
+#   read-NN   (12) a page reaching past the horizon and one quiet tracked thread
+#             under an older parent: one replies call a sweep, no revival call.
+#   costly-NN (6) a page reaching past the window, not the horizon: no sweep call,
+#             one revival page a completed sweep.
+#   free-NN   (3) a page reaching past the horizon: nothing to read.
+# Demand a period with every sweep read whole every period: 10 + 1 (the feed) +
+# 3 + 1 (mid) + 12 + 6 = 33 of 30. Paced - at most 3 history pages a sweep period
+# - the feed's ten take four periods and its revival step comes once a completed
+# sweep: 3 + 0.25 + 4 + 12 + 6 = 25.25. The real loop on a simulated clock, 240
+# polls (two hours of watcher time); the CONTROL run lifts the page cap.
+import random as _random
+import types as _types
+
+_PZ_READ = [f"C_SR{k:02d}" for k in range(12)]
+_PZ_COSTLY = [f"C_SC{k:02d}" for k in range(6)]
+_PZ_FREE = [f"C_SF{k:02d}" for k in range(3)]
+_PZ_SMALL = _PZ_READ + _PZ_COSTLY + _PZ_FREE
 _PZ_POLLS = 240
 _PZ_EVERY = 10   # SWEEP_EVERY at a 30 s poll and the default 300 s sweep
+_PZ_BOUND = (-(-10 // 3) + 1) * 300   # the feed's ceil(N / budget) periods, plus one for the polls it needs
+_PZ_HEAD = "WATCH-INFO sweeps found the whole budget"
 
 
-def _pz_convs(clock):
-    now = clock.now
-    recent = [f"{now - 60 - 30 * i:.6f}" for i in range(49)]
+def _pz_convs(clock, bursts=(), only=None, big=0, feed_replies=40, span=_PZ_POLLS * 30, busy=False):
+    """The fixture at `clock`'s now: (convs, the feed's replies as (parent, reply
+    ts)). `bursts` lands 45 replies at each given time under mid's off-page
+    parents; `only` keeps those conversations; `big` adds C_BIG, a window of that
+    many history pages; `feed_replies` arrive in the feed over the first `span`
+    seconds less half an hour; `busy` makes every small conversation one whose
+    sweep reads a history page and whose revival step reads one."""
+    now, rnd = clock.now, _random.Random(17)
+    floors = {"baseline_ts": f"{now - 120 * _DAY:.6f}", "sweep_floor_ts": f"{now - 60 * _DAY:.6f}"}
     feed = [f"{now - 60 - i * (6.5 * _DAY / 2000):.6f}" for i in range(2000)]
     old = [f"{now - 10 * _DAY - i * 14000:.6f}" for i in range(450)]
-    floors = {"baseline_ts": f"{now - 120 * _DAY:.6f}", "sweep_floor_ts": f"{now - 60 * _DAY:.6f}"}
-    convs = {"C_FEED": ("bot-feed", _BigFake(clock, feed + old, {}),
+    sched, threads = [], {}
+    for _ in range(feed_replies):
+        p, t = rnd.choice(feed[60:1900]), f"{now + rnd.uniform(60, span - 1800):.6f}"
+        threads.setdefault(p, []).append(t)
+        sched.append((p, t))
+    convs = {"C_FEED": ("bot-feed", _BigFake(clock, feed + old, threads),
                         {"channel_ts": feed[0], **floors, "threads": {}})}
+    mid = [f"{now - 60 - i * (3 * _DAY / 500):.6f}" for i in range(500)]
+    mid_threads = {}
+    for at in bursts:
+        for p in rnd.sample(mid[60:], 45):
+            mid_threads.setdefault(p, []).append(f"{at + rnd.uniform(0, 60):.6f}")
+    convs["C_MID"] = ("mid", _BigFake(clock, mid, mid_threads), {"channel_ts": mid[0], **floors, "threads": {}})
+    recent = [f"{now - 60 - 30 * i:.6f}" for i in range(49)]
     parent, reply = f"{now - 120 * _DAY:.6f}", f"{now - 2 * _DAY:.6f}"
     for k, cid in enumerate(_PZ_SMALL):
-        convs[cid] = (f"small-{k:02d}",
-                      _BigFake(clock, recent + [f"{now - 100 * _DAY:.6f}", parent], {parent: [reply]}),
-                      {"channel_ts": recent[0], **floors, "threads": {parent: reply}})
-    return convs
+        if busy:
+            name, top, thr, st = f"busy-{k:02d}", [f"{now - 90 - i * (3 * _DAY / 60) - k:.6f}" for i in range(60)], \
+                {}, {}
+        elif cid in _PZ_READ:
+            name, top, thr, st = f"read-{k:02d}", recent + [f"{now - 100 * _DAY:.6f}", parent], {parent: [reply]}, \
+                {parent: reply}
+        elif cid in _PZ_COSTLY:
+            name, top, thr, st = f"costly-{k:02d}", recent + [f"{now - 10 * _DAY - i * 2 * _DAY:.6f}" for i in range(21)], \
+                {}, {}
+        else:
+            name, top, thr, st = f"free-{k:02d}", recent + [f"{now - 100 * _DAY:.6f}", f"{now - 110 * _DAY:.6f}"], {}, {}
+        convs[cid] = (name, _BigFake(clock, top, thr), {"channel_ts": recent[0], **floors, "threads": st})
+    if big:
+        posts = [f"{now - 60 - i * (6.5 * _DAY / (big * 200 + 50)):.6f}" for i in range(big * 200 + 50)]
+        convs["C_BIG"] = ("big", _BigFake(clock, posts, {}), {"channel_ts": posts[0], **floors, "threads": {}})
+    if only is not None:
+        convs = {c: v for c, v in convs.items() if c in only}
+    return convs, sched
 
 
-def _pz_run(polls, pacing=True, once=False, note_secs=None):
-    """Run the fixture through main() at the default budget of 3. Returns (sweep
-    starts as (poll, id), the saturation streak after each poll, the polls a
-    saturation line was printed on, stderr lines, the call log). A sweep START is
-    a position sweep_channel has not been handed before. `pacing=False` lifts the
-    page cap: every position's page count is set out of its reach before each step.
-    `note_secs` replaces SATURATION_NOTE_SECS."""
+def _pz_run(polls, pacing=True, once=False, note_secs=None, bursts=(), only=None, big=0, wrap=None,
+            feed_replies=40, busy=False):
+    """Run the fixture through main() at the default budget of 3. `pacing=False`
+    lifts the page cap (every position's page count is set out of its reach before
+    each step); `note_secs` replaces SATURATION_NOTE_SECS; `wrap` maps a
+    conversation id to a function wrapping its fake. Returns a namespace: starts
+    and completions as (poll, id), one (poll, streak, sweeps in progress) per poll
+    from the saturation check, the polls a saturation line was printed on, emits as
+    (clock time, conversation name, ts, thread), stderr lines, the call log, and
+    the feed's scheduled replies. A sweep START is a position not seen before."""
     clock = _SimClock(polls, time.time(), 30)
-    starts, streak, noted, held = [], [], [], {}
-    real = {n: getattr(w, n) for n in ("sweep_channel", "_note_saturation", "SWEEP_BUDGET",
-                                        "SATURATION_NOTE_SECS")}
+    convs, sched = _pz_convs(clock, [clock.now + b for b in bursts], only, big, feed_replies, polls * 30, busy)
+    for cid, fn in (wrap or {}).items():
+        convs[cid] = (convs[cid][0], fn(convs[cid][1], clock), convs[cid][2])
+    r = _types.SimpleNamespace(starts=[], done=[], checks=[], noted=[], emits=[], sched=sched,
+                               names={cid: v[0] for cid, v in convs.items()})
+    held = {}
+    real = {n: getattr(w, n) for n in ("sweep_channel", "_note_saturation", "SWEEP_BUDGET", "SATURATION_NOTE_SECS")}
 
     def sweep(cid, name, state, pos, **k):
         if id(pos) not in held:
             held[id(pos)] = pos   # kept, so no later position can reuse the id
-            starts.append((clock.polls, cid))
+            r.starts.append((clock.polls, cid))
         if not pacing:
             pos["period_pages"] = -10 ** 9
-        return real["sweep_channel"](cid, name, state, pos, **k)
+        done = real["sweep_channel"](cid, name, state, pos, **k)
+        if done:
+            r.done.append((clock.polls, cid))
+        return done
 
-    def note(saturated, *a, **k):
+    def note(saturated, budget, sweeps):
         before = saturated["noted"]
-        real["_note_saturation"](saturated, *a, **k)
-        streak.append(saturated["polls"])
+        real["_note_saturation"](saturated, budget, sweeps)
+        r.checks.append((clock.polls, saturated["polls"], len(sweeps)))
         if saturated["noted"] != before:
-            noted.append(clock.polls)
+            r.noted.append(clock.polls)
+
+    def emit(msg, channel_name, parent_ts=None, is_dm=False):
+        r.emits.append((clock.time(), channel_name, msg["ts"], parent_ts))
     try:
         w.sweep_channel, w._note_saturation, w.SWEEP_BUDGET = sweep, note, 3
         if note_secs is not None:
             w.SATURATION_NOTE_SECS = note_secs
-        _out, err, log = _drive_live(polls, _pz_convs(clock), sweep_every=_PZ_EVERY, once=once, clock=clock)
+        _out, r.err, r.log = _drive_live(polls, convs, sweep_every=_PZ_EVERY, once=once, clock=clock, emit=emit)
     finally:
         for n, v in real.items():
             setattr(w, n, v)
-    return starts, streak, noted, err, log
+    r.streak = [st for _i, st, _n in r.checks]
+    return r
 
 
 def _pz_due(cid, polls):
@@ -4781,78 +4844,103 @@ def _pz_due(cid, polls):
     return [p for p in range(polls) if (p + _zlib.crc32(cid.encode())) % _PZ_EVERY == 0]
 
 
-def _pz_misses(starts):
-    """{small conversation: its sweep start polls} for each that did not start a
-    sweep on every one of its due polls."""
-    got = {c: [p for p, s in starts if s == c] for c in _PZ_SMALL}
+def _pz_misses(run, cids):
+    """{conversation: its sweep start polls} for each of `cids` that did not start
+    a sweep on every one of its due polls."""
+    got = {c: [p for p, s in run.starts if s == c] for c in cids}
     return {c: v for c, v in got.items() if v != _pz_due(c, _PZ_POLLS)}
 
 
-def _pz_feed_pages(log):
-    """{sweep period, counted from the feed's first due poll: the feed's sweep
-    history pages read in it}."""
-    d0 = _pz_due("C_FEED", _PZ_POLLS)[0]
+def _pz_pages(run, cid, phase="sweep"):
+    """{poll: the history pages `cid` read in `phase` on it}."""
     out = {}
-    for i, ph, c, m, p in log:
-        if ph == "sweep" and c == "C_FEED" and m == "conversations.history":
-            out[(i - d0) // _PZ_EVERY] = out.get((i - d0) // _PZ_EVERY, 0) + 1
+    for i, ph, c, m, p in run.log:
+        if ph == phase and c == cid and m == "conversations.history":
+            out[i] = out.get(i, 0) + 1
     return out
 
 
-_pz_s, _pz_streak, _pz_noted, _pz_err, _pz_log = _pz_run(_PZ_POLLS)
-_pzc_s, _pzc_streak, _pzc_noted, _pzc_err, _pzc_log = _pz_run(_PZ_POLLS, pacing=False)
-_pzo_s, _, _, _pzo_err, _pzo_log = _pz_run(1, once=True)
-_pz_feed = [p for p, c in _pz_s if c == "C_FEED"]
-_pzc_feed = [p for p, c in _pzc_s if c == "C_FEED"]
+def _pz_by_period(pages, cid):
+    """{sweep period, from `cid`'s first due poll: pages}."""
+    d0, out = _pz_due(cid, _PZ_POLLS)[0], {}
+    for i, n in pages.items():
+        out[(i - d0) // _PZ_EVERY] = out.get((i - d0) // _PZ_EVERY, 0) + n
+    return out
+
+
+def _pz_errors(*runs):
+    return [ln for run in runs for ln in run.err if ln.startswith("WATCH-ERROR")]
+
+
+_PZ = _pz_run(_PZ_POLLS)
+_PZC = _pz_run(_PZ_POLLS, pacing=False)
+_PZO = _pz_run(1, once=True)
+_pz_feed = [p for p, c in _PZ.starts if c == "C_FEED"]
 _pz_feed_due = _pz_due("C_FEED", _PZ_POLLS)
-_pz_pp, _pzc_pp = _pz_feed_pages(_pz_log), _pz_feed_pages(_pzc_log)
-_PZ_HEAD = "WATCH-INFO sweeps found the whole budget"
+_pz_pp = _pz_by_period(_pz_pages(_PZ, "C_FEED"), "C_FEED")
+_pzc_pp = _pz_by_period(_pz_pages(_PZC, "C_FEED"), "C_FEED")
 
 # 17u. THE PACING. A sweep reads at most SWEEP_BUDGET history pages in a sweep
-#      period of its conversation, and waits in progress for the next due poll
-#      for more; its next sweep starts at the first due poll after it completes.
-#      The feed's ten pages therefore take four periods, three a period - no
-#      burst - and the small conversations keep their sweep every period with the
-#      budget never saturated. REGIME CONTROL: with the cap lifted, the same
-#      fixture keeps the budget saturated for longer than four periods, the
-#      saturation line is printed, the feed reads ten pages in one period, and
-#      small conversations miss due polls - the reported shape. --once still
-#      reads the feed's whole window, ten pages, in its one poll, so the
-#      fixture's feed really is N = 10.
+#      period of its conversation and waits in progress for the next due poll for
+#      more; its next sweep starts at the first due poll after it completes. The
+#      feed's ten pages take four periods, three a period - no burst - while a
+#      window of up to three pages sweeps whole on every due poll, every small
+#      conversation keeps its sweep every period, the budget is never saturated,
+#      and every off-page reply in the feed arrives within ceil(10 / 3) periods
+#      plus one. REGIME CONTROLS: with the cap lifted the same fixture keeps the
+#      budget saturated for longer than four periods, prints the saturation line,
+#      reads the feed's ten pages in a period and makes small conversations miss
+#      due polls - the reported shape; --once still reads the feed's whole window,
+#      ten pages, in its one poll, so the feed really is N = 10; and the costly
+#      conversations' revival steps do cost calls, the others' none.
 check("17u. REGIME CONTROL: uncapped, the budget stays saturated for longer than four sweep periods, "
       "the saturation line is printed, the feed reads ten pages in a period, small conversations miss due polls",
-      max(_pzc_streak, default=0) >= 4 * _PZ_EVERY and any(ln.startswith(_PZ_HEAD) for ln in _pzc_err)
-      and max(_pzc_pp.values(), default=0) == 10 and _pz_misses(_pzc_s),
-      f"longest saturated stretch={max(_pzc_streak, default=None)} polls, lines={len(_pzc_noted)}, "
-      f"feed pages per period={_pzc_pp}, small conversations that missed a due poll={len(_pz_misses(_pzc_s))}")
-_pzo_pages = sum(1 for i, ph, c, m, p in _pzo_log if ph == "sweep" and c == "C_FEED" and m == "conversations.history")
+      max(_PZC.streak, default=0) >= 4 * _PZ_EVERY and any(ln.startswith(_PZ_HEAD) for ln in _PZC.err)
+      and max(_pzc_pp.values(), default=0) == 10 and _pz_misses(_PZC, _PZ_SMALL),
+      f"longest saturated stretch={max(_PZC.streak, default=None)} polls, lines={len(_PZC.noted)}, "
+      f"feed pages per period={_pzc_pp}, small conversations that missed a due poll={len(_pz_misses(_PZC, _PZ_SMALL))}")
+_pzo_pages = sum(_pz_pages(_PZO, "C_FEED").values())
 check("17u. REGIME CONTROL: --once sweeps every conversation once, the feed's whole window in ten pages",
-      _pzo_pages == 10 and sorted(c for _p, c in _pzo_s) == sorted(["C_FEED", *_PZ_SMALL]),
-      f"feed pages={_pzo_pages} starts={len(_pzo_s)}")
+      _pzo_pages == 10 and sorted(c for _p, c in _PZO.starts) == sorted(["C_FEED", "C_MID", *_PZ_SMALL]),
+      f"feed pages={_pzo_pages} starts={len(_PZO.starts)}")
+_pz_rev = {c: sum(_pz_pages(_PZ, c, "revival").values()) for c in _PZ_SMALL}
+check("17u. REGIME CONTROL: every costly conversation's revival steps cost a call, no other small one's",
+      all(_pz_rev[c] >= _PZ_POLLS // _PZ_EVERY - 2 for c in _PZ_COSTLY)
+      and not any(_pz_rev[c] for c in _PZ_READ + _PZ_FREE), f"revival pages={_pz_rev}")
 check("17u. paced, the feed reads at most three history pages in any sweep period",
       _pz_pp and max(_pz_pp.values()) <= 3, f"feed pages per period={_pz_pp}")
-_pz_whole = [sum(1 for i, ph, c, m, p in _pz_log if a <= i < b and ph == "sweep" and c == "C_FEED"
-                 and m == "conversations.history") for a, b in zip(_pz_feed, _pz_feed[1:])]
+_pz_whole = [sum(n for i, n in _pz_pages(_PZ, "C_FEED").items() if a <= i < b) for a, b in zip(_pz_feed, _pz_feed[1:])]
 check("17u. paced, the feed's sweep starts at its first due poll and every fourth after, each reading its ten pages",
       _pz_feed == _pz_feed_due[::4] and len(_pz_feed) >= 5 and _pz_whole and set(_pz_whole) == {10},
       f"feed sweeps at {_pz_feed}, due polls {_pz_feed_due}, pages between starts={_pz_whole}")
+_pz_mid = _pz_by_period(_pz_pages(_PZ, "C_MID"), "C_MID")
+check("17u. paced, the three-page conversation starts a sweep on every due poll and reads its window whole in it",
+      not _pz_misses(_PZ, ["C_MID"]) and set(_pz_mid.values()) == {3}
+      and len(_pz_mid) >= _PZ_POLLS // _PZ_EVERY - 1, f"mid's pages per period={_pz_mid}")
 check("17u. paced, every small conversation starts a sweep on every one of its due polls",
-      not _pz_misses(_pz_s), f"missed={_pz_misses(_pz_s)}")
+      not _pz_misses(_PZ, _PZ_SMALL), f"missed={_pz_misses(_PZ, _PZ_SMALL)}")
 check("17u. paced, the saturation line is never printed: no saturated stretch reaches a sweep period",
-      not [ln for ln in _pz_err if ln.startswith(_PZ_HEAD)] and _pz_streak and max(_pz_streak) < _PZ_EVERY,
-      f"longest={max(_pz_streak, default=None)} polls (uncapped {max(_pzc_streak, default=None)}), "
-      f"lines={[ln for ln in _pz_err if ln.startswith(_PZ_HEAD)][:1]}")
-check("17u. ...and no error line in any run",
-      not [ln for ln in _pz_err + _pzc_err + _pzo_err if ln.startswith("WATCH-ERROR")],
-      f"stderr={[ln for ln in _pz_err + _pzc_err + _pzo_err if ln.startswith('WATCH-ERROR')][:2]}")
+      not [ln for ln in _PZ.err if ln.startswith(_PZ_HEAD)] and _PZ.streak and max(_PZ.streak) < _PZ_EVERY,
+      f"longest={max(_PZ.streak, default=None)} polls (uncapped {max(_PZC.streak, default=None)}), "
+      f"lines={[ln for ln in _PZ.err if ln.startswith(_PZ_HEAD)][:1]}")
+_pz_got = {}
+for _t, _nm, _ts, _par in _PZ.emits:
+    _pz_got.setdefault(_ts, []).append(_t)
+_pz_late = [(t, round((_pz_got[t][0] - float(t)) / 60, 1) if t in _pz_got else None) for _p, t in _PZ.sched]
+check("17u. paced, every off-page reply in the feed is delivered, once, within ceil(10 / 3) + 1 sweep periods",
+      all(t in _pz_got and len(_pz_got[t]) == 1 and _pz_got[t][0] - float(t) <= _PZ_BOUND for _p, t in _PZ.sched),
+      f"bound {_PZ_BOUND / 60:g} min; worst {max((d for _t, d in _pz_late if d is not None), default=None)} min; "
+      f"undelivered {sum(1 for _t, d in _pz_late if d is None)} of {len(_PZ.sched)}")
+check("17u. ...and no error line in any run", not _pz_errors(_PZ, _PZC, _PZO), f"stderr={_pz_errors(_PZ, _PZC, _PZO)[:2]}")
 
 # 17u-ii. THE CAP IN sweep_channel ON ITS OWN. A window of ten pages, a thread on
 #      the third: handed calls to spare, a step reads three pages and that
 #      thread, then reports itself unfinished with the rest of the budget
 #      untouched; again in the same period it makes no call; once main() opens a
 #      new period (a due poll zeroes `period_pages`) it reads three more. Replies
-#      calls are not capped. With no budget (`--once`) one step reads the whole
-#      window and completes.
+#      calls are not capped. A page call refused for rate is not a page read: the
+#      period still reads three. With no budget (`--once`) one step reads the
+#      whole window and completes.
 _pz_top = [_msg(_ago(60 + i * (6.5 * _DAY / 2000)), f"feed {i}") for i in range(2000)]
 _pz_par = _pz_top[460]["ts"]                       # on the sweep's third page
 _pz_fk = _FakeSlack(_pz_top, {_pz_par: [_msg(_ago(30), "a reply on page three")]})
@@ -4865,12 +4953,16 @@ try:
     with contextlib.redirect_stdout(io.StringIO()):
         _pz_edge = _poll(_pz_fk, "C_CAP", _pz_st)
         _pz_pos = w.new_sweep(_pz_edge)
-        for _reset in (False, False, True):
-            if _reset:
+        for _step in ("first", "same period", "new period", "refused", "after the refusal"):
+            if _step in ("new period", "refused"):
                 _pz_pos["period_pages"] = 0
+            if _step == "refused":
+                _pz_fk.fail["conversations.history"] = lambda: urllib.error.HTTPError(
+                    "https://slack.com/api/conversations.history", 429, "Too Many Requests", {}, None)
             _pz_n0, _pz_bud = len(_pz_fk.calls), {"left": 10}
             _pz_r, _pz_e = _try_sweep(_pz_fk, "C_CAP", _pz_st, pos=_pz_pos, budget=_pz_bud)
-            _pz_steps.append((_pz_r, _pz_e, [m for m, _p, _g in _pz_fk.calls[_pz_n0:]], _pz_bud["left"]))
+            _pz_steps.append((_pz_r, type(_pz_e).__name__ if _pz_e else None,
+                              [m for m, _p, _g in _pz_fk.calls[_pz_n0:]], _pz_bud["left"]))
         _pz_n0 = len(_pz_fk.calls)
         _pz_once = _try_sweep(_pz_fk, "C_CAP2", dict(_pz_st, threads={}), _pz_edge, budget=None)
         _pz_once_pages = sum(1 for m, _p, _g in _pz_fk.calls[_pz_n0:] if m == "conversations.history")
@@ -4885,39 +4977,92 @@ check("17u-ii. ...again in the same period it makes no call",
       f"(result, exc, calls, left)={_pz_steps[1]}")
 check("17u-ii. ...and a new period reads three more pages",
       _pz_steps[2][:2] == (False, None) and _pz_steps[2][2] == [_H, _H, _H], f"(result, exc, calls, left)={_pz_steps[2]}")
+check("17u-ii. a page call refused for rate is not counted: that period still reads three pages",
+      _pz_steps[3][1] == "HTTPError" and _pz_steps[3][2] == [_H] and _pz_steps[4][2] == [_H, _H, _H],
+      f"refused step={_pz_steps[3]}, the step after={_pz_steps[4]}")
 check("17u-ii. with no budget (--once) one step reads the whole window, ten pages, and completes",
       _pz_once == (True, None) and _pz_once_pages == 10, f"result={_pz_once} pages={_pz_once_pages}")
 
-# 17v. THE REVIVAL'S OWN CLOCK. A due poll arms one revival step whether that
-#      poll's sweep started, continued, was passed by the pacing or failed, so
-#      the paced feed's scan still reads one page a sweep period, and moves: each
-#      page below the last, wrapping at the horizon every three pages (its 450
-#      older posts). A main() that arms a step only when a sweep completes reds
-#      this - the paced feed's scan then reads one page per four periods. The
-#      last due poll's step may still be waiting when the run ends.
-_rk_pages = [float(p["latest"]) for i, ph, c, m, p in _pz_log
+
+# 17u-iii. A DUE POLL OPENS THE NEW PERIOD BEFORE ANYTHING ELSE. The feed alone and
+#      quiet, so the budget is its own: each period's three pages are read on the due
+#      poll itself. The poll call of its second due poll fails: the new period is
+#      open all the same, so its pages are read on the next poll instead of a
+#      whole period later. A reset placed after the sweep's step, or after the
+#      poll, reds this.
+class _PollFails:
+    """Fails the poll's own history call (no `latest`) on poll `at`."""
+
+    def __init__(self, fake, clock, at):
+        self.fake, self.clock, self.at = fake, clock, at
+
+    def __call__(self, method, **p):
+        if self.clock.polls == self.at and method == _H and "latest" not in p:
+            raise TimeoutError("timed out")
+        return self.fake(method, **p)
+
+
+_pz_d = _pz_due("C_FEED", _PZ_POLLS)
+_PZA = _pz_run(_pz_d[0] + 4 * _PZ_EVERY, only={"C_FEED"}, feed_replies=0,
+               wrap={"C_FEED": lambda fk, clock: _PollFails(fk, clock, _pz_d[1])})
+_pza = _pz_pages(_PZA, "C_FEED")
+check("17u-iii. POSITIVE EVIDENCE: the second due poll's poll call failed, once",
+      len(_pz_errors(_PZA)) == 1 and "TimeoutError" in _pz_errors(_PZA)[0], f"errors={_pz_errors(_PZA)}")
+check("17u-iii. each period's pages are read on its due poll; after the failed poll, on the next one",
+      _pza == {_pz_d[0]: 3, _pz_d[1] + 1: 3, _pz_d[2]: 3, _pz_d[3]: 1},
+      f"pages by poll={_pza}, due polls={_pz_d[:4]}")
+
+# 17v. THE REVIVAL STEP COMES WITH A COMPLETED SWEEP. A completed sweep arms one
+#      step when none is armed or in progress, so the scan's demand follows the
+#      sweeps' and slows with them when they fall behind, never running ahead of
+#      them through the aging. The paced feed's scan reads one page per completed
+#      sweep - its cycle stretches by the sweep's span - and moves: each page
+#      below the last, a new cycle every three pages. A main() that arms a step on
+#      every due poll reds this.
+_rk_pages = [float(p["latest"]) for i, ph, c, m, p in _PZ.log
              if ph == "revival" and c == "C_FEED" and m == "conversations.history"]
-check("17v. paced, the feed's revival reads one page per due poll, one a sweep period",
-      len(_pz_feed_due) - 1 <= len(_rk_pages) <= len(_pz_feed_due),
-      f"revival pages={len(_rk_pages)}, due polls={len(_pz_feed_due)}, feed sweeps={len(_pz_feed)}")
+_rk_done = [p for p, c in _PZ.done if c == "C_FEED"]
+check("17v. paced, the feed's revival reads one page per completed sweep",
+      len(_rk_done) >= 5 and len(_rk_done) - 1 <= len(_rk_pages) <= len(_rk_done),
+      f"revival pages={len(_rk_pages)}, completed feed sweeps={len(_rk_done)} at {_rk_done}, "
+      f"due polls={len(_pz_feed_due)}")
 check("17v. ...and the scan advances: each page below the last, a new cycle every three pages",
-      len(_rk_pages) >= 6
+      len(_rk_pages) >= 4
       and all((b > a) == (k % 3 == 0) for k, (a, b) in enumerate(zip(_rk_pages, _rk_pages[1:]), 1)),
       f"page `latest` values={[f'{t:.0f}' for t in _rk_pages]}")
 
+# 17v-ii. OVERLOADED, THE SCAN SLOWS WITH THE SWEEPS. Every small conversation is
+#      one whose sweep reads a history page and whose revival step reads one - 21
+#      of them beside the feed, 42 calls a period before the feed's, of 30 - for
+#      six hours, 100 replies arriving under the feed's off-page parents. With
+#      the revival step armed by a completed sweep, every reply arrives, once,
+#      within an hour. A main() that arms a step on every due poll lets the scan
+#      run ahead of the sweeps through the aging, and most of them never arrive.
+_RK = _pz_run(720, busy=True, feed_replies=100)
+_rk_got = {}
+for _t, _nm, _ts, _par in _RK.emits:
+    _rk_got.setdefault(_ts, []).append(_t)
+_rk_late = sorted((_rk_got[t][0] - float(t)) / 60 for _p, t in _RK.sched if t in _rk_got)
+check("17v-ii. REGIME CONTROL: overloaded, the budget is saturated for most of the run",
+      sum(1 for st in _RK.streak if st) > 720 // 2, f"saturated polls={sum(1 for st in _RK.streak if st)} of 720")
+check("17v-ii. overloaded, every off-page reply in the feed arrives, once, within an hour",
+      len(_rk_late) == len(_RK.sched) == 100 and all(len(_rk_got[t]) == 1 for _p, t in _RK.sched)
+      and _rk_late[-1] <= 60, f"delivered {len(_rk_late)} of {len(_RK.sched)}, worst {_rk_late[-1] if _rk_late else None:.1f} min")
+
 # 17w. THE SATURATION LINE NAMES THE TOP SPENDERS. Its wording up to `; top: `
 #      is unchanged - follower filters and people read it - and it then lists the
-#      three conversations with the most budgeted calls in the streak it reports,
+#      three conversations with the most budgeted calls in the polls it names,
 #      most first, each split into history pages, replies reads and revival
-#      pages. From the uncapped run, whose budget saturates: the feed is first,
-#      with exactly the history pages its sweeps read in that streak, and no
-#      reads; the small conversations' calls are their reads. The count starts
-#      again on every poll that is not saturated and covers the whole streak, so
-#      it is exactly the `last <n> polls` the line names: from a run with a line
-#      every ten minutes, every line's feed count is the feed's pages in those
-#      polls. REGIME CONTROL: in that run one line's streak began after earlier
-#      feed pages (a count from the start differs) and two lines share a streak
-#      (a count from the previous line differs). A DM is named as `_where` names it.
+#      pages. From the uncapped run: the feed is first, with exactly the history
+#      pages its sweeps read in that streak. EXACT: on every line of
+#      the uncapped run with a line every ten minutes, and of a paced run where two
+#      bursts of 45 replies in mid's threads saturate the budget, the list is the
+#      one counted off the call log over exactly the streak - from the start of its
+#      first poll to the line. REGIME CONTROL: each other place to start the count
+#      again - at the note of the healthy poll before the streak (its leftover
+#      revival calls leak in), never, also at each line, only on a poll with no
+#      sweep in progress - gives a different list on some line. A DM is named as
+#      `_where` names it.
 _SP_LINE = _re.compile(
     r"WATCH-INFO sweeps found the whole budget \(3 calls a poll\) spent on each of the last \d+ "
     r"polls, \d+ still in progress - off-page replies arrive late \(SKILL\.md, the budget\); top: (.+)$")
@@ -4936,46 +5081,81 @@ def _sp_top(line):
     return [(e.group(1), *map(int, e.groups()[1:])) for e in found]
 
 
-def _sp_feed_pages(after, upto, log=None):
-    return sum(1 for i, ph, c, m, p in (_pzc_log if log is None else log)
-               if after < i <= upto and ph == "sweep" and c == "C_FEED" and m == "conversations.history")
+def _sp_split(run):
+    """Each poll's budgeted calls, split at its saturation check: {poll: (before,
+    after)}, each a list of (conversation, kind). The check runs after every poll
+    and sweep of the poll, so the calls after the last poll- or sweep-phase call
+    are the revival steps that spend the leftover."""
+    by = {}
+    for i, ph, c, m, p in run.log:
+        by.setdefault(i, []).append((ph, c, m))
+    out = {}
+    for i, calls in by.items():
+        cut = max(k for k, (ph, _c, _m) in enumerate(calls) if ph in ("poll", "sweep")) + 1
+        out[i] = tuple([(f"#{run.names[c]}", "read" if m == _R else {"sweep": "page", "revival": "revival"}[ph])
+                        for ph, c, m in part if ph != "poll"] for part in (calls[:cut], calls[cut:]))
+    return out
 
 
-def _sp_streak_start(n, streak=None):
-    """The last poll before poll `n` that was not saturated."""
-    streak = _pzc_streak if streak is None else streak
-    return n - streak[n] if n < len(streak) else None
+def _sp_count(split, first, last, skip_before_first=True):
+    """The top three off the calls from `first` to the check of poll `last`. With
+    `skip_before_first` False, the leftover calls of poll `first` - 1 count too."""
+    spent = {}
+    calls = [] if skip_before_first else split.get(first - 1, ([], []))[1]
+    for i in range(first, last + 1):
+        before, after = split.get(i, ([], []))
+        calls = calls + before + (after if i < last else [])
+    for key in calls:
+        spent[key] = spent.get(key, 0) + 1
+    return [(where, sum(v for (wh, _k), v in spent.items() if wh == where),
+             *(spent.get((where, k), 0) for k in ("page", "read", "revival")))
+            for where in sorted({wh for wh, _k in spent}, key=lambda wh: (
+                -sum(v for (x, _k), v in spent.items() if x == wh), wh))][:3]
 
 
-_sp_lines = [ln for ln in _pzc_err if ln.startswith(_PZ_HEAD)]
-_sp_tops = [_sp_top(ln) for ln in _sp_lines]
-check("17w. POSITIVE EVIDENCE: the uncapped run printed two saturation lines, an hour apart",
-      len(_sp_lines) == 2 and len(_pzc_noted) == 2, f"lines at polls {_pzc_noted}: {_sp_lines}")
-check("17w. each keeps its wording and ends with three conversations, most calls first, the split adding up",
-      _sp_tops and all(t is not None and len(t) == 3 and all(e[1] == sum(e[2:]) for e in t)
+def _sp_check(run):
+    """[(poll, the line's list, the streak's, (alternatives))] for each line."""
+    split, out, prev = _sp_split(run), [], None
+    lines = [ln for ln in run.err if ln.startswith(_PZ_HEAD)]
+    for n, ln in zip(run.noted, lines):
+        s = n - run.streak[n] + 1
+        quiet = max((i for i, st, sw in run.checks if i < s and st == 0 and sw == 0), default=-1)
+        want = _sp_count(split, s, n)
+        alts = (_sp_count(split, s, n, skip_before_first=False), _sp_count(split, 0, n),
+                _sp_count(split, prev + 1, n, skip_before_first=False) if prev is not None and prev >= s else want,
+                _sp_count(split, quiet + 1, n))
+        out.append((n, _sp_top(ln), want, alts))
+        prev = n
+    return out
+
+
+_SPN = _pz_run(_PZ_POLLS, pacing=False, note_secs=600)
+_SPB = _pz_run(_PZ_POLLS, note_secs=600, bursts=(2400, 5400))
+_sp_lines = [ln for ln in _PZC.err if ln.startswith(_PZ_HEAD)]
+_sp_tops = [_sp_top(ln) for ln in _sp_lines + [ln for r in (_SPN, _SPB) for ln in r.err if ln.startswith(_PZ_HEAD)]]
+check("17w. POSITIVE EVIDENCE: the uncapped run printed two saturation lines, an hour apart; the bursts saturated "
+      "the paced run twice",
+      len(_sp_lines) == 2 and len(_PZC.noted) == 2 and len(_SPB.noted) >= 2,
+      f"uncapped lines at polls {_PZC.noted}; paced with bursts at {_SPB.noted}")
+check("17w. each keeps its wording and ends with up to three conversations, most calls first, the split adding up",
+      _sp_tops and all(t is not None and 1 <= len(t) <= 3 and all(e[1] == sum(e[2:]) for e in t)
                        and [e[1] for e in t] == sorted((e[1] for e in t), reverse=True) for t in _sp_tops),
-      f"lines={_sp_lines}")
+      f"lines={_sp_lines[:1]}")
 _sp_first = (_sp_tops[0] or [None])[0] if _sp_tops else None
-_sp_want1 = ("#bot-feed", _sp_feed_pages(_sp_streak_start(_pzc_noted[0]), _pzc_noted[0]) if _pzc_noted else None)
-check("17w. the feed is first, with every history page its sweeps read in the streak, and no reads",
-      _sp_first is not None and (_sp_first[0], _sp_first[2]) == _sp_want1 and _sp_first[3] == 0,
-      f"first entry={_sp_first}, want (name, pages)={_sp_want1}")
-check("17w. the small conversations' calls are their sweeps' reads",
-      _sp_tops and _sp_tops[0] and all(e[0].startswith("#small-") and e[2] == 0 and e[3] > 0 and e[4] == 0
-                                       for e in _sp_tops[0][1:]), f"entries={_sp_tops[0] if _sp_tops else None}")
-_, _spn_streak, _spn_noted, _spn_err, _spn_log = _pz_run(_PZ_POLLS, pacing=False, note_secs=600)
-_spn = []   # (poll, the line's feed entry, its streak's pages, from the previous line, from the start)
-for _k, (_n, _ln) in enumerate(zip(_spn_noted, [ln for ln in _spn_err if ln.startswith(_PZ_HEAD)])):
-    _e = next((e for e in (_sp_top(_ln) or []) if e[0] == "#bot-feed"), None)
-    _spn.append((_n, _e and _e[2], _sp_feed_pages(_sp_streak_start(_n, _spn_streak), _n, _spn_log),
-                 _sp_feed_pages(_spn_noted[_k - 1] if _k else -1, _n, _spn_log),
-                 _sp_feed_pages(-1, _n, _spn_log)))
-check("17w. every line counts exactly the polls it names: the feed's pages in its streak",
-      len(_spn) >= 4 and all(got == want for _n, got, want, _prev, _start in _spn),
-      f"(poll, line's feed pages, streak's, from the previous line, from the start)={_spn}")
-check("17w. REGIME CONTROL: from the start or from the previous line would differ on some line",
-      any(want != start for _n, _g, want, _p, start in _spn) and any(want != prev for _n, _g, want, prev, _s in _spn),
-      f"lines={_spn}")
+check("17w. uncapped, the feed is first, with every history page its sweeps read in the streak",
+      _sp_first is not None and _sp_first[0] == "#bot-feed"
+      and _sp_first[2] == sum(n for i, n in _pz_pages(_PZC, "C_FEED").items()
+                              if _PZC.noted[0] - _PZC.streak[_PZC.noted[0]] < i <= _PZC.noted[0]),
+      f"first entry={_sp_first}")
+_sp_all = [x for r in (_PZC, _SPN, _SPB) for x in _sp_check(r)]
+check("17w. EXACT: every line's list is the one counted over exactly its streak",
+      len(_sp_all) >= 6 and all(got is not None and [tuple(e) for e in got] == [tuple(e) for e in want]
+                                for _n, got, want, _a in _sp_all),
+      f"(poll, line, counted)={[(n, g, wt) for n, g, wt, _a in _sp_all if g != wt][:2]}")
+check("17w. REGIME CONTROL: counting from the healthy poll's note, from the start, from the previous line, or "
+      "from the last poll with no sweep in progress gives a different list on some line",
+      all(any(a[k] != want for _n, _g, want, a in _sp_all) for k in range(4)),
+      f"differing lines per alternative={[sum(a[k] != want for _n, _g, want, a in _sp_all) for k in range(4)]}")
 if isinstance(_inc, str) and _inc:
     check("17w. the follower's default filter still passes the line",
           _sp_lines and all(_re.compile(_inc).search(ln) for ln in _sp_lines), f"lines={_sp_lines}")
@@ -4988,12 +5168,54 @@ with contextlib.redirect_stdout(io.StringIO()):
     _sp_n0 = len(_sp_fk.calls)
     _sp_r, _sp_e = _try_sweep(_sp_fk, "D_SPEND", _sp_st, _sp_edge, budget={"left": 10, "spent": _sp_spent},
                               is_dm=True)
-_sp_hist = sum(1 for m, p, _got in _sp_fk.calls[_sp_n0:] if m == "conversations.history")
+_sp_hist = sum(1 for m, _p, _got in _sp_fk.calls[_sp_n0:] if m == "conversations.history")
 check("17w. a DM's calls are counted under `DM <id>`, as _where names it, pages and reads apart",
       _sp_e is None and _sp_r is True and _sp_hist >= 2
       and _sp_spent == {("DM D_SPEND", "page"): _sp_hist, ("DM D_SPEND", "read"): 1},
       f"result={_sp_r} exc={_sp_e!r} history pages={_sp_hist} spent={_sp_spent}")
 
+# 17x. A LONG SWEEP SAYS SO. A sweep that completes having spanned periods enough
+#      that its conversation's off-page replies waited an hour (LATE_SECS) or
+#      more prints ONE `WATCH-INFO sweep <conversation> took <n> periods for <p>
+#      history pages - its off-page replies waited up to <m> minutes` line, at
+#      most once per SATURATION_NOTE_SECS per conversation. A 35-page window
+#      beside the feed: twelve periods, 60 minutes - one line; the feed's four
+#      periods, 20 minutes - none. Two of its sweeps complete in the run: with the
+#      interval longer than the time between them, one line; shorter, two. A
+#      one-period sweep says nothing, however long the period (the plain cadence).
+_LS_HEAD = "WATCH-INFO sweep #big took "
+_LS = {secs: _pz_run(27 * _PZ_EVERY, note_secs=secs, only={"C_FEED", "C_BIG"}, big=35) for secs in (7200, 1800)}
+_ls_lines = {secs: [ln for ln in r.err if ln.startswith("WATCH-INFO sweep ")] for secs, r in _LS.items()}
+_ls_done = [p for p, c in _LS[7200].done if c == "C_BIG"]
+_ls_want = ("WATCH-INFO sweep #big took 12 periods for 35 history pages - its off-page replies waited up to "
+            "60 minutes (SKILL.md, the pacing)")
+check("17x. POSITIVE EVIDENCE: two sweeps of the 35-page window completed, twelve periods apart",
+      len(_ls_done) == 2 and _ls_done[1] - _ls_done[0] == 12 * _PZ_EVERY, f"completed at polls {_ls_done}")
+check("17x. one line for the 35-page window, none for the feed's four-period sweeps",
+      _ls_lines[7200] == [_ls_want], f"lines={_ls_lines[7200]}")
+check("17x. ...one per SATURATION_NOTE_SECS per conversation: an interval shorter than the gap prints both",
+      _ls_lines[1800] == [_ls_want, _ls_want], f"lines={_ls_lines[1800]}")
+if isinstance(_inc, str) and _inc:
+    check("17x. the follower's default filter passes it",
+          _ls_lines[7200] and all(_re.compile(_inc).search(ln) for ln in _ls_lines[7200]), f"lines={_ls_lines[7200]}")
+_ls_fn = getattr(w, "_note_long_sweep", None)
+_ls_unit = []
+if _ls_fn:
+    _ls_secs = w.SWEEP_SECS
+    try:
+        w.SWEEP_SECS = 3600
+        for _periods in (1, 2):
+            _ls_buf = io.StringIO()
+            with contextlib.redirect_stderr(_ls_buf):
+                _ls_fn({}, "C_ONE", "one", False, {"periods": _periods, "pages": 3})
+            _ls_unit.append(_ls_buf.getvalue().strip())
+    finally:
+        w.SWEEP_SECS = _ls_secs
+check("17x. a one-period sweep says nothing even when the period is an hour; two periods do",
+      len(_ls_unit) == 2 and _ls_unit[0] == "" and _ls_unit[1].startswith("WATCH-INFO sweep #one took 2 periods"),
+      f"lines={_ls_unit}")
+check("17x. ...and no error line", not _pz_errors(*_LS.values(), _SPN, _SPB),
+      f"stderr={_pz_errors(*_LS.values(), _SPN, _SPB)[:2]}")
 
 print()
 if _failures:

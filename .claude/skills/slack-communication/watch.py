@@ -249,8 +249,7 @@ SWEEP_SECS = float(os.environ.get("SLACK_WATCH_SWEEP_SECS", cfg("poll.sweep_secs
 SWEEP_EVERY = max(1, round(SWEEP_SECS / POLL_SECS))
 SWEEP_BUDGET = int(os.environ.get("SLACK_WATCH_SWEEP_BUDGET", cfg("poll.sweep_budget", default=3)))
 # The revival scan (SKILL.md, the same section): history older than the window, back
-# to REVIVAL_HORIZON_SECS, at most REVIVAL_PAGES history pages per due poll of its
-# conversation - once a sweep period, however many periods its sweep takes.
+# to REVIVAL_HORIZON_SECS, at most REVIVAL_PAGES history pages per completed sweep.
 # ⚠️ REVIVAL_HORIZON_SECS is a constant for WINDOW_SECS's reason: it is a delivery
 # promise. REVIVAL_PAGES is a constant too, though it is a cost: every call the scan
 # makes comes out of poll.sweep_budget and its cadence is poll.sweep_secs, the two
@@ -1029,9 +1028,9 @@ def poll_channel(channel_id: str, channel_name: str | None, state: dict,
 
 def sweep_due(conversation_id: str, poll_count: int) -> bool:
     """Is poll `poll_count` a DUE poll of `conversation_id` - one that starts its
-    sweep, or opens a new period of history pages for the one in progress, and
-    arms its revival step? Once every SWEEP_EVERY polls, at a phase derived from
-    the id, so a fleet of conversations does not sweep on the same poll. crc32
+    sweep, or opens a new period of history pages for the one in progress? Once
+    every SWEEP_EVERY polls, at a phase derived from the id, so a fleet of
+    conversations does not sweep on the same poll. crc32
     rather than hash(): hash() of a str is salted per process, and a phase nobody
     can reproduce cannot be tested."""
     return (poll_count + zlib.crc32(conversation_id.encode())) % SWEEP_EVERY == 0
@@ -1042,12 +1041,13 @@ def new_sweep(edge: str | None) -> dict | None:
     nothing is off the page. Process-scoped and never saved: a restarted sweep
     re-reads history pages, never replies, because the thread cursors it advanced
     are on disk. `period_pages` counts the history pages it read in its
-    conversation's current sweep period (the pacing, `sweep_channel`)."""
+    conversation's current sweep period (the pacing, `sweep_channel`); `pages` and
+    `periods`, all it read and the periods it spans (`_note_long_sweep`)."""
     if edge is None:
         return None
     return {"edge": edge, "window_start": f"{time.time() - WINDOW_SECS:.6f}",
             "cursor": "", "pages_done": False, "pending": [], "old_after": None,
-            "period_pages": 0}
+            "period_pages": 0, "pages": 0, "periods": 1}
 
 
 # Slack error codes about ONE thread rather than the conversation or the service:
@@ -1123,6 +1123,7 @@ def sweep_channel(channel_id: str, channel_name: str | None, state: dict, pos: d
             {"channel": channel_id, "latest": pos["edge"], "oldest": pos["window_start"]},
             pos["cursor"]))
         pos["period_pages"] += 1
+        pos["pages"] += 1
         pos["pending"] = [(m["ts"], m.get("latest_reply", "0")) for m in page if m.get("reply_count")]
         pos["pages_done"] = not pos["cursor"]
     reach = min(float(pos["edge"]), float(pos["window_start"]))
@@ -1137,10 +1138,9 @@ def sweep_channel(channel_id: str, channel_name: str | None, state: dict, pos: d
 
 
 def new_revival(edge: str | None) -> dict | None:
-    """The position of one revival step armed at a due poll of its conversation
-    (main(), the revival's own clock) from that poll's `edge`, or None when
-    nothing is off the page - the page then lists every parent, so the poll
-    reads every thread. Process-scoped like a sweep's:
+    """The position of one revival step armed by a sweep that completed from the
+    poll's `edge`, or None when nothing is off the page - the page then lists
+    every parent, so the poll reads every thread. Process-scoped like a sweep's:
     what a restart needs is on disk - the scan's position (`revival_ts`) and the
     thread cursors the step advanced. A cycle starts at the window edge, or at
     the page edge when the page reaches back past it: the poll reads every
@@ -1156,7 +1156,7 @@ def _revival_position(channel_id: str, channel_name: str | None, state: dict,
                       is_dm: bool) -> None:
     """Drop a `revival_ts` that is not a ts, with ONE WATCH-INFO line, so the cycle
     starts again at the window edge. Left in place, float() raises on it every step,
-    before anything could delete it: one WATCH-ERROR per sweep period, and that
+    before anything could delete it: one WATCH-ERROR per sweep, and that
     conversation's scan never moves again. "nan", "inf" and "-inf" parse and are
     not ts either: the first two would go to Slack as `latest`."""
     raw = state.get("revival_ts")
@@ -1251,16 +1251,16 @@ def revive_channel(channel_id: str, channel_name: str | None, state: dict, pos: 
 
 
 def run_sweep(conversation_id: str, name: str | None, state: dict, edge: str | None,
-              sweeps: dict, budget: dict | None, is_dm: bool = False, step=None) -> bool:
-    """Start or continue one conversation's sweep, isolated from its poll; True
-    when it completed. `sweeps` holds every position in progress; `budget` is
-    this poll's, shared by every conversation. `step` advances a position:
+              sweeps: dict, budget: dict | None, is_dm: bool = False, step=None) -> dict | None:
+    """Start or continue one conversation's sweep, isolated from its poll; its
+    position when it completed, None otherwise. `sweeps` holds every position in
+    progress; `budget` is this poll's, shared by every conversation. `step` advances a position:
     `sweep_channel` unless given - main() passes `revive_channel` with the
     revival steps' own positions. The error policy is SKILL.md's (the sweep):
     one line, no retirement, and the position kept only after a rate limit."""
     pos = sweeps.get(conversation_id) or new_sweep(edge)
     if pos is None:
-        return False
+        return None
     sweeps[conversation_id] = pos
     done = False
     try:
@@ -1276,7 +1276,24 @@ def run_sweep(conversation_id: str, name: str | None, state: dict, edge: str | N
             sweeps.pop(conversation_id, None)
         print(f"WATCH-ERROR sweep {_where(conversation_id, name, is_dm)} {type(e).__name__}: {e}",
               file=sys.stderr, flush=True)
-    return bool(done)
+    return pos if done else None
+
+
+def _note_long_sweep(noted: dict, conversation_id: str, name: str | None, is_dm: bool,
+                     pos: dict) -> None:
+    """ONE WATCH-INFO line when a sweep completed having spanned periods enough
+    that its conversation's off-page replies waited LATE_SECS or more - THE PACING
+    spreads a window of N pages over ceil(N / SWEEP_BUDGET) periods, and each page
+    is read once a sweep - at most once per SATURATION_NOTE_SECS per conversation
+    (`noted`, main()'s). A sweep of one period is the plain cadence and says nothing."""
+    wait = pos["periods"] * SWEEP_SECS
+    if pos["periods"] < 2 or wait < LATE_SECS \
+            or time.time() - noted.get(conversation_id, float("-inf")) < SATURATION_NOTE_SECS:
+        return
+    noted[conversation_id] = time.time()
+    print(f"WATCH-INFO sweep {_where(conversation_id, name, is_dm)} took {pos['periods']} periods "
+          f"for {pos['pages']} history pages - its off-page replies waited up to "
+          f"{round(wait / 60)} minutes (SKILL.md, the pacing)", file=sys.stderr, flush=True)
 
 
 def _top_spenders(spent: dict, n: int = 3) -> str:
@@ -1298,17 +1315,15 @@ def _note_saturation(saturated: dict, budget: dict, sweeps: dict) -> None:
     would be the flood that stops the follower. It ends with the three
     conversations that made the most budgeted calls in the polls it names, each
     split by pass (`_top_spenders`), so it says which conversation and which pass
-    fills the budget. The count starts again on every poll that is not saturated,
-    so it covers exactly the streak the line reports - hours of healthy polls
-    before it do not dilute it, and a streak longer than SATURATION_NOTE_SECS is
-    counted whole on each of its lines, as their `last <n> polls` says."""
+    fills the budget. main() starts the count again at the start of every poll
+    that follows one that was not saturated, so it covers exactly the streak the
+    line reports - hours of healthy polls before it do not dilute it, and a streak
+    longer than SATURATION_NOTE_SECS is counted whole on each of its lines, as
+    their `last <n> polls` says."""
     saturated["polls"] = saturated["polls"] + 1 if budget["left"] <= 0 and sweeps else 0
-    spent = budget.get("spent") or {}
-    if not saturated["polls"]:
-        spent.clear()
     if saturated["polls"] >= SWEEP_EVERY and time.time() - saturated["noted"] >= SATURATION_NOTE_SECS:
         saturated["noted"] = time.time()
-        top = _top_spenders(spent)
+        top = _top_spenders(budget.get("spent") or {})
         print(f"WATCH-INFO sweeps found the whole budget ({SWEEP_BUDGET} calls a poll) spent on each "
               f"of the last {saturated['polls']} polls, {len(sweeps)} still in progress - off-page "
               f"replies arrive late (SKILL.md, the budget)" + (f"; top: {top}" if top else ""),
@@ -1412,6 +1427,7 @@ def main() -> None:
     revivals: dict[str, dict] = {}  # revival steps armed or in progress, the same shape
     saturated = {"polls": 0, "noted": float("-inf")}   # the budget-saturation notice
     spent: dict = {}               # budgeted calls of its streak, {(conversation, kind): calls}
+    long_noted: dict = {}          # when each conversation's last long-sweep line was printed
     poll_count = 0
     while True:
         if poll_count % REDISCOVER_EVERY == 0:
@@ -1444,6 +1460,10 @@ def main() -> None:
                     del in_progress[gone]
         # ONE budget per poll for every sweep's calls, shared by all conversations,
         # so sweeps in progress together cannot stack (SKILL.md, the sweep's cost).
+        # The saturation line counts the calls of the streak it reports: from the
+        # start of its first poll, every call of that poll included.
+        if not saturated["polls"]:
+            spent.clear()
         budget = None if once else {"left": SWEEP_BUDGET, "spent": spent}
         watched = [(c, n, False) for c, n in channels.items()] + [(d, u, True) for d, u in dms.items()]
         # ⚠️ The shared budget is first-come, so the order rotates every poll: in a fixed
@@ -1466,6 +1486,14 @@ def main() -> None:
         for cid, name, is_dm in watched:
             if cid in retired:
                 continue
+            # Its due polls: one every SWEEP_EVERY, at its phase (`sweep_due`). A due poll
+            # starts a sweep, or opens a new period of history pages for the one in
+            # progress (THE PACING, `sweep_channel`) - before the poll, so a poll
+            # that fails does not hold the cap for one more period.
+            due = once or sweep_due(cid, poll_count)
+            if due and cid in sweeps:
+                sweeps[cid]["period_pages"] = 0
+                sweeps[cid]["periods"] += 1
             try:
                 state = states.get(cid)
                 if state is None:
@@ -1492,20 +1520,17 @@ def main() -> None:
                           file=sys.stderr, flush=True)
                 continue  # a poll that failed reached no edge: no sweep this cycle
             polled.append((cid, name, is_dm))
-            # The conversation's own clock: one due poll every SWEEP_EVERY, at its phase.
-            # A due poll starts a sweep, or opens a new period of pages for the one in
-            # progress (THE PACING, `sweep_channel`).
-            due = once or sweep_due(cid, poll_count)
-            if due and cid in sweeps:
-                sweeps[cid]["period_pages"] = 0
             if cid in sweeps or due:
-                run_sweep(cid, name, state, edge, sweeps, budget, is_dm=is_dm)
-            # ⚠️ THE REVIVAL'S OWN CLOCK. A due poll arms ONE revival step, which waits
-            # until it has run, whether this poll's sweep started, continued or failed:
-            # the pacing spreads a big conversation's sweep over several periods,
-            # never its scan, whose cycle stays one page a sweep period. watch.test.py 17v.
-            if due and cid not in revivals and (revival := new_revival(edge)):
-                revivals[cid] = revival
+                # ⚠️ A completed sweep arms ONE revival step, which waits until it has
+                # run: the scan's demand follows the sweeps', so when sweeps fall behind
+                # the scan slows with them instead of running ahead of them through the
+                # aging. A paced conversation's cycle stretches by its sweep's span.
+                # watch.test.py 17v.
+                done = run_sweep(cid, name, state, edge, sweeps, budget, is_dm=is_dm)
+                if done:
+                    _note_long_sweep(long_noted, cid, name, is_dm, done)
+                    if cid not in revivals and (revival := new_revival(edge)):
+                        revivals[cid] = revival
         # ⚠️ The revival scan spends only what every poll and sweep above LEFT of the
         # budget, so it runs here, after all of them, never beside its own
         # conversation's sweep: there it would take calls first-come from the sweeps
