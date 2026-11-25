@@ -215,7 +215,7 @@ refreshes only when discovery SUCCEEDS. Verify the layer the claim is about.
 ```bash
 # from any directory - the script anchors nothing to the working directory
 SLACK_WATCH_CONFIG=<config> PYTHONUNBUFFERED=1 python3 -u "${CLAUDE_SKILL_DIR}/watch.py" 2>&1   # poll loop (run by the service, never a Monitor)
-SLACK_WATCH_CONFIG=<config> python3 "${CLAUDE_SKILL_DIR}/watch.py" --once   # one poll + one full sweep, smoke test (writes the cursors: see below)
+SLACK_WATCH_CONFIG=<config> python3 "${CLAUDE_SKILL_DIR}/watch.py" --once   # one poll, one full sweep, one revival step: smoke test (writes the cursors: see below)
 python3 "${CLAUDE_SKILL_DIR}/watch.test.py"     # offline regression guard
 pgrep -af "[s]lack-communication/watch.py"      # is ANY watcher running? (the service state says whose); macOS: pgrep -fl
 ```
@@ -430,11 +430,39 @@ parent that old. A conversation whose page holds its whole history costs the
 sweep nothing; one whose page reaches back past the window start costs no
 history pages, only those old-parent replies calls.
 
+**The revival scan.** It reads the threads the sweep cannot: those whose
+parent and newest read reply are both older than the window - a colleague
+answering a three-week-old post, the bot itself answering one, a human
+answering the bot there. A sweep that completes arms ONE revival step for its
+conversation. The step reads one `conversations.history` page of 200 top-level
+messages (`REVIVAL_PAGES`) from the history between the window edge and the
+**horizon**, `REVIVAL_HORIZON_SECS` (**90 days**), and calls
+`conversations.replies` only for a parent whose `latest_reply` moved past where
+its thread is read from: a **tracked** thread from its cursor, a thread with
+**no cursor** from the window edge, both from no lower than the sweep floor. So
+a revived thread delivers the replies after its cursor, or the replies newer
+than the window, and never its whole history. Each step reads the page below
+the last one it finished; the position is the cursor file's `revival_ts`,
+written only once every thread on a page is read, so the scan resumes across
+sweeps and restarts, and a restart part-way through a page re-reads that one
+page. At the horizon `revival_ts` is deleted and the next step starts again at
+the window edge (at the page edge, when the poll's page reaches back past the
+window). A conversation whose page holds its whole history or reaches past the
+horizon costs the scan nothing. A thread it reads gets a cursor inside the
+window, so the old-parent pass then reads it every sweep while its replies stay
+inside the window. A cursor file with no `revival_ts` starts the scan at the
+window edge; nothing is migrated.
+
 **What sweeps cost, and the budget.** All sweeps together make at most
 `poll.sweep_budget` calls per poll (default **3**; env
-`SLACK_WATCH_SWEEP_BUDGET`) - history pages and replies calls alike, one budget
-shared by every conversation, so sweeps in progress at once cannot stack. A
-sweep the budget stops resumes on the next poll where it stopped. Slack
+`SLACK_WATCH_SWEEP_BUDGET`) - history pages and replies calls alike, revival
+steps included, one budget shared by every conversation, so sweeps in progress
+at once cannot stack. A sweep the budget stops resumes on the next poll where
+it stopped. **The revival scan spends only what the sweeps leave:** every
+revival step of a poll runs after every poll and sweep of that poll, on the
+budget they left, so it never delays a sweep's read; a step that finds the
+budget spent waits for the next poll that leaves some. It adds at most one
+history page per conversation per `sweep_secs`. Slack
 rate-limits per method, per workspace, per app, so the bound to hold is:
 
     conversations.history calls/min <= (watched conversations + sweep_budget) x 60 / poll_secs
@@ -452,10 +480,18 @@ default, (conversations + 3) x 12 <= 50 leaves room for a single conversation.
 This bound is the one statement of how to size `sweep_secs`, `sweep_budget`
 and the poll interval together.
 
-**How late an off-page reply can be:** one sweep - `sweep_secs` to start, plus
-the polls the sweep needs at the shared budget. A 25-page busy feed needs at
-least 9 polls (about 4.5 minutes at a 30 s poll), more while other sweeps share
-the budget.
+**How late an off-page reply can be:** one sweep when its thread's parent is
+inside the window - `sweep_secs` to start, plus the polls the sweep needs at the
+shared budget. A 25-page busy feed needs at least 9 polls (about 4.5 minutes at
+a 30 s poll), more while other sweeps share the budget. When the parent is
+between the window and the horizon, one **revival cycle**: the scan reads one
+page per sweep, so a cycle takes one `sweep_secs` per page, a page being 200
+top-level messages between the window edge and the horizon - **five minutes per
+page** at the default 300 s. Measured across six agents' watchers: most
+conversations are 1 to 3 pages (5 to 15 minutes), a busy DM 8 to 9 pages (40 to
+45 minutes), and the worst, a feed channel holding about 12,000 top-level
+messages in that range, 60 pages - **five hours**. A cycle survives restarts;
+sweeps that take the whole budget slow it down.
 
 **Errors.** A sweep error is **one** `WATCH-ERROR sweep <conversation> ...`
 line. It never retires the conversation (a sweep runs only after a successful
@@ -501,14 +537,21 @@ deliver. Smoke-test against a copy of the config whose `state.dir` holds copies
 of the cursor files.
 
 **THE WINDOW BOUND, and it is the limit on every "nothing is lost" claim on
-this page.** A reply is not read when its thread's parent is **older than the
-window, off the page, and no reply in that thread was read inside the window**
-- including a thread the bot itself revives by answering a post that old. A
-top-level message is not read when the watcher's outage **outlasted the
-window**, and a message or thread reply older than the newest 200 top-level
-messages a catch-up delivers is not delivered either - both announced by that
-catch-up's one `WATCH-INFO` line, with the range and the fetch recipe that reads
-them on demand.
+this page.** A reply whose thread's parent is **older than the window and off
+the page**, with no reply in that thread read inside the window - including a
+thread the bot itself revives by answering a post that old - is read by the
+revival scan, **late**: within one revival cycle, one `sweep_secs` per page of
+200 top-level messages between the window edge and the horizon (five minutes a
+page at the default; measured worst case 60 pages, five hours). Of such a
+thread it delivers only the replies after the thread's cursor, or, for a thread
+the watcher never read, the replies newer than the window edge. A reply is **not
+read** when its thread's parent is **older than the 90-day horizon and off the
+page**, unless a reply in that thread was read inside the window. A top-level
+message is not read when the watcher's outage **outlasted the window**, and a
+message or thread reply older than the newest 200 top-level messages a catch-up
+delivers is not delivered either - both announced by that catch-up's one
+`WATCH-INFO` line, with the range and the fetch recipe that reads them on
+demand.
 Everything else is delivered: on the page within one poll, off it within one
 sweep. A reply also sent to the channel is listed in history at its own ts, so it
 is read as a top-level message is, whatever its parent's age or place. Inside a
@@ -529,7 +572,8 @@ real reply and a quiet thread leaves the window when its replies do.
 The channel cursor moves with **every** top-level message a poll processes, not
 once at the end of the poll: a call that fails later in the same poll leaves
 the messages already delivered behind the cursor, so they are not delivered
-again. `watch.test.py` section 10y-ix; the sweep and the window, sections 10y and 17.
+again. `watch.test.py` section 10y-ix; the sweep and the window, sections 10y and 17;
+the revival scan, sections 10y-v, 10z, 17n and 17o.
 
 ### Retiring a conversation Slack says is gone
 
@@ -593,18 +637,28 @@ further polls or lines for it. (The case it covers: a DM that stays in
 - Replies inside a thread whose **parent was deleted** are unreachable (Slack's
   history API can't list orphaned threads).
 - A reply in a thread whose parent is **older than the 7-day window and off the
-  poll's page**, with no reply in that thread read inside the window, is not
-  read - THE WINDOW BOUND above. Answering a post that old does not bring its
-  thread back into view. A `thread_broadcast` reply is the exception: it
-  arrives from history, whatever its parent's age or position.
+  poll's page**, with no reply in that thread read inside the window, arrives
+  **late**: the revival scan reads it within one revival cycle, one
+  `sweep_secs` (default 300 s) per page of 200 top-level messages between the
+  window edge and the horizon. Measured: 1 to 3 pages (5 to 15 minutes) for
+  most conversations, 60 pages (five hours) for the busiest. Sweeps that take
+  the whole per-poll budget slow the cycle, because the scan spends only what
+  they leave. Of such a thread only the replies after its cursor arrive - or,
+  for a thread the watcher never read, the replies newer than the window edge.
+  THE WINDOW BOUND above.
+- A reply in a thread whose parent is **older than the 90-day horizon and off
+  the poll's page** is not read, unless a reply in that thread was read inside
+  the window. Answering a post that old does not bring its thread back into
+  view.
+- A `thread_broadcast` reply is the exception to both: it arrives from history
+  within one poll, whatever its parent's age or position.
 - A catch-up delivers at most the **newest 200** top-level messages of a
   conversation; older messages and the replies under them are announced - ISO
   UTC range, no count - in one `WATCH-INFO` line and read on demand with the
   fetch recipe.
-- A reply in a thread whose parent is off the poll's page arrives within one
-  **sweep** (300 s to start, plus the polls the sweep needs at the shared
-  per-poll budget), not one poll. A `thread_broadcast` reply arrives from
-  history within one poll, whatever its parent's age or position.
+- A reply in a thread whose parent is off the poll's page and inside the window
+  arrives within one **sweep** (300 s to start, plus the polls the sweep needs
+  at the shared per-poll budget), not one poll.
 - The bot never sees channels of **other workspaces/orgs** it isn't installed
   in.
 - DMs are invisible if the `im:*` scopes are ever dropped.

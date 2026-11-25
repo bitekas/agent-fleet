@@ -46,11 +46,12 @@ Direct messages (DMs to the bot):
   restart. (Private CHANNELS are covered by the combined channel-discovery call
   above - this fallback note is about IM/DMs only.)
 
-Threads off the page, the catch-up, the sweep and THE WINDOW BOUND:
+Threads off the page, the catch-up, the sweep, the revival scan and THE WINDOW BOUND:
   How a reply is read when its parent has more newer top-level posts above it
-  than the poll's 50-message page holds, how a poll catches up after downtime,
-  what both cost per poll, and what is still not read: SKILL.md, "Threads off
-  the page, and the sweep". That section is the one statement of it.
+  than the poll's 50-message page holds, or is older than the window, how a
+  poll catches up after downtime, what all of it costs per poll, and what is
+  still not read: SKILL.md, "Threads off the page, and the sweep". That
+  section is the one statement of it.
 
 Retiring a conversation Slack says is gone:
   A per-conversation poll failure is caught so one bad conversation cannot kill
@@ -79,7 +80,7 @@ Retiring a conversation Slack says is gone:
 
 Usage (from any directory; <skill dir> is the directory holding this file):
   SLACK_WATCH_CONFIG=<config> python3 <skill dir>/watch.py          # poll loop (the service)
-  SLACK_WATCH_CONFIG=<config> python3 <skill dir>/watch.py --once   # one poll + one full sweep
+  SLACK_WATCH_CONFIG=<config> python3 <skill dir>/watch.py --once   # one poll, one full sweep, one revival step
                                                   # (smoke test; ⚠️ writes the cursors - SKILL.md)
 
 Is it armed?  pgrep -af "[s]lack-communication/watch.py"     (macOS: pgrep -fl)
@@ -104,8 +105,10 @@ or thread reply, with a ts earlier than it is ever emitted, while a reply posted
 thread's parent is older than the baseline. Pre-existing cursor files carry no
 stored baseline and are never given one - they fall back to the channel cursor
 already on disk, so nothing old is replayed on upgrade. Every cursor file also
-carries `sweep_floor_ts` (SKILL.md, the sweep floor). The bot's own messages and
-join/system subtypes are skipped; a `thread_broadcast` is not (Who gets delivered).
+carries `sweep_floor_ts` (SKILL.md, the sweep floor), and while a revival cycle
+is in progress `revival_ts`, its position (SKILL.md, the revival scan). The
+bot's own messages and join/system subtypes are skipped; a `thread_broadcast` is
+not (Who gets delivered).
 Requires only stdlib + the token file; no MCP, no Slack SDK.
 
 Who gets delivered:
@@ -244,6 +247,14 @@ WINDOW_SECS = 7 * 24 * 3600
 SWEEP_SECS = float(os.environ.get("SLACK_WATCH_SWEEP_SECS", cfg("poll.sweep_secs", default=300)))
 SWEEP_EVERY = max(1, round(SWEEP_SECS / POLL_SECS))
 SWEEP_BUDGET = int(os.environ.get("SLACK_WATCH_SWEEP_BUDGET", cfg("poll.sweep_budget", default=3)))
+# The revival scan (SKILL.md, the same section): history older than the window, back
+# to REVIVAL_HORIZON_SECS, at most REVIVAL_PAGES history pages per completed sweep.
+# ⚠️ REVIVAL_HORIZON_SECS is a constant for WINDOW_SECS's reason: it is a delivery
+# promise. REVIVAL_PAGES is a constant too, though it is a cost: every call the scan
+# makes comes out of poll.sweep_budget and its cadence is poll.sweep_secs, the two
+# keys that already size the sweep, so a third key would size the same calls twice.
+REVIVAL_HORIZON_SECS = 90 * 24 * 3600
+REVIVAL_PAGES = 1
 # The most top-level lines one catch-up delivers per conversation: the newest ones.
 CATCHUP_LINES = 200
 
@@ -783,18 +794,22 @@ def _where(conversation_id: str, name: str | None, is_dm: bool, with_id: bool = 
 
 def _read_thread(channel_id: str, channel_name: str | None, state: dict, parent_ts: str,
                  latest_reply: str | None, floor: str, is_dm: bool,
-                 off_page: bool = False, budget: dict | None = None) -> bool:
+                 off_page: bool = False, budget: dict | None = None,
+                 start: str | None = None) -> bool:
     """Emit the unread replies of one thread and advance its cursor. Returns
     False, having made no call, when `budget` is spent.
 
     Reading starts at the thread's own cursor, or for a thread with none at the
-    LATER of its parent ts and `floor` - which is what makes "nothing older than
-    the floor is ever emitted" hold for replies too. On the poll's page `floor`
-    is the first-sight baseline and a stored cursor wins outright; off it
-    (`off_page`) `floor` is the sweep floor and bounds a stored cursor too
-    (SKILL.md, the sweep floor). `latest_reply` is None when the caller has no
-    parent in hand (one older than the window): then the call is made anyway and
-    the parent's field is read off the answer.
+    LATER of its parent ts, `floor` and `start` - which is what makes "nothing
+    older than the floor is ever emitted" hold for replies too. On the poll's
+    page `floor` is the first-sight baseline and a stored cursor wins outright;
+    off it (`off_page`) `floor` is the sweep floor and bounds a stored cursor too
+    (SKILL.md, the sweep floor). `start` bounds ONLY a thread with no cursor:
+    the revival scan passes the window edge, so a thread it revives that nobody
+    tracked delivers its replies newer than the window, not months of them,
+    while a tracked one still reads from its cursor. `latest_reply` is None
+    when the caller has no parent in hand (one older than the window): then the
+    call is made anyway and the parent's field is read off the answer.
 
     ⚠️ The cursor is the newest reply THIS call read, never history's
     `latest_reply` alone: the replies call runs after the history call and can
@@ -815,7 +830,7 @@ def _read_thread(channel_id: str, channel_name: str | None, state: dict, parent_
     while its parent is off the page or older than the window; emitting it here
     as well would deliver it twice. watch.test.py §14k.
     """
-    seen = state["threads"].get(parent_ts) or max(parent_ts, floor, key=float)
+    seen = state["threads"].get(parent_ts) or max(parent_ts, floor, start or floor, key=float)
     if off_page:
         seen = max(seen, floor, key=float)
     if latest_reply is not None and float(latest_reply) <= float(seen):
@@ -1020,19 +1035,22 @@ def is_rate_limit(exc: BaseException) -> bool:
 
 
 def _sweep_thread(channel_id: str, channel_name: str | None, state: dict, parent_ts: str,
-                  latest_reply: str | None, is_dm: bool, budget: dict | None) -> bool:
+                  latest_reply: str | None, is_dm: bool, budget: dict | None,
+                  start: str | None = None) -> bool:
     """One off-page thread read; False when `budget` is spent. A thread Slack
     says is gone (THREAD_GONE_ERRORS) does not stop the sweep, so it cannot hide
     the threads after it; every other error is raised and stops the sweep.
+    `start` is `_read_thread`'s: where a thread with no cursor starts reading.
     ⚠️ Only the old-parent pass (`latest_reply` None) forgets the thread: nothing
-    else would ever list it again. A thread from the history pass keeps its
-    cursor and is reported once per process - its parent is still listed, so
-    forgetting it would repeat the line every sweep, and on an answer that
-    turned out transient would read it again from the floor and re-send replies
-    already delivered."""
+    else would ever list it again. A thread from a history read (the history
+    pass, the revival scan) keeps its cursor and is reported once per process -
+    its parent is still listed, so forgetting it would repeat the line every
+    sweep, and on an answer that turned out transient would read it again from
+    the floor and re-send replies already delivered."""
     try:
         return _read_thread(channel_id, channel_name, state, parent_ts, latest_reply,
-                            state["sweep_floor_ts"], is_dm, off_page=True, budget=budget)
+                            state["sweep_floor_ts"], is_dm, off_page=True, budget=budget,
+                            start=start)
     except SlackApiError as e:
         if e.code not in THREAD_GONE_ERRORS:
             raise
@@ -1083,19 +1101,85 @@ def sweep_channel(channel_id: str, channel_name: str | None, state: dict, pos: d
     return True
 
 
+def new_revival(edge: str | None) -> dict | None:
+    """The position of one revival step armed by a sweep that completed from the
+    poll's `edge`, or None when nothing is off the page - the page then lists
+    every parent, so the poll reads every thread. Process-scoped like a sweep's:
+    what a restart needs is on disk - the scan's position (`revival_ts`) and the
+    thread cursors the step advanced. `reach` is where a cycle starts: the
+    window edge, or the page edge when the page reaches back past it."""
+    if edge is None:
+        return None
+    window_start = time.time() - WINDOW_SECS
+    return {"reach": f"{min(float(edge), window_start):.6f}", "window_start": f"{window_start:.6f}",
+            "pages": REVIVAL_PAGES, "pending": [], "page_end": None}
+
+
+def revive_channel(channel_id: str, channel_name: str | None, state: dict, pos: dict,
+                   is_dm: bool = False, budget: dict | None = None) -> bool:
+    """Advance the revival step at `pos` (from `new_revival`): True when it is
+    complete, False when `budget` ran out first, `pos` then holding where to
+    resume. What it reads and why: SKILL.md, the revival scan.
+
+    One step reads up to REVIVAL_PAGES history pages below the scan position
+    (`state["revival_ts"]`, or `reach` when a cycle starts) and above the
+    horizon, and gives every listed parent with replies to `_sweep_thread`,
+    the read every off-page thread gets: it makes a call only when the
+    parent's `latest_reply` moved past where the thread is read from - a
+    tracked thread from its cursor, one with no cursor from the window edge
+    (`start`), both from no lower than the sweep floor.
+    ⚠️ `revival_ts` is written only once a page's threads are all read, so a
+    restart part-way through a page re-reads that one page - its threads
+    already read cost no call, their cursors being on disk - and skips nothing.
+    ⚠️ Reaching the horizon ends the step and deletes `revival_ts`, so the next
+    step starts again at the window edge. Not within the same step: a
+    conversation whose whole range is one page would read it twice for nothing."""
+    while True:
+        while pos["pending"]:
+            parent_ts, latest_reply = pos["pending"][0]
+            if not _sweep_thread(channel_id, channel_name, state, parent_ts, latest_reply, is_dm,
+                                 budget, start=pos["window_start"]):
+                return False
+            pos["pending"].pop(0)
+        if pos["page_end"] == "":
+            state.pop("revival_ts", None)
+            return True
+        if pos["page_end"] is not None:
+            state["revival_ts"] = pos["page_end"]
+            pos["page_end"] = None
+        if pos["pages"] <= 0:
+            return True
+        horizon = f"{time.time() - REVIVAL_HORIZON_SECS:.6f}"
+        latest = min(state.get("revival_ts") or pos["reach"], pos["reach"], key=float)
+        if float(latest) <= float(horizon):
+            state.pop("revival_ts", None)
+            return True
+        if not _spend(budget):
+            return False
+        page, more = next(_pages("conversations.history", "messages",
+                                 {"channel": channel_id, "latest": latest, "oldest": horizon}))
+        pos["pages"] -= 1
+        pos["pending"] = [(m["ts"], m.get("latest_reply", "0")) for m in page if m.get("reply_count")]
+        pos["page_end"] = min((m["ts"] for m in page), key=float) if more and page else ""
+
+
 def run_sweep(conversation_id: str, name: str | None, state: dict, edge: str | None,
-              sweeps: dict, budget: dict | None, is_dm: bool = False) -> None:
-    """Start or continue one conversation's sweep, isolated from its poll.
-    `sweeps` holds every sweep in progress; `budget` is this poll's, shared by
-    every conversation. The error policy is SKILL.md's (the sweep): one line, no
-    retirement, and the position kept only after a rate limit."""
+              sweeps: dict, budget: dict | None, is_dm: bool = False, step=None) -> bool:
+    """Start or continue one conversation's sweep, isolated from its poll; True
+    when it completed. `sweeps` holds every position in progress; `budget` is
+    this poll's, shared by every conversation. `step` advances a position:
+    `sweep_channel` unless given - main() passes `revive_channel` with the
+    revival steps' own positions. The error policy is SKILL.md's (the sweep):
+    one line, no retirement, and the position kept only after a rate limit."""
     pos = sweeps.get(conversation_id) or new_sweep(edge)
     if pos is None:
-        return
+        return False
     sweeps[conversation_id] = pos
+    done = False
     try:
         try:
-            done = sweep_channel(conversation_id, name, state, pos, is_dm=is_dm, budget=budget)
+            done = (step or sweep_channel)(conversation_id, name, state, pos, is_dm=is_dm,
+                                           budget=budget)
         finally:
             save_state(conversation_id, state)
         if done:
@@ -1105,6 +1189,7 @@ def run_sweep(conversation_id: str, name: str | None, state: dict, edge: str | N
             sweeps.pop(conversation_id, None)
         print(f"WATCH-ERROR sweep {_where(conversation_id, name, is_dm)} {type(e).__name__}: {e}",
               file=sys.stderr, flush=True)
+    return bool(done)
 
 
 def acquire_singleton_lock():
@@ -1201,6 +1286,7 @@ def main() -> None:
     # watcher lifetime, and nothing has to be un-stuck by hand.
     retired: set[str] = set()
     sweeps: dict[str, dict] = {}   # sweeps in progress, {conversation id: position}
+    revivals: dict[str, dict] = {}  # revival steps armed or in progress, the same shape
     poll_count = 0
     while True:
         if poll_count % REDISCOVER_EVERY == 0:
@@ -1226,10 +1312,11 @@ def main() -> None:
             # sets, not against this cycle's raw results, is what keeps a
             # transient discovery failure - which deliberately keeps the last
             # known set - from un-retiring everything and re-flooding. A sweep
-            # in progress is forgotten the same way.
+            # or revival step in progress is forgotten the same way.
             retired.intersection_update(channels.keys() | dms.keys())
-            for gone in sweeps.keys() - (channels.keys() | dms.keys()):
-                del sweeps[gone]
+            for in_progress in (sweeps, revivals):
+                for gone in in_progress.keys() - (channels.keys() | dms.keys()):
+                    del in_progress[gone]
         # ONE budget per poll for every sweep's calls, shared by all conversations,
         # so sweeps in progress together cannot stack (SKILL.md, the sweep's cost).
         budget = None if once else {"left": SWEEP_BUDGET}
@@ -1238,6 +1325,7 @@ def main() -> None:
         # order a saturated budget would never reach the conversations at the end.
         turn = poll_count % len(watched) if watched else 0
         watched = watched[turn:] + watched[:turn]
+        polled = []   # the conversations polled this cycle, in this cycle's order
         for cid, name, is_dm in watched:
             if cid in retired:
                 continue
@@ -1266,8 +1354,21 @@ def main() -> None:
                     print(f"WATCH-ERROR {_where(cid, name, is_dm)} {type(e).__name__}: {e}",
                           file=sys.stderr, flush=True)
                 continue  # a poll that failed reached no edge: no sweep this cycle
+            polled.append((cid, name, is_dm))
             if cid in sweeps or once or sweep_due(cid, poll_count):
-                run_sweep(cid, name, state, edge, sweeps, budget, is_dm=is_dm)
+                # A completed sweep arms ONE revival step, which waits until it has run.
+                if run_sweep(cid, name, state, edge, sweeps, budget, is_dm=is_dm) \
+                        and cid not in revivals and (revival := new_revival(edge)):
+                    revivals[cid] = revival
+        # ⚠️ The revival scan spends only what every poll and sweep above LEFT of the
+        # budget, so it runs here, after all of them, never beside its own
+        # conversation's sweep: there it would take calls first-come from the sweeps
+        # of the conversations after it in this poll's order. The order is still this
+        # poll's rotated one, so a budget the sweeps leave short reaches every step.
+        for cid, name, is_dm in polled:
+            if cid in revivals:
+                run_sweep(cid, name, states[cid], None, revivals, budget, is_dm=is_dm,
+                          step=revive_channel)
         poll_count += 1
         if once:
             return

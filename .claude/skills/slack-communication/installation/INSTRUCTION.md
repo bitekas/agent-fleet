@@ -132,7 +132,7 @@ the policy charter lives.
 ```bash
 python3 "${CLAUDE_SKILL_DIR}/watch.test.py"                     # offline regression guard - must print ALL CHECKS PASSED
 python3 "${CLAUDE_SKILL_DIR}/../chat-transport/claim.test.py"   # the claim's guard, incl. its race controls - must print ALL CHECKS PASSED
-SLACK_WATCH_CONFIG=<config> python3 "${CLAUDE_SKILL_DIR}/watch.py" --once   # one poll + one full sweep against the real workspace
+SLACK_WATCH_CONFIG=<config> python3 "${CLAUDE_SKILL_DIR}/watch.py" --once   # one poll, one full sweep, one revival step against the real workspace
 ```
 
 `--once` failing with `WATCH-CONFIG` names the key or the mismatch. `--once`
