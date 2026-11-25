@@ -45,7 +45,7 @@
     "prefix": "acme-slack-watch"
   },
   "poll": {
-    "_comment": "Tunables, all optional. Env vars still win: SLACK_WATCH_POLL_SECS, SLACK_WATCH_SWEEP_SECS, SLACK_WATCH_SWEEP_BUDGET, SLACK_WATCH_JOIN_WINDOW_SECS, SLACK_WATCH_DM_WINDOW_SECS. sweep_secs is how often each conversation is due a sweep for replies in threads whose parent is off the poll's page (a sweep reads at most sweep_budget history pages a period, so a window of N pages takes ceil(N / sweep_budget) of them); sweep_budget is how many Slack calls all sweeps together, their revival scan included, may make per poll (SKILL.md sizes it). This file is authoritative over any cadence written in prose.",
+    "_comment": "Tunables, all optional. Env vars still win: SLACK_WATCH_POLL_SECS, SLACK_WATCH_SWEEP_SECS, SLACK_WATCH_SWEEP_BUDGET, SLACK_WATCH_JOIN_WINDOW_SECS, SLACK_WATCH_DM_WINDOW_SECS. sweep_secs is how often each conversation is due a sweep for replies in threads whose parent is off the poll's page (under contention a sweep reads at most sweep_budget history pages a period, so a window of N pages takes ceil(N / sweep_budget) of them; budget a poll leaves idle lets it read past that); sweep_budget is how many Slack calls all sweeps together, their revival scan included, may make per poll (SKILL.md sizes it). This file is authoritative over any cadence written in prose.",
     "poll_secs": 5,
     "sweep_secs": 300,
     "sweep_budget": 3,

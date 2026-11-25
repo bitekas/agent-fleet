@@ -1095,9 +1095,10 @@ def _sweep_thread(channel_id: str, channel_name: str | None, state: dict, parent
 
 
 def sweep_channel(channel_id: str, channel_name: str | None, state: dict, pos: dict,
-                  is_dm: bool = False, budget: dict | None = None) -> bool:
+                  is_dm: bool = False, budget: dict | None = None, cap: bool = True) -> bool:
     """Advance the sweep at `pos` (from `new_sweep`): True when it is complete,
-    False when `budget` ran out first, `pos` then holding where to resume.
+    False when `budget` ran out first or `cap` stopped it (`_capped`), `pos` then
+    holding where to resume.
     What it reads and why: SKILL.md, the sweep. ⚠️ `pos` is updated as each
     thread and page is finished, never ahead of the work, so a sweep that raises
     part-way resumes after the last thing it finished and reads nothing twice."""
@@ -1111,10 +1112,13 @@ def sweep_channel(channel_id: str, channel_name: str | None, state: dict, pos: d
         if pos["pages_done"] or float(pos["edge"]) <= float(pos["window_start"]):
             break
         # THE PACING (SKILL.md, the budget): at most SWEEP_BUDGET history pages a
-        # sweep period - main() zeroes `period_pages` at each due poll - so a window
-        # of N pages takes ceil(N / SWEEP_BUDGET) periods at an even rate, and the
-        # sweep waits in progress. Replies calls are not capped: they are activity.
-        if budget is not None and pos["period_pages"] >= SWEEP_BUDGET:
+        # sweep period - main() zeroes `period_pages` at each due poll - so under
+        # contention a window of N pages takes ceil(N / SWEEP_BUDGET) periods at an
+        # even rate, and the sweep waits in progress. main()'s last pass of a poll
+        # lifts the cap (`cap`) with what budget is left. Replies calls are not
+        # capped: they are activity. Pages read past the cap count in
+        # `period_pages` too.
+        if cap and budget is not None and pos["period_pages"] >= SWEEP_BUDGET:
             return False
         if not _spend(budget, _where(channel_id, channel_name, is_dm), "page"):
             return False
@@ -1135,6 +1139,18 @@ def sweep_channel(channel_id: str, channel_name: str | None, state: dict, pos: d
                 return False
         pos["old_after"] = parent_ts
     return True
+
+
+def _capped(pos: dict) -> bool:
+    """Did the cap stop the sweep at `pos` (`sweep_channel`)? Its period's pages
+    read, no thread of its last page left to read, more pages to go. A sweep a
+    rate limit or an empty budget stopped is not capped."""
+    return pos["period_pages"] >= SWEEP_BUDGET and not pos["pending"] and not pos["pages_done"]
+
+
+def _past_the_cap(*args, **kwargs) -> bool:
+    """`sweep_channel` with the cap lifted: the step of main()'s last pass."""
+    return sweep_channel(*args, cap=False, **kwargs)
 
 
 def new_revival(edge: str | None) -> dict | None:
@@ -1282,9 +1298,10 @@ def run_sweep(conversation_id: str, name: str | None, state: dict, edge: str | N
 def _note_long_sweep(noted: dict, conversation_id: str, name: str | None, is_dm: bool,
                      pos: dict) -> None:
     """ONE WATCH-INFO line when a sweep completed having spanned periods enough
-    that its conversation's off-page replies waited LATE_SECS or more - THE PACING
-    spreads a window of N pages over ceil(N / SWEEP_BUDGET) periods, and each page
-    is read once a sweep - at most once per SATURATION_NOTE_SECS per conversation
+    that its conversation's off-page replies waited LATE_SECS or more - under
+    contention THE PACING spreads a window of N pages over ceil(N / SWEEP_BUDGET)
+    periods, and each page is read once a sweep - at most once per
+    SATURATION_NOTE_SECS per conversation
     (`noted`, main()'s). A sweep of one period is the plain cadence and says nothing."""
     wait = pos["periods"] * SWEEP_SECS
     if pos["periods"] < 2 or wait < LATE_SECS \
@@ -1429,6 +1446,17 @@ def main() -> None:
     spent: dict = {}               # budgeted calls of its streak, {(conversation, kind): calls}
     long_noted: dict = {}          # when each conversation's last long-sweep line was printed
     poll_count = 0
+
+    def sweep_step(cid: str, name: str | None, is_dm: bool, edge: str | None, step=None) -> None:
+        # ⚠️ A completed sweep arms ONE revival step, which waits until it has run:
+        # the scan's demand follows the sweeps', so when sweeps fall behind the scan
+        # slows with them instead of running ahead of them through the aging. Where a
+        # sweep spans several periods the cycle stretches by its span. watch.test.py 17v.
+        done = run_sweep(cid, name, states[cid], edge, sweeps, budget, is_dm=is_dm, step=step)
+        if done:
+            _note_long_sweep(long_noted, cid, name, is_dm, done)
+            if cid not in revivals and (revival := new_revival(edge)):
+                revivals[cid] = revival
     while True:
         if poll_count % REDISCOVER_EVERY == 0:
             try:
@@ -1482,7 +1510,7 @@ def main() -> None:
             if cid not in retired and revivals.get(cid, {}).get("waited", 0) >= SWEEP_EVERY:
                 run_sweep(cid, name, states[cid], None, revivals, budget, is_dm=is_dm,
                           step=revive_channel)
-        polled = []   # the conversations polled this cycle, in this cycle's order
+        polled = []   # the conversations polled this cycle, in this cycle's order, with their edges
         for cid, name, is_dm in watched:
             if cid in retired:
                 continue
@@ -1519,18 +1547,9 @@ def main() -> None:
                     print(f"WATCH-ERROR {_where(cid, name, is_dm)} {type(e).__name__}: {e}",
                           file=sys.stderr, flush=True)
                 continue  # a poll that failed reached no edge: no sweep this cycle
-            polled.append((cid, name, is_dm))
+            polled.append((cid, name, is_dm, edge))
             if cid in sweeps or due:
-                # ⚠️ A completed sweep arms ONE revival step, which waits until it has
-                # run: the scan's demand follows the sweeps', so when sweeps fall behind
-                # the scan slows with them instead of running ahead of them through the
-                # aging. A paced conversation's cycle stretches by its sweep's span.
-                # watch.test.py 17v.
-                done = run_sweep(cid, name, state, edge, sweeps, budget, is_dm=is_dm)
-                if done:
-                    _note_long_sweep(long_noted, cid, name, is_dm, done)
-                    if cid not in revivals and (revival := new_revival(edge)):
-                        revivals[cid] = revival
+                sweep_step(cid, name, is_dm, edge)
         # ⚠️ The revival scan spends only what every poll and sweep above LEFT of the
         # budget, so it runs here, after all of them, never beside its own
         # conversation's sweep: there it would take calls first-come from the sweeps
@@ -1538,7 +1557,7 @@ def main() -> None:
         # poll's rotated one, so a budget the sweeps leave short reaches every step.
         if budget is not None:
             _note_saturation(saturated, budget, sweeps)
-        for cid, name, is_dm in polled:
+        for cid, name, is_dm, _edge in polled:
             pos = revivals.get(cid)
             if pos is None or pos["waited"] >= SWEEP_EVERY:   # none, or aged: it ran first
                 continue
@@ -1548,6 +1567,18 @@ def main() -> None:
             pos["waited"] = 0
             run_sweep(cid, name, states[cid], None, revivals, budget, is_dm=is_dm,
                       step=revive_channel)
+        # ⚠️ THE CAP BITES ONLY UNDER CONTENTION. What every poll, sweep and revival
+        # step above left of the budget goes, in this poll's rotated order, to the
+        # sweeps the cap stopped (`_capped`): they read past it. Last on purpose: it
+        # spends only what would sit idle, so the revival steps' share and their
+        # coupling to completed sweeps are untouched, and after the saturation check,
+        # so a sweep reading idle budget is never reported as saturation.
+        # watch.test.py 17y.
+        for cid, name, is_dm, edge in polled:
+            if budget is None or budget["left"] <= 0:
+                break
+            if cid in sweeps and _capped(sweeps[cid]):
+                sweep_step(cid, name, is_dm, edge, step=_past_the_cap)
         poll_count += 1
         if once:
             return

@@ -123,9 +123,9 @@ every `poll.poll_secs` seconds (default 5; env override
 `SLACK_WATCH_POLL_SECS`) and prints one line per new
 **deliverable** message - top-level and thread replies. A reply in a thread
 whose parent has scrolled off the poll's 50-message page is read by a slower
-**sweep** instead (every 300 s, env `SLACK_WATCH_SWEEP_SECS`; spread over
-several such periods in a conversation whose window holds more history pages
-than one poll's budget) - see *Threads off the page, and the sweep*. Deliverable is every
+**sweep** instead (every 300 s, env `SLACK_WATCH_SWEEP_SECS`; under contention
+spread over several such periods in a conversation whose window holds more
+history pages than one poll's budget) - see *Threads off the page, and the sweep*. Deliverable is every
 message except this bot's own and anything carrying a subtype other than
 `thread_broadcast`: a thread reply also sent to the channel is delivered once, as
 a reply in its thread.
@@ -449,9 +449,10 @@ answering a three-week-old post, the bot itself answering one, a human
 answering the bot there. A sweep that completes arms ONE revival step for its
 conversation when none is armed or in progress, so the scan's demand follows the
 sweeps': when they fall behind, it slows with them instead of running ahead of
-them. In a paced conversation the cycle therefore advances one page per
-completed sweep and stretches by the sweep's span - about four times for a
-10-page window (*What sweeps cost, and the budget*). The step reads one `conversations.history` page of 200 top-level
+them. Where a sweep spans several periods - a large window under contention -
+the cycle therefore advances one page per completed sweep and stretches by the
+sweep's span, about four times for a 10-page window (*What sweeps cost, and the
+budget*). The step reads one `conversations.history` page of 200 top-level
 messages (`REVIVAL_PAGES`) from the history between the window edge and the
 **horizon**, `REVIVAL_HORIZON_SECS` (**90 days**), and calls
 `conversations.replies` only for a parent whose `latest_reply` moved past where
@@ -485,16 +486,23 @@ at once cannot stack. A sweep the budget stops resumes on the next poll where
 it stopped. **The pacing:** a sweep re-reads every history page of its
 conversation's window to learn which parents' `latest_reply` moved, so a feed
 of 2,000 top-level messages a week costs ten pages a sweep whether or not
-anything moved. So a sweep reads at most `sweep_budget` history pages (3 at the
-default) in one sweep period of its conversation, and waits, in progress, for
-the next due poll to read more: a window of N pages takes ceil(N / `sweep_budget`)
-periods, at an even rate of at most one poll's budget of pages a period and
-never in one burst, and the next sweep starts on the first due poll after it
-completes. A window of up to `sweep_budget` pages sweeps whole every period; one
-of ten, every fourth. Replies calls are not capped - they are threads with new
-activity - and neither is `--once`, which sweeps every conversation in full. The
-revival scan advances one page per completed sweep, so in a paced conversation
-its cycle stretches by the sweep's span (*The revival scan*).
+anything moved. So a sweep's regular steps read at most `sweep_budget` history
+pages (3 at the default) in one sweep period of its conversation. **The cap
+bites only under contention:** each poll ends with one more pass - after every
+poll and sweep, the saturation check and the revival steps - in which whatever
+budget is still left goes, in the poll's order, to the sweeps the cap stopped
+this period, and they read past it. When the budget has room a window therefore
+sweeps whole within a period; when it has none, a window of N pages takes
+ceil(N / `sweep_budget`) periods at an even rate, never in one burst, the sweep
+waiting in progress for the next due poll. Under contention a window of up to
+`sweep_budget` pages sweeps whole every period, one of ten every fourth. The
+next sweep starts on the first due poll after the last one completes. The last
+pass spends only budget that would sit idle, so the revival steps' share does
+not change, and a sweep reading past the cap is never reported as saturation.
+Replies calls are not capped - they are threads with new activity - and neither
+is `--once`, which sweeps every conversation in full. The revival scan advances
+one page per completed sweep, so where a sweep spans several periods its cycle
+stretches by the sweep's span (*The revival scan*).
 **The revival scan spends only what the sweeps leave:** every
 revival step of a poll runs after every poll and sweep of that poll, on the
 budget they left; a step that finds the budget spent waits for the next poll
@@ -528,11 +536,11 @@ conversation:
     WATCH-INFO sweep <conversation> took <n> periods for <p> history pages - its off-page replies waited up to <m> minutes (SKILL.md, the pacing)
 
 <m> is <n> times `sweep_secs`: each page is read once a sweep. At the defaults
-that takes twelve periods - a window of 34 pages or more, or fewer while other
-sweeps share the budget; a sweep of one period never prints it. `watch.test.py`
-sections 17u (the
-pacing), 17v (the revival step a completed sweep arms), 17w (the saturation line) and 17x
-(the long-sweep line). Slack rate-limits per
+that takes twelve periods, so only contention prints it - a window of 34 pages
+or more when no poll leaves room past the cap, or fewer while other sweeps share
+the budget; a sweep of one period never prints it. `watch.test.py` sections 17u
+(the pacing), 17v (the revival step a completed sweep arms), 17w (the saturation
+line), 17x (the long-sweep line) and 17y (the last pass). Slack rate-limits per
 method, per workspace, per app, so the bound to hold is:
 
     conversations.history calls/min <= (watched conversations + sweep_budget) x 60 / poll_secs
@@ -551,17 +559,19 @@ This bound is the one statement of how to size `sweep_secs`, `sweep_budget`
 and the poll interval together.
 
 **How late an off-page reply can be:** one sweep of its conversation when its
-thread's parent is inside the window - in a conversation whose window is N
-history pages, up to ceil(N / `sweep_budget`) sweep periods (one `sweep_secs`
-for N up to `sweep_budget`; the pacing above), because each of its pages is read
-once in that many periods, plus the polls the sweep needs at the shared budget.
-A 10-page feed: up to four periods (20 minutes at the default 300 s); a 25-page
-one: up to nine (45 minutes); more while other sweeps share the budget. When the parent is
+thread's parent is inside the window - about one sweep period (`sweep_secs`)
+when the budget has room; under contention, in a conversation whose window is N
+history pages, up to ceil(N / `sweep_budget`) sweep periods (one for N up to
+`sweep_budget`; the pacing above), because each of its pages is read once in
+that many periods; plus, either way, the polls the sweep needs at the shared
+budget. A 10-page feed: about five minutes with room, up to four periods (20
+minutes at the default 300 s) under contention; a 25-page one up to nine (45
+minutes); more while other sweeps share the budget. When the parent is
 between the window and the horizon, one **revival cycle**: the scan reads one
 page per completed sweep, so a cycle takes one `sweep_secs` per page where a
 sweep fits one period - **five minutes per page** at the default 300 s - and
-the sweep's span per page in a paced conversation (twenty minutes for a 10-page
-window), a page being 200 top-level messages between the window edge and the
+the sweep's span per page where a sweep spans several periods (under
+contention, twenty minutes for a 10-page window), a page being 200 top-level messages between the window edge and the
 horizon. Measured across six agents' watchers: most
 conversations are 1 to 3 pages (5 to 15 minutes), a busy DM 8 to 9 pages (40 to
 45 minutes), and the worst, a feed channel holding about 12,000 top-level
@@ -621,7 +631,7 @@ the page**, with no reply in that thread read inside the window - including a
 thread the bot itself revives by answering a post that old - is read by the
 revival scan, **late**: within one revival cycle, one completed sweep per page of
 200 top-level messages between the window edge and the horizon (five minutes a
-page at the default, longer in a paced conversation; measured worst case 60
+page at the default, longer where a sweep spans several periods; measured worst case 60
 pages, five hours at five minutes a page), each marked
 `[late: posted <age> ago]`. Of such a thread it delivers only the replies newer
 than the window edge (and after the thread's cursor); an unread reply **older
@@ -724,7 +734,7 @@ further polls or lines for it. (The case it covers: a DM that stays in
   **late**: the revival scan reads it within one revival cycle, one completed
   sweep per page of 200 top-level messages between the window edge and the
   horizon - one `sweep_secs` (default 300 s) where a sweep fits one period, the
-  sweep's span in a paced conversation. Measured: 1 to 3 pages (5 to 15
+  sweep's span where it spans several periods. Measured: 1 to 3 pages (5 to 15
   minutes) for most conversations, 60 pages (five hours) for the busiest. Sweeps that take
   the whole per-poll budget slow the cycle: the scan spends what they leave,
   and only a step that has waited a whole sweep period runs ahead of them, for
@@ -755,7 +765,7 @@ further polls or lines for it. (The case it covers: a DM that stays in
 - A `thread_broadcast` reply is the exception to both: it arrives from history
   within one poll, whatever its parent's age or position.
 - **A sweep's position lives in memory only.** A restart part-way through a
-  paced sweep starts it again at its first page: nothing is delivered twice or
+  sweep that spans several periods starts it again at its first page: nothing is delivered twice or
   skipped (the thread cursors are on disk), but the pages it had not reached
   wait about one more span. A watcher that restarts more often than a sweep's
   span - a crash loop - can keep the tail of a large window unread until those
@@ -766,10 +776,11 @@ further polls or lines for it. (The case it covers: a DM that stays in
   UTC range, no count - in one `WATCH-INFO` line and read on demand with the
   fetch recipe.
 - A reply in a thread whose parent is off the poll's page and inside the window
-  arrives within one **sweep** of its conversation, not one poll: within 300 s,
-  up to ceil(N / `sweep_budget`) times that in a conversation whose window is N
-  history pages, plus the polls the sweep needs at the shared per-poll budget
-  (*How late an off-page reply can be*).
+  arrives within one **sweep** of its conversation, not one poll: within about
+  300 s when the budget has room, up to ceil(N / `sweep_budget`) times that under
+  contention in a conversation whose window is N history pages, plus the polls
+  the sweep needs at the shared per-poll budget (*How late an off-page reply can
+  be*).
 - The bot never sees channels of **other workspaces/orgs** it isn't installed
   in.
 - DMs are invisible if the `im:*` scopes are ever dropped.
