@@ -132,9 +132,9 @@ jobs:
         # libraries Chromium needs are on the runner (the contract); one a future
         # Chromium needs is named by `playwright install`'s host validation warning
         # and fails Chromium's launch. timeout-minutes: a download too slow fails
-        # HERE, naming this step. 12 covers the full ~290 MB at 0.4 MB/s and, with
-        # ~2 minutes of steps before it and the test step's ~6 after, stays inside
-        # the job's 20.
+        # HERE, naming this step. 12, with ~1 minute of steps before it and the test
+        # step's ~6 after, stays inside the job's 20; it covers the full ~300 MB at
+        # 0.45 MB/s, and a slower link fills the directory over two jobs.
         timeout-minutes: 12
         run: |
           browsers="${RUNNER_TOOL_CACHE:?the runner contract sets it}/playwright-browsers"
