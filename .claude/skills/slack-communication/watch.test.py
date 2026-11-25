@@ -235,24 +235,27 @@ _, e_botdm = w.dm_initial_baseline(
 check("DM first-sight filters the bot's own messages (is_deliverable)", e_botdm == [], f"emitted={e_botdm}")
 
 # 13. DM line format: `SLACK DM ... Name (UID): text` - no #channel, thread marker kept.
+#     The messages are fresh: one posted an hour or more before it is emitted
+#     carries a late marker in its text (13b), which is not what this pins.
+_F0, _F1 = f"{time.time() - 2:.6f}", f"{time.time() - 1:.6f}"
 _outbuf = io.StringIO()
 with contextlib.redirect_stdout(_outbuf):
-    w.emit({"ts": "1784577700.0", "user": "U0GRACE", "text": "hey there"},
+    w.emit({"ts": _F0, "user": "U0GRACE", "text": "hey there"},
            "U0GRACE", is_dm=True)
-    w.emit({"ts": "1784577701.0", "user": "U0GRACE", "text": "in a thread"},
-           "U0GRACE", parent_ts="1784577700.0", is_dm=True)
+    w.emit({"ts": _F1, "user": "U0GRACE", "text": "in a thread"},
+           "U0GRACE", parent_ts=_F0, is_dm=True)
 _dmlines = _outbuf.getvalue().splitlines()
 check("DM top-level line format",
-      _dmlines[0] == "SLACK DM message [ts 1784577700.0] Grace (U0GRACE): hey there",
+      _dmlines[0] == f"SLACK DM message [ts {_F0}] Grace (U0GRACE): hey there",
       f"line={_dmlines[0]!r}")
 check("DM thread-reply line keeps the thread marker",
-      _dmlines[1] == "SLACK DM reply in thread 1784577700.0 [ts 1784577701.0] Grace (U0GRACE): in a thread",
+      _dmlines[1] == f"SLACK DM reply in thread {_F0} [ts {_F1}] Grace (U0GRACE): in a thread",
       f"line={_dmlines[1]!r}")
 _chbuf = io.StringIO()
 with contextlib.redirect_stdout(_chbuf):
-    w.emit({"ts": "1.0", "user": "U0GRACE", "text": "x"}, "random")  # is_dm defaults False
+    w.emit({"ts": _F1, "user": "U0GRACE", "text": "x"}, "random")  # is_dm defaults False
 check("channel emit still renders #name, never 'DM' (no regression)",
-      _chbuf.getvalue().strip() == "SLACK #random message [ts 1.0] Grace (U0GRACE): x",
+      _chbuf.getvalue().strip() == f"SLACK #random message [ts {_F1}] Grace (U0GRACE): x",
       f"line={_chbuf.getvalue().strip()!r}")
 
 # === PRIVATE CHANNELS: discovery merge, coexistence, join-replay, emit format ===
@@ -323,15 +326,60 @@ check("re-probe after scope restored recovers private channels (no restart)",
 check("recovered full probe re-arms the one-shot warn latch",
       _pwarn.get("logged") is False, f"warn={_pwarn}")
 
+# 13b. A LATE LINE SAYS SO, in its text and nowhere else. A message emitted
+#     LATE_SECS or more after it was posted - a reply the revival scan finds, a
+#     catch-up after downtime - starts its text with `[late: posted <age> ago] `;
+#     everything before the text (`SLACK `, the conversation, `reply in thread`,
+#     `[ts ...]`, `Name (UID): `) is byte-identical to the same message emitted
+#     fresh, because claims, the follower's filter and helpers parse exactly that.
+#     NEGATIVE CONTROL: a message 59 minutes old carries no marker, so a marker
+#     applied to every line reds. The 500-character cap covers the marker. The
+#     follower's own default filter, read from transport.json, still delivers a
+#     late line.
+def _emit_line(ts, text, parent=None):
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        w.emit({"ts": ts, "user": "U0GRACE", "text": text}, "random", parent_ts=parent)
+    return buf.getvalue().strip()
+
+
+_L6 = f"{time.time() - 6 * 86400 - 600:.6f}"
+_L3 = f"{time.time() - 3 * 3600 - 60:.6f}"
+_L59 = f"{time.time() - 59 * 60:.6f}"
+_late6 = _emit_line(_L6, "is the pool free?", parent=_F0)
+_late3 = _emit_line(_L3, "ping")
+_fresh59 = _emit_line(_L59, "ping")
+check("13b. a reply delivered six days after it was posted starts its text with the late marker",
+      _late6 == f"SLACK #random reply in thread {_F0} [ts {_L6}] Grace (U0GRACE): "
+                f"[late: posted 6d ago] is the pool free?", f"line={_late6!r}")
+check("13b. ...in hours under a day",
+      _late3 == f"SLACK #random message [ts {_L3}] Grace (U0GRACE): [late: posted 3h ago] ping",
+      f"line={_late3!r}")
+check("13b. NEGATIVE CONTROL: a message 59 minutes old carries no marker",
+      _fresh59 == f"SLACK #random message [ts {_L59}] Grace (U0GRACE): ping", f"line={_fresh59!r}")
+check("13b. everything before the text is byte-identical to the same message emitted fresh",
+      _late3.split(": [late: ")[0] == _fresh59.replace(_L59, _L3).split(": ping")[0],
+      f"late={_late3!r} fresh={_fresh59!r}")
+_late_long = _emit_line(_L6, "x" * 600)
+check("13b. the 500-character text cap covers the marker",
+      _late_long.startswith(f"SLACK #random message [ts {_L6}] Grace (U0GRACE): [late: posted 6d ago] x")
+      and len(_late_long.split("Grace (U0GRACE): ", 1)[1]) == 500, f"text length="
+      f"{len(_late_long.split('Grace (U0GRACE): ', 1)[1])}")
+with open(os.path.join(os.path.dirname(_SCRIPT), "transport.json")) as _tf13:
+    import re as _re13
+    _follow13 = _re13.compile(json.load(_tf13)["watch"]["follow_include"])
+check("13b. the follower's default filter still delivers a late line",
+      bool(_follow13.search(_late6)) and bool(_follow13.search(_late3)), f"filter={_follow13.pattern!r}")
+
 # P4. Emit format: a private channel renders `SLACK #<name> ...`, identical to a
 #     public channel - never 'DM', no special private prefix (is_dm=False).
 _pbuf = io.StringIO()
 with contextlib.redirect_stdout(_pbuf):
-    _saved_emit({"ts": "1784577900.0", "user": "U0GRACE", "text": "hi in private"},
+    _saved_emit({"ts": _F1, "user": "U0GRACE", "text": "hi in private"},
                 "private-team")  # is_dm defaults False
 check("private channel emit renders #name (same format as public, never 'DM')",
       _pbuf.getvalue().strip()
-      == "SLACK #private-team message [ts 1784577900.0] Grace (U0GRACE): hi in private",
+      == f"SLACK #private-team message [ts {_F1}] Grace (U0GRACE): hi in private",
       f"line={_pbuf.getvalue().strip()!r}")
 
 # P5. First-sight invite-race join-replay flows through UNCHANGED for a private
@@ -2188,6 +2236,188 @@ check("10z-g. a revived thread's 121-reply backlog arrives within one step, once
       [t for t, _p in _off_emitted] == [m["text"] for m in _g_reps], f"emitted {len(_off_emitted)}: "
       f"last={_off_emitted[-1:]}")
 
+
+class _SimTime:
+    """The module's `time`, simulated: `now` moves only when a case moves it."""
+
+    def __init__(self, now):
+        self.now = now
+
+    def time(self):
+        return self.now
+
+    def sleep(self, _secs):
+        raise AssertionError("no sleep in a function-level case")
+
+
+# 10z-h. THE WINDOW EDGE IS TAKEN AT EACH THREAD READ, never when the step was
+#      armed. A step is armed, then held up a day (here: no budget, as a run of
+#      rate limits would hold it), and only then reads a tracked thread whose
+#      replies are 6.5 days and one minute old at arming. By the read the first
+#      is 7.5 days old - past the true window edge - and is not emitted; the
+#      second is. The replies call's `oldest` is the edge at the read.
+#      REGIME CONTROL: the held step really made no call, and the dropped reply
+#      really was inside the window at arming.
+_HT0 = time.time()
+_H5P, _H5_CUR = f"{_HT0 - 20 * _DAY:.6f}", f"{_HT0 - 15 * _DAY:.6f}"
+_H5_OLD, _H5_NEW = f"{_HT0 - 6.5 * _DAY:.6f}", f"{_HT0 - 60:.6f}"
+_fk = _FakeSlack(_CHATTER + [_msg(_H5P, "old post")],
+                 {_H5P: [_msg(_H5_CUR, "h5 read"), _msg(_H5_OLD, "h5 inside the window when armed"),
+                         _msg(_H5_NEW, "h5 new")]})
+_st_h5 = {"channel_ts": _NEWEST, "baseline_ts": _ago(60 * _DAY), "sweep_floor_ts": _ago(30 * _DAY),
+          "threads": {_H5P: _H5_CUR}}
+_edge_h5 = _poll(_fk, "C_REV_EDGE", _st_h5)
+_off_emitted.clear()
+_real_time_h5, w.time = w.time, _SimTime(_HT0)
+try:
+    _h5_pos = w.new_revival(_edge_h5) if hasattr(w, "new_revival") else None
+    _n0 = len(_fk.calls)
+    _h5_held = w.revive_channel("C_REV_EDGE", "general", _st_h5, _h5_pos, budget={"left": 0}) \
+        if _h5_pos else None
+    _h5_held_calls = len(_fk.calls) - _n0
+    w.time.now = _HT0 + _DAY                    # a day of rate limits later
+    if _h5_pos:
+        w.revive_channel("C_REV_EDGE", "general", _st_h5, _h5_pos)
+finally:
+    w.time = _real_time_h5
+_h5_calls = _replies_for(_fk, _H5P)
+check("10z-h. REGIME CONTROL: the held step made no call, and the dropped reply was inside the window at arming",
+      _h5_held is False and _h5_held_calls == 0 and float(_H5_OLD) > _HT0 - _WINDOW,
+      f"held result={_h5_held} calls={_h5_held_calls}")
+check("10z-h. a step held up a day emits nothing older than the window edge at the read",
+      _off_emitted == [("h5 new", _H5P)], f"emitted={_off_emitted}")
+check("10z-h. ...the replies call's oldest is the edge at the read, not at arming",
+      len(_h5_calls) == 1 and abs(float(_h5_calls[0][0]["oldest"]) - (_HT0 + _DAY - _WINDOW)) < 1,
+      f"oldest={[p.get('oldest') for p, _ in _h5_calls]} edge at the read={_HT0 + _DAY - _WINDOW:.6f}")
+
+
+class _EmptyThenCursor(_FakeSlack):
+    """A revival-shaped history call (both bounds, no cursor) whose `latest` is
+    at or below `below` answers an EMPTY page that still carries a next cursor;
+    with the cursor it serves the page. Slack's paging permits such a page."""
+
+    def __init__(self, *a, below, **k):
+        super().__init__(*a, **k)
+        self.below = below
+
+    def __call__(self, method, **params):
+        if (method == "conversations.history" and "latest" in params and "oldest" in params
+                and not params.get("cursor") and float(params["latest"]) <= self.below):
+            self.calls.append((method, dict(params), []))
+            return {"messages": [], "has_more": True, "response_metadata": {"next_cursor": "0"}}
+        return super().__call__(method, **params)
+
+
+# 10z-i. AN EMPTY PAGE THAT STILL HAS A NEXT CURSOR DOES NOT END THE CYCLE. 450
+#      posts between 10 and 83 days old; every revival query that starts below 30
+#      days answers an empty first page with a cursor. The scan follows the
+#      cursor with the same query and reaches the thread at 50 days, whose new
+#      reply is delivered within the cycle. Ending the cycle there would wrap it
+#      at ~33 days on every pass and never reach the thread. REGIME CONTROL: the
+#      empty page really was served, and the thread sits below it.
+_eps = [_msg(_ago(10 * _DAY + 14000 * i), f"old {i:03d}") for i in range(450)]
+_E50 = _ago(50 * _DAY)
+_fk = _EmptyThenCursor(_CHATTER + _eps + [_msg(_E50, "a fifty-day-old post")],
+                       {_E50: [_msg(_ago(60), "reply to a fifty-day-old post")]}, below=_YN - 30 * _DAY)
+_st_ep = {"channel_ts": _NEWEST, "baseline_ts": _ago(120 * _DAY), "sweep_floor_ts": _ago(60 * _DAY),
+          "threads": {}}
+_edge_ep = _poll(_fk, "C_REV_EMPTY", _st_ep)
+_sweep(_fk, "C_REV_EMPTY", _st_ep, _edge_ep)
+_off_emitted.clear()
+_n0 = len(_fk.calls)
+try:
+    _revive_cycle(_fk, "C_REV_EMPTY", _st_ep, _edge_ep)
+    _ep_exc = None
+except Exception as e:  # noqa: BLE001 - a raise on the empty page is a failure this case reports
+    _ep_exc = e
+_ep_empty = [p for m, p, got in _fk.calls[_n0:] if m == "conversations.history" and got == []]
+check("10z-i. REGIME CONTROL: an empty page with a next cursor was served, above the fifty-day thread",
+      any(float(p["latest"]) > float(_E50) for p in _ep_empty), f"empty pages={_ep_empty}")
+check("10z-i. the scan follows the cursor past the empty page and delivers the fifty-day thread's reply",
+      _ep_exc is None and _off_emitted == [("reply to a fifty-day-old post", _E50)],
+      f"exc={_ep_exc!r} emitted={_off_emitted}")
+
+# 10z-j. A POSITION AT OR BELOW THE HORIZON IS CLEARED, AT NO COST. A watcher
+#      down for weeks keeps a `revival_ts` that the horizon has since passed. The
+#      next step makes NO call and deletes it, and the step after starts again at
+#      the window edge and delivers a revived thread. Kept, it would end every
+#      step there with no call and no line, and that conversation's scan would
+#      never move again. A conversation whose page reaches past the horizon
+#      likewise costs the scan nothing.
+_J = _ago(20 * _DAY)
+_fk = _FakeSlack(_CHATTER + [_msg(_J, "old post")], {_J: [_msg(_ago(60), "j new")]})
+_st_j = {"channel_ts": _NEWEST, "baseline_ts": _ago(120 * _DAY), "sweep_floor_ts": _ago(60 * _DAY),
+         "threads": {}, "revival_ts": _ago(95 * _DAY)}
+_edge_j = _poll(_fk, "C_REV_HOR", _st_j)
+_off_emitted.clear()
+_n0 = len(_fk.calls)
+_revive(_fk, "C_REV_HOR", _st_j, _edge_j)
+_j_step1 = (len(_fk.calls) - _n0, "revival_ts" in _st_j)
+_n1 = len(_fk.calls)
+_revive(_fk, "C_REV_HOR", _st_j, _edge_j)
+_j_step2 = _revival_history(_fk, _n1)
+check("10z-j. a position below the horizon costs no call and is deleted",
+      hasattr(w, "new_revival") and _j_step1 == (0, False), f"(calls, position kept)={_j_step1}")
+check("10z-j. ...and the next step starts again at the window edge and delivers",
+      _j_step2 and abs(float(_j_step2[0]["latest"]) - (time.time() - _WINDOW)) < 600
+      and _off_emitted == [("j new", _J)], f"next pages={_j_step2[:1]} emitted={_off_emitted}")
+_fk = _FakeSlack([_msg(_ago(100 * _DAY + 3600 * i), f"ancient {i}") for i in range(60)])
+_st_jq = {"channel_ts": _ago(100 * _DAY), "baseline_ts": _ago(200 * _DAY), "sweep_floor_ts": _ago(_DAY),
+          "threads": {}}
+_edge_jq = _poll(_fk, "C_REV_PAST", _st_jq)
+_n0 = len(_fk.calls)
+_revive(_fk, "C_REV_PAST", _st_jq, _edge_jq)
+check("10z-j. a conversation whose page reaches past the horizon costs the scan no call",
+      hasattr(w, "new_revival") and _edge_jq is not None and len(_fk.calls) == _n0,
+      f"edge={_edge_jq} scan calls={len(_fk.calls) - _n0}")
+
+# 10z-k. A CYCLE STARTS AT THE POLL'S PAGE EDGE when the page reaches back past
+#      the window edge: the poll reads every thread on its own page, so the scan
+#      starts below it. A quiet conversation whose 50-message page reaches 30
+#      days back: the first revival page's `latest` is the page edge, not the
+#      window edge. REGIME CONTROL: the page edge really is older than the window.
+_kq = [_msg(_ago(3600 + 0.6 * _DAY * i), f"quiet {i}") for i in range(140)]
+_fk = _FakeSlack(_kq)
+_st_k = {"channel_ts": _kq[0]["ts"], "baseline_ts": _ago(120 * _DAY), "sweep_floor_ts": _ago(_DAY),
+         "threads": {}}
+_edge_k = _poll(_fk, "C_REV_PAGE", _st_k)
+_n0 = len(_fk.calls)
+_revive(_fk, "C_REV_PAGE", _st_k, _edge_k)
+_k_pages = _revival_history(_fk, _n0)
+check("10z-k. REGIME CONTROL: the poll's page reaches back past the window edge",
+      _edge_k is not None and float(_edge_k) < _YN - _WINDOW, f"edge={_edge_k}")
+check("10z-k. a cycle starts at the poll's page edge, not the window edge",
+      _k_pages and _k_pages[0].get("latest") == _edge_k, f"first page={_k_pages[:1]} edge={_edge_k}")
+
+# 10z-l. A `revival_ts` THAT IS NOT A TS IS DROPPED, WITH ONE LINE, and the cycle
+#      starts again at the window edge. Left in place, float() raises on it at
+#      every step before anything could delete it: one WATCH-ERROR a sweep and a
+#      scan that never moves. The next step prints nothing more.
+_fk = _FakeSlack(_CHATTER + [_msg(_J, "old post")], {_J: [_msg(_ago(60), "l new")]})
+_st_l2 = {"channel_ts": _NEWEST, "baseline_ts": _ago(120 * _DAY), "sweep_floor_ts": _ago(60 * _DAY),
+          "threads": {}, "revival_ts": "not-a-ts"}
+_edge_l2 = _poll(_fk, "C_REV_BAD", _st_l2)
+_off_emitted.clear()
+_n0 = len(_fk.calls)
+_buf = io.StringIO()
+with contextlib.redirect_stderr(_buf):
+    try:
+        _revive(_fk, "C_REV_BAD", _st_l2, _edge_l2)
+        _l2_exc = None
+    except Exception as e:  # noqa: BLE001 - a raise is the failure being measured
+        _l2_exc = e
+    _l2_lines1 = [ln for ln in _buf.getvalue().splitlines() if ln.startswith("WATCH-")]
+    _revive(_fk, "C_REV_BAD", _st_l2, _edge_l2) if _l2_exc is None else None
+_l2_lines = [ln for ln in _buf.getvalue().splitlines() if ln.startswith("WATCH-")]
+_l2_pages = _revival_history(_fk, _n0)
+check("10z-l. an unparsable revival_ts is dropped with ONE WATCH-INFO line naming it and the conversation",
+      _l2_exc is None and len(_l2_lines1) == 1 and _l2_lines1[0].startswith("WATCH-INFO")
+      and "C_REV_BAD" in _l2_lines1[0] and "not-a-ts" in _l2_lines1[0] and len(_l2_lines) == 1,
+      f"exc={_l2_exc!r} lines={_l2_lines}")
+check("10z-l. ...and the cycle starts again at the window edge and delivers",
+      _l2_pages and abs(float(_l2_pages[0]["latest"]) - (time.time() - _WINDOW)) < 600
+      and _off_emitted == [("l new", _J)], f"pages={_l2_pages[:1]} emitted={_off_emitted}")
+
 w.emit = lambda msg, channel_name, parent_ts=None, is_dm=False: _emitted.append(
     (channel_name, msg["text"]))   # restore the section's emit stub
 
@@ -2632,12 +2862,13 @@ check("NEGATIVE CONTROL: a human's line carries NO [bot] marker",
 
 # 14g. The emitted LINE, end to end - the marker has to survive into the text
 #      the session actually reads, not merely into label()'s return value.
+_FRESH_BOT_TS = f"{time.time() - 1:.6f}"     # fresh: no late marker (13b)
 _buf = io.StringIO()
 with contextlib.redirect_stdout(_buf):
-    _REAL_EMIT(_bm, "ops")
+    _REAL_EMIT(_bot_msg(_OTHER_BOT, ts=_FRESH_BOT_TS), "ops")
 check("the emit line marks a bot inline",
       _buf.getvalue().strip()
-      == f"SLACK #ops message [ts {_BOT_TS}] Alan [bot] ({_OTHER_BOT}): a bot says hi",
+      == f"SLACK #ops message [ts {_FRESH_BOT_TS}] Alan [bot] ({_OTHER_BOT}): a bot says hi",
       f"line={_buf.getvalue().strip()!r}")
 
 
@@ -3033,7 +3264,8 @@ _ABSENT = object()
 
 def _drive_main(polls, channels, dms, fail=None, rediscover_every=None, sweeps=None,
                 sweep_every=None, sweep_fail=None, saves=None, once=False,
-                sweep_unfinished=None, sweep_pages=None, empty_states=None, sweep_greedy=None):
+                sweep_unfinished=None, sweep_pages=None, empty_states=None, sweep_greedy=None,
+                revive_log=None):
     """Run main()'s REAL loop `polls` times with stubbed I/O.
 
     `channels`/`dms` are a dict, or a callable taking the 0-based discovery-cycle
@@ -3052,7 +3284,9 @@ def _drive_main(polls, channels, dms, fail=None, rediscover_every=None, sweeps=N
     `once=True` runs main() as `--once` (one iteration, no sleep), which is the
     smoke-test path. `sweep_greedy`, when given, makes every sweep take the
     whole budget it is handed and never finish, collecting (conversation id,
-    poll index, calls it found left).
+    poll index, calls it found left). `revive_log`, when given, makes every
+    revival step report itself unfinished and collects (conversation id, poll
+    index, the position object it was handed).
 
     Returns (stderr lines, {conversation id: times poll_channel was reached}).
     ⚠️ The second element is not diagnostics, it is the POSITIVE EVIDENCE that
@@ -3122,9 +3356,15 @@ def _drive_main(polls, channels, dms, fail=None, rediscover_every=None, sweeps=N
                                     {"channel_ts": "1.0", "baseline_ts": "1.0", "threads": {}})
         w.save_state = _save
         w.sweep_channel = _sweep
-        # The revival step a completed sweep arms is inert here: these cases
-        # measure the sweep's own scheduling. Its wiring is 17n and 17o.
-        w.revive_channel = lambda *_a, **_k: True
+        # The revival step a completed sweep arms is inert here unless a case
+        # records it: these cases measure the sweep's own scheduling. Its wiring
+        # is 17n to 17t.
+        def _revive(cid, _cname, _state, pos, is_dm=False, budget=None):
+            if revive_log is None:
+                return True
+            revive_log.append((cid, w.time.polls, pos))
+            return False
+        w.revive_channel = _revive
         w.assert_configured_workspace = lambda: None
         w.acquire_singleton_lock = lambda: None
         w.time = _Clock(polls)
@@ -3976,15 +4216,32 @@ class _LiveClock(_Clock):
         return time.time()
 
 
-def _drive_live(polls, convs, sweep_every=1, once=False, revival=True):
+class _SimClock(_Clock):
+    """_Clock's bounded sleep with a SIMULATED time that starts at `now` and moves
+    `step` seconds per poll, so a run can span hours or days of watcher time."""
+
+    def __init__(self, polls, now, step):
+        super().__init__(polls)
+        self.now, self.step = now, step
+
+    def time(self):
+        return self.now
+
+    def sleep(self, _secs):
+        self.now += self.step
+        super().sleep(_secs)
+
+
+def _drive_live(polls, convs, sweep_every=1, once=False, revival=True, clock=None):
     """Run main() `polls` times. `convs` maps a conversation id to (name, fake,
     state); each state is that conversation's file, loaded once and kept, as
     main() keeps it. Every Slack call is logged as (poll index, phase, id,
     method, params), the phase being "sweep" inside sweep_channel, "revival"
     inside revive_channel and "poll" otherwise. `revival=False` replaces
     revive_channel by a step that makes no call: the control run.
+    `clock` replaces the real time (`_SimClock`); its sleep ends the run.
     Returns (SLACK lines from the REAL emit, stderr lines, the call log)."""
-    log, phase, clock = [], {"now": "poll"}, _LiveClock(polls)
+    log, phase, clock = [], {"now": "poll"}, clock or _LiveClock(polls)
 
     def _api(method, **params):
         cid = params.get("channel")
@@ -4083,7 +4340,8 @@ check("17n. --once (the smoke test) delivers the same three lines",
       [ln for ln in _vout1 if f"reply in thread {_VP}" in ln] == _V_LINES, f"lines={_vout1} stderr={_verr1}")
 
 # 17o. THE REVIVAL TAKES ONLY WHAT THE POLLS' SWEEPS LEFT. Two conversations
-#      share the default budget for eight polls, both due to sweep every poll:
+#      share the default budget for twelve polls, each due to sweep every fourth
+#      (so no step waits a whole sweep period and ages - that is 17r):
 #      "busy" has five tracked old-parent threads with cursors inside the window,
 #      so every sweep of it costs six calls; "archive" has 450 posts between 10
 #      and 83 days old, three revival pages and no threads, so its revival
@@ -4115,8 +4373,8 @@ def _by_poll(log, phases):
     return out
 
 
-_, _oerr, _olog = _drive_live(8, _o_convs())
-_, _cerr, _clog = _drive_live(8, _o_convs(), revival=False)
+_, _oerr, _olog = _drive_live(12, _o_convs(), sweep_every=4)
+_, _cerr, _clog = _drive_live(12, _o_convs(), sweep_every=4, revival=False)
 _o_sweeps = {i: [x[1:] for x in v] for i, v in _by_poll(_olog, {"sweep"}).items()}
 _c_sweeps = {i: [x[1:] for x in v] for i, v in _by_poll(_clog, {"sweep"}).items()}
 _o_both = _by_poll(_olog, {"sweep", "revival"})
@@ -4134,7 +4392,7 @@ check("17o. per poll, no sweep call follows a revival call",
           for v in _o_both.values()), f"phases per poll={ {i: [x[0] for x in v] for i, v in _o_both.items()} }")
 _o_pages = [(i, c) for i, ph, c, m, p in _olog if ph == "poll" and p.get("limit") == 50]
 check("17o. every poll still read each conversation's page",
-      sorted(_o_pages) == sorted((i, c) for i in range(8) for c in ("C_ARCH", "C_BUSY2")),
+      sorted(_o_pages) == sorted((i, c) for i in range(12) for c in ("C_ARCH", "C_BUSY2")),
       f"page calls={sorted(_o_pages)}")
 check("17o. ...and neither run printed an error line",
       not [ln for ln in _oerr + _cerr if ln.startswith("WATCH-ERROR")], f"stderr={_oerr + _cerr}")
@@ -4218,6 +4476,148 @@ for _label, _make, _want, _kept in (
           f"revival pages (poll, latest)={_qpages} lines={_qout}")
     check(f"17q. ...{_label} is one WATCH-ERROR sweep line" + (", carrying 429" if _kept else ""),
           len(_qlines) == 1 and ("429" in _qlines[0]) == _kept, f"stderr={_qerr}")
+
+
+import bisect as _bisect
+
+
+class _BigFake:
+    """A large conversation served fast - bisect over a presorted list, not a
+    sort per call - with _FakeSlack's semantics for what the loop asks: history
+    newest-first under `latest`/`oldest` (both exclusive) paged by
+    `next_cursor`; replies after `oldest`, the earliest first, `limit` a page.
+    Records (poll index, method, params) per call."""
+
+    def __init__(self, clock, top, threads):
+        self.clock = clock
+        self.asc = sorted(top, key=float)
+        self.keys = [float(t) for t in self.asc]
+        self.threads = {p: sorted(r, key=float) for p, r in threads.items()}
+        self.calls = []
+
+    def _msg(self, ts):
+        m = {"ts": ts, "user": _HUMAN, "text": f"post {ts}"}
+        reps = self.threads.get(ts)
+        if reps:
+            m.update(reply_count=len(reps), latest_reply=reps[-1])
+        return m
+
+    def __call__(self, method, **p):
+        self.calls.append((self.clock.polls, method, dict(p)))
+        if method == "conversations.history":
+            if p.get("oldest") is not None and p.get("latest") is None:
+                raise AssertionError("a call bounded by oldest alone is not modelled here")
+            hi = _bisect.bisect_left(self.keys, float(p["latest"])) if p.get("latest") else len(self.keys)
+            lo = _bisect.bisect_right(self.keys, float(p["oldest"])) if p.get("oldest") else 0
+            seg = self.asc[lo:hi][::-1]
+            start, limit = int(p.get("cursor") or 0), int(p.get("limit", 100))
+            page, more = seg[start:start + limit], start + limit < len(seg)
+            out = {"messages": [self._msg(t) for t in page], "has_more": more}
+            if more:
+                out["response_metadata"] = {"next_cursor": str(start + limit)}
+            return out
+        if method == "conversations.replies":
+            reps = [r for r in self.threads.get(p["ts"], []) if float(r) > float(p["oldest"])]
+            page = reps[:int(p.get("limit", 50))]
+            return {"messages": [self._msg(p["ts"])]
+                    + [{"ts": r, "user": _HUMAN, "text": f"reply {r}"} for r in page],
+                    "has_more": len(reps) > len(page)}
+        raise AssertionError(f"unexpected api call {method} {p}")
+
+
+# 17r. THE SCAN NEVER STARVES ITSELF FOR GOOD. Every thread the scan revives gets
+#      a cursor inside the window, and the old-parent pass then spends a call on
+#      it every sweep; with enough of them the sweeps take the whole budget every
+#      poll. One conversation, N threads more than 9 days old each with one fresh
+#      reply, 1,000 other posts back to 89 days, the default budget, the real
+#      loop on a simulated clock. N=200 at a 5 s poll (a sweep every 60 polls) and
+#      N=40 at a 30 s poll (every 10). A step the sweeps left without a call for a
+#      sweep period runs FIRST: every reply is delivered, once, while inside the
+#      window; the scan keeps moving to the end of the run; the per-poll ceiling
+#      is unchanged; and the sweeps keep running, delayed, not starved.
+#      REGIME CONTROL: the sweeps alone really did saturate the budget - the
+#      saturation WATCH-INFO line was printed - which is the regime in which a
+#      scan that only spent their leftover stopped (at 179 of 200 and 29 of 40),
+#      and that line is rate-limited to one an hour of watcher time.
+def _starve_run(n, poll_secs, polls):
+    now = time.time()
+    clock = _SimClock(polls, now, poll_secs)
+    chatter = [f"{now - 60 - 30 * i:.6f}" for i in range(60)]
+    filler = [f"{now - 8 * _DAY - i * (81 * _DAY / 1000):.6f}" for i in range(1000)]
+    parents = [f"{now - 9 * _DAY - i * 20000 - 7:.6f}" for i in range(n)]
+    fake = _BigFake(clock, chatter + filler + parents,
+                    {p: [f"{now - 5000 + i:.6f}"] for i, p in enumerate(parents)})
+    state = {"channel_ts": chatter[0], "baseline_ts": f"{now - 100 * _DAY:.6f}",
+             "sweep_floor_ts": f"{now - 60 * _DAY:.6f}", "threads": {}}
+    out, err, log = _drive_live(polls, {"C_STARVE": ("starve", fake, state)},
+                                sweep_every=max(1, round(300 / poll_secs)), clock=clock)
+    return now, parents, fake, out, err, log
+
+
+for _n, _ps in ((200, 5), (40, 30)):
+    _polls = 6000
+    _now, _parents, _sfk, _sout, _serr, _slog = _starve_run(_n, _ps, _polls)
+    _sgot = [ln.split("reply in thread ")[1].split(" ")[0] for ln in _sout if "reply in thread" in ln]
+    _rev = [i for i, ph, c, m, p in _slog if ph == "revival" and m == "conversations.history"]
+    _swp = [i for i, ph, *_ in _slog if ph == "sweep"]
+    _per = {}
+    for i, ph, *_ in _slog:
+        if ph in ("sweep", "revival"):
+            _per[i] = _per.get(i, 0) + 1
+    _notes = [ln for ln in _serr if ln.startswith("WATCH-INFO sweeps found the whole budget")]
+    _hours = _polls * _ps / 3600
+    _tag = f"N={_n} at a {_ps} s poll"
+    check(f"17r. REGIME CONTROL ({_tag}): the sweeps saturated the budget, announced at most once an hour",
+          1 <= len(_notes) <= int(_hours) + 1, f"notes={len(_notes)} over {_hours:.1f} h: {_notes[:1]}")
+    _sages = [ln.split("[late: posted ")[1].split(" ago]")[0] for ln in _sout if "[late: posted " in ln]
+    check(f"17r. {_tag}: every reply is delivered, once each, while inside the window",
+          sorted(_sgot) == sorted(_parents) and len(_sgot) == len(set(_sgot))
+          and len(_sages) == len(_sgot) and all(a.endswith("h") or int(a[:-1]) < 7 for a in _sages),
+          f"delivered {len(set(_sgot))}/{_n} lines={len(_sgot)} ages={sorted(set(_sages))}")
+    check(f"17r. {_tag}: the scan keeps moving to the end of the run, and the sweeps keep running",
+          bool(_rev) and max(_rev) >= _polls * 3 // 4 and bool(_swp) and max(_swp) >= _polls * 3 // 4,
+          f"last revival call at poll {max(_rev) if _rev else None}, last sweep call at "
+          f"{max(_swp) if _swp else None} of {_polls}")
+    check(f"17r. {_tag}: sweeps and revival together never exceed the per-poll budget",
+          max(_per.values()) <= getattr(w, "SWEEP_BUDGET", 3), f"max per poll={max(_per.values())}")
+    check(f"17r. {_tag}: no error line", not [ln for ln in _serr if ln.startswith("WATCH-ERROR")],
+          f"stderr={[ln for ln in _serr if ln.startswith('WATCH-ERROR')][:2]}")
+
+# 17s. THE FIRST CYCLE AFTER ROLLOUT DELIVERS UP TO SEVEN DAYS OF MISSED REPLIES,
+#      and is meant to: those are the replies the scan exists for. The state file
+#      has the shape the watcher before the scan writes - no `revival_ts`, a
+#      thread cursor 20 days old, the sweep floor it already has, 60 days back -
+#      and a dark 30-day thread holds replies 8 days, 6 days, 3 days and one
+#      hour old. The first cycle delivers the 6-day, 3-day and 1-hour ones, each
+#      marked late, and not the 8-day one. REGIME CONTROL: the file round-trips
+#      JSON with exactly the old keys.
+_SP = _ago(30 * _DAY)
+_s_reps = [(_ago(8 * _DAY), "eight days"), (_ago(6 * _DAY), "six days"), (_ago(3 * _DAY), "three days"),
+           (_ago(3600 + 60), "one hour")]
+_s_file = json.loads(json.dumps({"channel_ts": _NEWEST, "baseline_ts": _ago(120 * _DAY),
+                                 "sweep_floor_ts": _ago(60 * _DAY), "threads": {_SP: _ago(20 * _DAY)}}))
+check("17s. REGIME CONTROL: the state file has the old shape, no revival_ts",
+      set(_s_file) == {"channel_ts", "baseline_ts", "sweep_floor_ts", "threads"})
+_sfk2 = _FakeSlack(_CHATTER + [_msg(_SP, "a post from a month ago")],
+                   {_SP: [_msg(_ago(20 * _DAY), "read long ago")] + [_msg(t, x) for t, x in _s_reps]})
+_s2out, _s2err, _ = _drive_live(2, {"C_ROLL": ("rollout", _sfk2, _s_file)})
+_s2 = [ln for ln in _s2out if f"reply in thread {_SP}" in ln]
+check("17s. the first cycle delivers the 6-day, 3-day and 1-hour replies, each marked late, and not the 8-day one",
+      [ln.split("Ada (U0ADA): ")[1] for ln in _s2]
+      == ["[late: posted 6d ago] six days", "[late: posted 3d ago] three days", "[late: posted 1h ago] one hour"],
+      f"lines={_s2} stderr={_s2err}")
+
+# 17t. AN ARMED STEP IS NEVER REPLACED BY A LATER SWEEP. Sweeps complete every
+#      poll; the revival step never finishes. Every poll hands the step the SAME
+#      position: a re-armed one would drop its pending threads, re-read its page,
+#      and reset the polls it has waited, so the aging (17r) would never fire.
+#      POSITIVE EVIDENCE: the step ran on every poll.
+_tlog = []
+_drive_main(4, {"C_ARM": "arm"}, {}, sweeps=[], sweep_every=1, revive_log=_tlog)
+check("17t. POSITIVE EVIDENCE: the revival step ran on every poll",
+      [i for _c, i, _p in _tlog] == [0, 1, 2, 3], f"steps={[(c, i) for c, i, _p in _tlog]}")
+check("17t. every poll hands the armed step the same position",
+      len({id(p) for _c, _i, p in _tlog}) == 1, f"positions={len({id(p) for _c, _i, p in _tlog})}")
 
 
 print()

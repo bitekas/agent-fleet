@@ -255,6 +255,10 @@ SWEEP_BUDGET = int(os.environ.get("SLACK_WATCH_SWEEP_BUDGET", cfg("poll.sweep_bu
 # keys that already size the sweep, so a third key would size the same calls twice.
 REVIVAL_HORIZON_SECS = 90 * 24 * 3600
 REVIVAL_PAGES = 1
+# At most one budget-saturation WATCH-INFO line this often (`_note_saturation`).
+SATURATION_NOTE_SECS = 3600
+# A line delivered this long after its message was posted says so (`emit`).
+LATE_SECS = 3600
 # The most top-level lines one catch-up delivers per conversation: the newest ones.
 CATCHUP_LINES = 200
 
@@ -660,7 +664,18 @@ def emit(msg: dict, channel_name: str | None, parent_ts: str | None = None,
     if parent_ts is None and msg.get("subtype") == THREAD_BROADCAST:
         parent_ts = msg.get("thread_ts")
     where = f"reply in thread {parent_ts}" if parent_ts else "message"
-    text = " ".join((msg.get("text") or "").split())[:500]
+    text = " ".join((msg.get("text") or "").split())
+    # A message delivered LATE_SECS or more after it was posted says so, at the
+    # start of its text, so a session does not read a week-old ask as live - a
+    # reply the revival scan finds, a catch-up after downtime. Inside the text and
+    # nowhere else: the prefix, `[ts ...]` and `Name (UID): ` are what claims,
+    # follower filters and helpers parse (SKILL.md, what a line means), and they
+    # stay byte-identical. The 500-character cap covers the marker too.
+    age = time.time() - float(msg["ts"])
+    if age >= LATE_SECS:
+        ago = f"{int(age // 86400)}d" if age >= 86400 else f"{int(age // 3600)}h"
+        text = f"[late: posted {ago} ago] {text}"
+    text = text[:500]
     # A DM has no channel name - mark it "DM" so the session's triage can tell a
     # direct message from a channel post at a glance.
     prefix = "DM" if is_dm else f"#{channel_name}"
@@ -1107,13 +1122,32 @@ def new_revival(edge: str | None) -> dict | None:
     poll's `edge`, or None when nothing is off the page - the page then lists
     every parent, so the poll reads every thread. Process-scoped like a sweep's:
     what a restart needs is on disk - the scan's position (`revival_ts`) and the
-    thread cursors the step advanced. `reach` is where a cycle starts: the
-    window edge, or the page edge when the page reaches back past it."""
+    thread cursors the step advanced. A cycle starts at the window edge, or at
+    the page edge when the page reaches back past it: the poll reads every
+    thread on its own page. `waited` counts the polls the step went without a
+    call (main(), the aging)."""
     if edge is None:
         return None
-    window_start = time.time() - WINDOW_SECS
-    return {"reach": f"{min(float(edge), window_start):.6f}", "window_start": f"{window_start:.6f}",
-            "pages": REVIVAL_PAGES, "pending": [], "page_end": None}
+    return {"edge": edge, "pages": REVIVAL_PAGES, "pending": [], "page_end": None,
+            "query": None, "cursor": "", "waited": 0}
+
+
+def _revival_position(channel_id: str, channel_name: str | None, state: dict,
+                      is_dm: bool) -> None:
+    """Drop a `revival_ts` that is not a ts, with ONE WATCH-INFO line, so the cycle
+    starts again at the window edge. Left in place, float() raises on it every step,
+    before anything could delete it: one WATCH-ERROR per sweep, and that
+    conversation's scan never moves again."""
+    raw = state.get("revival_ts")
+    if not raw:
+        return
+    try:
+        float(raw)
+    except (TypeError, ValueError):
+        state.pop("revival_ts", None)
+        print(f"WATCH-INFO {_where(channel_id, channel_name, is_dm, with_id=True)}: revival_ts "
+              f"{raw!r} is not a ts - dropped; the revival scan starts again at the window edge",
+              file=sys.stderr, flush=True)
 
 
 def revive_channel(channel_id: str, channel_name: str | None, state: dict, pos: dict,
@@ -1123,31 +1157,40 @@ def revive_channel(channel_id: str, channel_name: str | None, state: dict, pos: 
     resume. What it reads and why: SKILL.md, the revival scan.
 
     One step reads up to REVIVAL_PAGES history pages below the scan position
-    (`state["revival_ts"]`, or `reach` when a cycle starts) and above the
-    horizon, and gives every listed parent with replies to `_sweep_thread`,
-    the read every off-page thread gets: it makes a call only when the
-    parent's `latest_reply` moved past where the thread is read from: the
-    later of its cursor (if any), the window edge (`start`) and the sweep
-    floor. So the scan never emits a reply older than the window; an older
-    unread one is dropped by design, and the read moves the cursor past it.
+    (`state["revival_ts"]`, or the cycle's start) and above the horizon, and
+    gives every listed parent with replies to `_sweep_thread`, the read every
+    off-page thread gets: it makes a call only when the parent's `latest_reply`
+    moved past where the thread is read from - the later of its cursor (if
+    any), the window edge and the sweep floor. So the scan never emits a reply
+    older than the window; an older unread one is dropped by design, and the
+    read moves the cursor past it. The window edge is taken at each thread
+    read, never when the step was armed: a step held up by rate limits would
+    otherwise emit replies older than the edge by the wait.
     ⚠️ Each page is read with `latest` at the oldest ts of the one before, which
     reaches every page only because a call bounded by BOTH `latest` and
     `oldest` returns the newest messages below `latest` first (measured
     2026-11-25: 11,911 messages of one conversation's range came back whole as
     60 such pages). A call bounded by `oldest` alone does the opposite
     (`_recent_window_messages`), so do not drop `latest` from this call.
+    ⚠️ An EMPTY page that still carries a next cursor is not the end of the
+    range: the same query continues with that cursor. Ending the cycle there
+    would wrap it early on every pass and never reach the threads below.
     ⚠️ `revival_ts` is written only once a page's threads are all read, so a
     restart part-way through a page re-reads that one page - its threads
     already read cost no call, their cursors being on disk - and skips nothing.
-    ⚠️ Reaching the horizon ends the step and deletes `revival_ts`, so the next
-    step starts again at the window edge. Not within the same step: a
+    ⚠️ At the horizon the step ends and deletes `revival_ts`, so the next step
+    starts again at the window edge - a position that is already AT or below
+    the horizon included (after downtime the horizon moves past it): kept, it
+    would end every step there with no call and no line, and that
+    conversation's scan would never move again. Not within the same step: a
     conversation whose whole range is one page would read it twice for nothing."""
+    _revival_position(channel_id, channel_name, state, is_dm)
     while True:
         while pos["pending"]:
             parent_ts, latest_reply = pos["pending"][0]
             before = state["threads"].get(parent_ts)
             if not _sweep_thread(channel_id, channel_name, state, parent_ts, latest_reply, is_dm,
-                                 budget, start=pos["window_start"]):
+                                 budget, start=f"{time.time() - WINDOW_SECS:.6f}"):
                 return False
             # ⚠️ A full replies page stops the cursor at the newest reply read, and
             # the scan lists this parent again only a cycle later - so the rest of a
@@ -1165,18 +1208,23 @@ def revive_channel(channel_id: str, channel_name: str | None, state: dict, pos: 
             pos["page_end"] = None
         if pos["pages"] <= 0:
             return True
-        horizon = f"{time.time() - REVIVAL_HORIZON_SECS:.6f}"
-        latest = state.get("revival_ts") or pos["reach"]
-        if float(latest) <= float(horizon):
-            state.pop("revival_ts", None)
-            return True
+        if not pos["cursor"]:
+            now = time.time()
+            horizon = f"{now - REVIVAL_HORIZON_SECS:.6f}"
+            latest = state.get("revival_ts") or f"{min(float(pos['edge']), now - WINDOW_SECS):.6f}"
+            if float(latest) <= float(horizon):
+                state.pop("revival_ts", None)
+                return True
+            pos["query"] = {"channel": channel_id, "latest": latest, "oldest": horizon}
         if not _spend(budget):
             return False
-        page, more = next(_pages("conversations.history", "messages",
-                                 {"channel": channel_id, "latest": latest, "oldest": horizon}))
+        page, more = next(_pages("conversations.history", "messages", pos["query"], pos["cursor"]))
+        pos["cursor"] = more if not page else ""
+        if pos["cursor"]:
+            continue
         pos["pages"] -= 1
         pos["pending"] = [(m["ts"], m.get("latest_reply", "0")) for m in page if m.get("reply_count")]
-        pos["page_end"] = min((m["ts"] for m in page), key=float) if more and page else ""
+        pos["page_end"] = min((m["ts"] for m in page), key=float) if more else ""
 
 
 def run_sweep(conversation_id: str, name: str | None, state: dict, edge: str | None,
@@ -1206,6 +1254,21 @@ def run_sweep(conversation_id: str, name: str | None, state: dict, edge: str | N
         print(f"WATCH-ERROR sweep {_where(conversation_id, name, is_dm)} {type(e).__name__}: {e}",
               file=sys.stderr, flush=True)
     return bool(done)
+
+
+def _note_saturation(saturated: dict, budget: dict, sweeps: dict) -> None:
+    """ONE WATCH-INFO line, at most once per SATURATION_NOTE_SECS, when sweeps still
+    in progress found the whole budget spent on every one of the last SWEEP_EVERY
+    polls - a full sweep period. That is the old-parent pass's own scaling limit: it
+    reads every tracked thread whose cursor is inside the window, once a sweep, so a
+    watcher that tracks enough of them delays every off-page reply. It is not an
+    error, and repeating it every poll would be the flood that stops the follower."""
+    saturated["polls"] = saturated["polls"] + 1 if budget["left"] <= 0 and sweeps else 0
+    if saturated["polls"] >= SWEEP_EVERY and time.time() - saturated["noted"] >= SATURATION_NOTE_SECS:
+        saturated["noted"] = time.time()
+        print(f"WATCH-INFO sweeps found the whole budget ({SWEEP_BUDGET} calls a poll) spent on each "
+              f"of the last {saturated['polls']} polls, {len(sweeps)} still in progress - off-page "
+              f"replies arrive late (SKILL.md, the budget)", file=sys.stderr, flush=True)
 
 
 def acquire_singleton_lock():
@@ -1303,6 +1366,7 @@ def main() -> None:
     retired: set[str] = set()
     sweeps: dict[str, dict] = {}   # sweeps in progress, {conversation id: position}
     revivals: dict[str, dict] = {}  # revival steps armed or in progress, the same shape
+    saturated = {"polls": 0, "noted": float("-inf")}   # the budget-saturation notice
     poll_count = 0
     while True:
         if poll_count % REDISCOVER_EVERY == 0:
@@ -1341,6 +1405,18 @@ def main() -> None:
         # order a saturated budget would never reach the conversations at the end.
         turn = poll_count % len(watched) if watched else 0
         watched = watched[turn:] + watched[:turn]
+        # ⚠️ THE AGING. A thread the scan revives gets a cursor inside the window, and
+        # the old-parent pass then spends a call on it every sweep: enough of them and
+        # the sweeps take the whole budget every poll, so a step that only spends what
+        # they leave would never run again - silently, while the threads it has not
+        # reached age past the window edge. A step that went SWEEP_EVERY polls without
+        # a call therefore runs FIRST, before any sweep, until its page is done: the
+        # sweeps are delayed, never starved for good, and the per-poll ceiling stays
+        # where it was. watch.test.py 17r.
+        for cid, name, is_dm in watched:
+            if cid not in retired and revivals.get(cid, {}).get("waited", 0) >= SWEEP_EVERY:
+                run_sweep(cid, name, states[cid], None, revivals, budget, is_dm=is_dm,
+                          step=revive_channel)
         polled = []   # the conversations polled this cycle, in this cycle's order
         for cid, name, is_dm in watched:
             if cid in retired:
@@ -1381,10 +1457,18 @@ def main() -> None:
         # conversation's sweep: there it would take calls first-come from the sweeps
         # of the conversations after it in this poll's order. The order is still this
         # poll's rotated one, so a budget the sweeps leave short reaches every step.
+        if budget is not None:
+            _note_saturation(saturated, budget, sweeps)
         for cid, name, is_dm in polled:
-            if cid in revivals:
-                run_sweep(cid, name, states[cid], None, revivals, budget, is_dm=is_dm,
-                          step=revive_channel)
+            pos = revivals.get(cid)
+            if pos is None or pos["waited"] >= SWEEP_EVERY:   # none, or aged: it ran first
+                continue
+            if budget is not None and budget["left"] <= 0:
+                pos["waited"] += 1
+                continue
+            pos["waited"] = 0
+            run_sweep(cid, name, states[cid], None, revivals, budget, is_dm=is_dm,
+                      step=revive_channel)
         poll_count += 1
         if once:
             return
