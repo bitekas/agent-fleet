@@ -365,6 +365,28 @@ check("13b. the 500-character text cap covers the marker",
       _late_long.startswith(f"SLACK #random message [ts {_L6}] Grace (U0GRACE): [late: posted 6d ago] x")
       and len(_late_long.split("Grace (U0GRACE): ", 1)[1]) == 500, f"text length="
       f"{len(_late_long.split('Grace (U0GRACE): ', 1)[1])}")
+# 13b-ii. THE BOUNDARIES, EXACT, on a fixed clock: 3599.9 s is unmarked, 3600 s
+#      (LATE_SECS) is marked `1h`, 86399.9 s is `23h`, 86400 s is `1d`. A
+#      boundary moved by one second - `>` for `>=`, LATE_SECS 3599 or 3601 -
+#      reds one of these; nothing above can see it, because every age there is
+#      minutes away from a boundary. The clock is an integer and every age a
+#      whole or tenth second, so each ts round-trips its six decimals exactly.
+_T13 = 1795000000.0
+_real_time_13 = w.time
+w.time = type("_FixedClock", (), {"time": staticmethod(lambda: _T13)})
+try:
+    _b = {age: _emit_line(f"{_T13 - age:.6f}", "x") for age in (3599.9, 3600, 86399.9, 86400)}
+finally:
+    w.time = _real_time_13
+_bm = {age: (ln.split("Grace (U0GRACE): ")[1]) for age, ln in _b.items()}
+check("13b. a message 3599.9 s old is not marked", _bm[3599.9] == "x", f"text={_bm[3599.9]!r}")
+check("13b. at exactly LATE_SECS (3600 s) it is marked 1h",
+      _bm[3600] == "[late: posted 1h ago] x" and getattr(w, "LATE_SECS", None) == 3600,
+      f"text={_bm[3600]!r} LATE_SECS={getattr(w, 'LATE_SECS', None)}")
+check("13b. at 86399.9 s it is 23h, and at exactly one day (86400 s) 1d",
+      _bm[86399.9] == "[late: posted 23h ago] x" and _bm[86400] == "[late: posted 1d ago] x",
+      f"texts={_bm[86399.9]!r} {_bm[86400]!r}")
+
 with open(os.path.join(os.path.dirname(_SCRIPT), "transport.json")) as _tf13:
     import re as _re13
     _follow13 = _re13.compile(json.load(_tf13)["watch"]["follow_include"])
@@ -2290,6 +2312,42 @@ check("10z-h. ...the replies call's oldest is the edge at the read, not at armin
       len(_h5_calls) == 1 and abs(float(_h5_calls[0][0]["oldest"]) - (_HT0 + _DAY - _WINDOW)) < 1,
       f"oldest={[p.get('oldest') for p, _ in _h5_calls]} edge at the read={_HT0 + _DAY - _WINDOW:.6f}")
 
+# 10z-h-ii. THE SAME, HELD BETWEEN THE PAGE READ AND THE THREAD READ - the hold
+#      a rate limit on the replies call makes. 10z-h holds the step before its
+#      page, so an edge frozen when the page is read is still taken a day late
+#      there and stays correct: that check cannot see it. Here the step reads
+#      its page with its one call, is held a day, and only then reads the
+#      thread: the reply that was 6.5 days old at the page read is 7.5 days old
+#      at the thread read and is not emitted. REGIME CONTROL: the first call
+#      read the page and stopped before the thread.
+_fk = _FakeSlack(_CHATTER + [_msg(_H5P, "old post")],
+                 {_H5P: [_msg(_H5_CUR, "h5 read"), _msg(_H5_OLD, "h5 inside the window at the page read"),
+                         _msg(_H5_NEW, "h5 new")]})
+_st_h6 = {"channel_ts": _NEWEST, "baseline_ts": _ago(60 * _DAY), "sweep_floor_ts": _ago(30 * _DAY),
+          "threads": {_H5P: _H5_CUR}}
+_edge_h6 = _poll(_fk, "C_REV_EDGE2", _st_h6)
+_off_emitted.clear()
+_real_time_h6, w.time = w.time, _SimTime(_HT0)
+try:
+    _h6_pos = w.new_revival(_edge_h6) if hasattr(w, "new_revival") else None
+    _n0 = len(_fk.calls)
+    _h6_held = w.revive_channel("C_REV_EDGE2", "general", _st_h6, _h6_pos, budget={"left": 1}) \
+        if _h6_pos else None
+    _h6_first = [m for m, _p, _g in _fk.calls[_n0:]]
+    w.time.now = _HT0 + _DAY                    # the replies call rate-limited for a day
+    if _h6_pos:
+        w.revive_channel("C_REV_EDGE2", "general", _st_h6, _h6_pos)
+finally:
+    w.time = _real_time_h6
+_h6_calls = _replies_for(_fk, _H5P)
+check("10z-h-ii. REGIME CONTROL: the held step read its page and stopped before the thread",
+      _h6_held is False and _h6_first == ["conversations.history"], f"result={_h6_held} calls={_h6_first}")
+check("10z-h-ii. a step held a day between its page read and its thread read emits nothing older than the "
+      "edge at the thread read",
+      _off_emitted == [("h5 new", _H5P)]
+      and len(_h6_calls) == 1 and abs(float(_h6_calls[0][0]["oldest"]) - (_HT0 + _DAY - _WINDOW)) < 1,
+      f"emitted={_off_emitted} oldest={[p.get('oldest') for p, _ in _h6_calls]}")
+
 
 class _EmptyThenCursor(_FakeSlack):
     """A revival-shaped history call (both bounds, no cursor) whose `latest` is
@@ -2417,6 +2475,30 @@ check("10z-l. an unparsable revival_ts is dropped with ONE WATCH-INFO line namin
 check("10z-l. ...and the cycle starts again at the window edge and delivers",
       _l2_pages and abs(float(_l2_pages[0]["latest"]) - (time.time() - _WINDOW)) < 600
       and _off_emitted == [("l new", _J)], f"pages={_l2_pages[:1]} emitted={_off_emitted}")
+# 10z-l-ii. "nan", "inf" and "-inf" parse as floats but are not ts: unchecked,
+#      the first two would go to Slack as `latest`, and "-inf" would be deleted
+#      with no line. Each is dropped like any other unparsable value: one line,
+#      and the first page starts at the window edge.
+for _bad in ("nan", "inf", "-inf"):
+    _fk = _FakeSlack(_CHATTER + [_msg(_J, "old post")], {_J: [_msg(_ago(60), "l new")]})
+    _st_nf = {"channel_ts": _NEWEST, "baseline_ts": _ago(120 * _DAY), "sweep_floor_ts": _ago(60 * _DAY),
+              "threads": {}, "revival_ts": _bad}
+    _edge_nf = _poll(_fk, "C_REV_NF", _st_nf)
+    _n0 = len(_fk.calls)
+    _buf = io.StringIO()
+    with contextlib.redirect_stderr(_buf):
+        try:
+            _revive(_fk, "C_REV_NF", _st_nf, _edge_nf)
+            _nf_exc = None
+        except Exception as e:  # noqa: BLE001 - a raise is the failure being measured
+            _nf_exc = e
+    _nf_lines = [ln for ln in _buf.getvalue().splitlines() if ln.startswith("WATCH-")]
+    _nf_pages = _revival_history(_fk, _n0)
+    check(f"10z-l. a non-finite revival_ts {_bad!r} is dropped with ONE line, and the scan starts at the window edge",
+          _nf_exc is None and len(_nf_lines) == 1 and repr(_bad) in _nf_lines[0]
+          and "revival_ts" not in _st_nf and _nf_pages
+          and abs(float(_nf_pages[0]["latest"]) - (time.time() - _WINDOW)) < 600,
+          f"exc={_nf_exc!r} lines={_nf_lines} first page={_nf_pages[:1]}")
 
 w.emit = lambda msg, channel_name, parent_ts=None, is_dm=False: _emitted.append(
     (channel_name, msg["text"]))   # restore the section's emit stub

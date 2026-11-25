@@ -143,6 +143,7 @@ import datetime
 import fcntl
 import http.client
 import json
+import math
 import os
 import re
 import signal
@@ -1137,13 +1138,16 @@ def _revival_position(channel_id: str, channel_name: str | None, state: dict,
     """Drop a `revival_ts` that is not a ts, with ONE WATCH-INFO line, so the cycle
     starts again at the window edge. Left in place, float() raises on it every step,
     before anything could delete it: one WATCH-ERROR per sweep, and that
-    conversation's scan never moves again."""
+    conversation's scan never moves again. "nan", "inf" and "-inf" parse and are
+    not ts either: the first two would go to Slack as `latest`."""
     raw = state.get("revival_ts")
     if not raw:
         return
     try:
-        float(raw)
+        ok = math.isfinite(float(raw))
     except (TypeError, ValueError):
+        ok = False
+    if not ok:
         state.pop("revival_ts", None)
         print(f"WATCH-INFO {_where(channel_id, channel_name, is_dm, with_id=True)}: revival_ts "
               f"{raw!r} is not a ts - dropped; the revival scan starts again at the window edge",
