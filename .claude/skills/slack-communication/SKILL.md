@@ -438,11 +438,13 @@ conversation. The step reads one `conversations.history` page of 200 top-level
 messages (`REVIVAL_PAGES`) from the history between the window edge and the
 **horizon**, `REVIVAL_HORIZON_SECS` (**90 days**), and calls
 `conversations.replies` only for a parent whose `latest_reply` moved past where
-its thread is read from: a **tracked** thread from its cursor, a thread with
-**no cursor** from the window edge, both from no lower than the sweep floor. So
-a revived thread delivers the replies after its cursor, or the replies newer
-than the window, and never its whole history. Each step reads the page below
-the last one it finished; the position is the cursor file's `revival_ts`,
+its thread is read from: the later of its cursor, the **window edge** and the
+sweep floor, for a tracked thread and an untracked one alike. So the scan
+delivers only replies newer than the window edge; an unread reply older than
+that is **dropped by design** - a rollout, or a cycle longer than the window,
+does not replay weeks of a dark thread into the session - and the read moves
+the thread's cursor past it, so nothing reads it later. Each step reads the
+page below the last one it finished; the position is the cursor file's `revival_ts`,
 written only once every thread on a page is read, so the scan resumes across
 sweeps and restarts, and a restart part-way through a page re-reads that one
 page. At the horizon `revival_ts` is deleted and the next step starts again at
@@ -546,8 +548,10 @@ thread the bot itself revives by answering a post that old - is read by the
 revival scan, **late**: within one revival cycle, one `sweep_secs` per page of
 200 top-level messages between the window edge and the horizon (five minutes a
 page at the default; measured worst case 60 pages, five hours). Of such a
-thread it delivers only the replies after the thread's cursor, or, for a thread
-the watcher never read, the replies newer than the window edge. A reply is **not
+thread it delivers only the replies newer than the window edge (and after the
+thread's cursor); an unread reply **older than the window edge is dropped**,
+by design, so a cycle longer than the window misses a reply rather than
+delivering it weeks late. A reply is **not
 read** when its thread's parent is **older than the 90-day horizon and off the
 page**, unless a reply in that thread was read inside the window. A top-level
 message is not read when the watcher's outage **outlasted the window**, and a
@@ -646,9 +650,10 @@ further polls or lines for it. (The case it covers: a DM that stays in
   window edge and the horizon. Measured: 1 to 3 pages (5 to 15 minutes) for
   most conversations, 60 pages (five hours) for the busiest. Sweeps that take
   the whole per-poll budget slow the cycle, because the scan spends only what
-  they leave; sweeps that take it every poll stop it, and no line says so. Of such a thread only the replies after its cursor arrive - or,
-  for a thread the watcher never read, the replies newer than the window edge.
-  THE WINDOW BOUND above.
+  they leave; sweeps that take it every poll stop it, and no line says so.
+  Of such a thread only the replies newer than the window edge arrive; an
+  unread reply older than that is dropped by design, whether or not the
+  thread was read before. THE WINDOW BOUND above.
 - A reply in a thread whose parent is **older than the 90-day horizon and off
   the poll's page** is not read, unless a reply in that thread was read inside
   the window. Answering a post that old does not bring its thread back into

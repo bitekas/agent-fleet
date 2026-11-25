@@ -1840,11 +1840,11 @@ check("10y-xix. two sweeps handed one budget make no more calls together than it
 # state FILE, so it resumes across sweeps and restarts. Main()'s wiring - the
 # budget it may spend and the order it spends it in - is section 17n/17o.
 #
-# Where a revived thread is read FROM is the load-bearing rule, and each half
-# has its own check with its own control: a TRACKED thread from its cursor
-# (10z-b), never from its start; an UNTRACKED one from the window edge (10z-a),
-# so the first cycle does not replay months of old replies into the session.
-# Both stay above the sweep floor, as every off-page read does.
+# Where a revived thread is read FROM is the load-bearing rule: never below the
+# window edge, tracked (10z-b) or not (10z-a), and never below the thread's
+# cursor or the sweep floor either. An unread reply older than the window is
+# dropped by design - the first cycle after a rollout, or any cycle longer than
+# the window, must not replay weeks of a dark thread into a session.
 _HORIZON = 90 * _DAY        # the horizon the ruling sets; w.REVIVAL_HORIZON_SECS is its one spelling
 check("10z. the revival horizon is 90 days, written once as REVIVAL_HORIZON_SECS",
       getattr(w, "REVIVAL_HORIZON_SECS", None) == _HORIZON,
@@ -1898,22 +1898,28 @@ check("10z-a. ...read from the window edge: the replies call's oldest is the win
 check("10z-a. ...and the thread is tracked from the newest reply read",
       _st_u["threads"].get(_U) == _ago(60), f"threads={_st_u['threads']}")
 
-# 10z-b. A TRACKED REVIVED THREAD IS READ FROM ITS CURSOR - never from its start,
-#      and not from the window edge either: a reply after the cursor but before
-#      the window edge was never delivered, and it arrives now. Replies at and
-#      before the cursor do not. REGIME CONTROL: cursor < that reply < window
-#      start, the floor below all of it, and the replies call handed back the
-#      replies before the cursor.
+# 10z-b. A TRACKED REVIVED THREAD EMITS ONLY THE REPLIES NEWER THAN THE WINDOW
+#      EDGE. Its cursor is 20 days old, and replies after it sit on both sides
+#      of the window edge: the ones 15 and 10 days old were never delivered and
+#      are dropped by design - a rollout must not replay weeks of a dark thread
+#      into a session - and only the ones after the edge arrive. The cursor ends
+#      at the newest reply, past the dropped ones, so a second cycle emits
+#      nothing. REGIME CONTROL: floor < cursor < the dropped replies < window
+#      start, and the replies call handed the dropped ones back (the fake
+#      ignores `oldest`), so their suppression is the watcher's; the `oldest`
+#      the call carries is the window edge, asserted on its own.
 _T2 = _ago(40 * _DAY)
 _T2_CUR = _ago(20 * _DAY)
 _fk = _FakeSlack(_CHATTER + [_msg(_T2, "tracked old post")],
                  {_T2: [_msg(_ago(30 * _DAY), "t before the cursor"), _msg(_T2_CUR, "t at the cursor"),
-                        _msg(_ago(15 * _DAY), "t after the cursor, before the window edge"),
-                        _msg(_ago(60), "t new")]})
+                        _msg(_ago(15 * _DAY), "t dropped, 15 days old"),
+                        _msg(_ago(10 * _DAY), "t dropped, 10 days old"),
+                        _msg(_ago(2 * _DAY), "t inside the window"), _msg(_ago(60), "t new")]})
 _st_t2 = {"channel_ts": _NEWEST, "baseline_ts": _ago(60 * _DAY), "sweep_floor_ts": _ago(50 * _DAY),
           "threads": {_T2: _T2_CUR}}
-check("10z-b. REGIME CONTROL: floor < cursor < the after-cursor reply < window start",
-      float(_st_t2["sweep_floor_ts"]) < float(_T2_CUR) < float(_ago(15 * _DAY)) < _YN - _WINDOW)
+check("10z-b. REGIME CONTROL: floor < cursor < the dropped replies < window start",
+      float(_st_t2["sweep_floor_ts"]) < float(_T2_CUR) < float(_ago(15 * _DAY)) < float(_ago(10 * _DAY))
+      < _YN - _WINDOW)
 _off_emitted.clear()
 _edge_t2 = _poll(_fk, "C_REV_T", _st_t2)
 _sweep(_fk, "C_REV_T", _st_t2, _edge_t2)
@@ -1921,17 +1927,24 @@ _t2_by_sweep = (len(_replies_for(_fk, _T2)), list(_off_emitted))
 _n0 = len(_fk.calls)
 _revive_cycle(_fk, "C_REV_T", _st_t2, _edge_t2)
 _t2_calls = _replies_for(_fk, _T2, _n0)
+_t2_first = list(_off_emitted)
+_n1 = len(_fk.calls)
+_revive_cycle(_fk, "C_REV_T", _st_t2, _edge_t2)
 check("10z-b. NEGATIVE CONTROL: the 7-day passes do not read a tracked thread whose cursor is older than the window",
       _t2_by_sweep == (0, []), f"replies calls={_t2_by_sweep[0]} emitted={_t2_by_sweep[1]}")
-check("10z-b. REGIME CONTROL: the revival's replies call handed back the replies at and before the cursor",
-      len(_t2_calls) == 1 and {"t before the cursor", "t at the cursor"} <= set(_t2_calls[0][1]),
+check("10z-b. REGIME CONTROL: the revival's replies call handed back the replies older than the window edge",
+      len(_t2_calls) == 1 and {"t dropped, 15 days old", "t dropped, 10 days old"} <= set(_t2_calls[0][1]),
       f"replies calls={_t2_calls}")
-check("10z-b. a TRACKED revived thread delivers only the replies after its cursor, once each",
-      _off_emitted == [("t after the cursor, before the window edge", _T2), ("t new", _T2)],
-      f"emitted={_off_emitted}")
-check("10z-b. ...read from the cursor: the replies call's oldest is the thread's cursor",
-      len(_t2_calls) == 1 and _t2_calls[0][0].get("oldest") == _T2_CUR,
-      f"oldest={[p.get('oldest') for p, _ in _t2_calls]} cursor={_T2_CUR}")
+check("10z-b. a tracked dark thread emits only its replies newer than the window edge, once each",
+      _t2_first == [("t inside the window", _T2), ("t new", _T2)], f"emitted={_t2_first}")
+check("10z-b. ...read from the window edge, not the old cursor: the replies call's oldest is the window start",
+      len(_t2_calls) == 1 and abs(float(_t2_calls[0][0]["oldest"]) - (_YN - _WINDOW)) < 60,
+      f"oldest={[p.get('oldest') for p, _ in _t2_calls]} window start={_YN - _WINDOW:.6f}")
+check("10z-b. ...its cursor ends at the newest reply, past the dropped ones",
+      _st_t2["threads"].get(_T2) == _ago(60), f"cursor={_st_t2['threads'].get(_T2)}")
+check("10z-b. ...and a second cycle emits nothing and reads nothing",
+      _off_emitted == _t2_first and len(_replies_for(_fk, _T2, _n1)) == 0,
+      f"emitted={_off_emitted} replies calls in cycle two={len(_replies_for(_fk, _T2, _n1))}")
 
 # 10z-c. THE HORIZON. A parent older than 90 days is not scanned: its new reply
 #      costs no call and prints nothing, and every revival page is bounded by

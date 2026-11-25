@@ -804,10 +804,12 @@ def _read_thread(channel_id: str, channel_name: str | None, state: dict, parent_
     older than the floor is ever emitted" hold for replies too. On the poll's
     page `floor` is the first-sight baseline and a stored cursor wins outright;
     off it (`off_page`) `floor` is the sweep floor and bounds a stored cursor too
-    (SKILL.md, the sweep floor). `start` bounds ONLY a thread with no cursor:
-    the revival scan passes the window edge, so a thread it revives that nobody
-    tracked delivers its replies newer than the window, not months of them,
-    while a tracked one still reads from its cursor. `latest_reply` is None
+    (SKILL.md, the sweep floor). `start` bounds every read from below, cursor or
+    none: the revival scan passes the window edge, so it never emits a reply
+    older than the window. An unread reply between a cursor and `start` is
+    dropped by design, and the cursor moves past it once the thread is read, so
+    nothing reads it later; a cycle longer than the window therefore misses a
+    reply rather than delivering it weeks late. `latest_reply` is None
     when the caller has no parent in hand (one older than the window): then the
     call is made anyway and the parent's field is read off the answer.
 
@@ -830,9 +832,11 @@ def _read_thread(channel_id: str, channel_name: str | None, state: dict, parent_
     while its parent is off the page or older than the window; emitting it here
     as well would deliver it twice. watch.test.py §14k.
     """
-    seen = state["threads"].get(parent_ts) or max(parent_ts, floor, start or floor, key=float)
+    seen = state["threads"].get(parent_ts) or max(parent_ts, floor, key=float)
     if off_page:
         seen = max(seen, floor, key=float)
+    if start is not None:
+        seen = max(seen, start, key=float)
     if latest_reply is not None and float(latest_reply) <= float(seen):
         return True
     if not _spend(budget):
@@ -1040,7 +1044,7 @@ def _sweep_thread(channel_id: str, channel_name: str | None, state: dict, parent
     """One off-page thread read; False when `budget` is spent. A thread Slack
     says is gone (THREAD_GONE_ERRORS) does not stop the sweep, so it cannot hide
     the threads after it; every other error is raised and stops the sweep.
-    `start` is `_read_thread`'s: where a thread with no cursor starts reading.
+    `start` is `_read_thread`'s: no reply older than it is emitted.
     ⚠️ The thread KEEPS its cursor and is reported once per process, whichever
     pass read it. Its parent is listed again - by the history pass, or, older
     than the window, by the revival scan - and a forgotten thread is read from
@@ -1122,9 +1126,10 @@ def revive_channel(channel_id: str, channel_name: str | None, state: dict, pos: 
     (`state["revival_ts"]`, or `reach` when a cycle starts) and above the
     horizon, and gives every listed parent with replies to `_sweep_thread`,
     the read every off-page thread gets: it makes a call only when the
-    parent's `latest_reply` moved past where the thread is read from - a
-    tracked thread from its cursor, one with no cursor from the window edge
-    (`start`), both from no lower than the sweep floor.
+    parent's `latest_reply` moved past where the thread is read from: the
+    later of its cursor (if any), the window edge (`start`) and the sweep
+    floor. So the scan never emits a reply older than the window; an older
+    unread one is dropped by design, and the read moves the cursor past it.
     ⚠️ Each page is read with `latest` at the oldest ts of the one before, which
     reaches every page only because a call bounded by BOTH `latest` and
     `oldest` returns the newest messages below `latest` first (measured
